@@ -53,12 +53,14 @@ class HomePage extends StatelessWidget {
     required this.onConnectDevice,
     required this.onStartLocalRecording,
     required this.onOpenSettings,
+    this.onOpenDevice,
   });
 
   final DeviceSummary device;
   final VoidCallback onConnectDevice;
   final VoidCallback onStartLocalRecording;
   final VoidCallback onOpenSettings;
+  final VoidCallback? onOpenDevice;
 
   @override
   Widget build(BuildContext context) {
@@ -85,12 +87,13 @@ class HomePage extends StatelessWidget {
                 padding: const EdgeInsets.all(20),
                 children: [
                   AppSurfaceCard(
-                    onTap: onConnectDevice,
+                    onTap: onOpenDevice ?? onConnectDevice,
                     child: AnimatedSwitcher(
                       duration: EvtTheme.motionDuration,
                       child: _DeviceSummaryContent(
                         key: ValueKey(device.status),
                         device: device,
+                        opensExistingDevice: onOpenDevice != null,
                       ),
                     ),
                   ),
@@ -125,17 +128,24 @@ class HomePage extends StatelessWidget {
 }
 
 class _DeviceSummaryContent extends StatelessWidget {
-  const _DeviceSummaryContent({super.key, required this.device});
+  const _DeviceSummaryContent({
+    super.key,
+    required this.device,
+    required this.opensExistingDevice,
+  });
 
   final DeviceSummary device;
+  final bool opensExistingDevice;
 
   @override
   Widget build(BuildContext context) {
-    final actionLabel = switch (device.status) {
-      DeviceSummaryStatus.disconnected => '连接设备',
-      DeviceSummaryStatus.searching => '查看附近设备',
-      DeviceSummaryStatus.connected => '查看设备',
-    };
+    final actionLabel = opensExistingDevice
+        ? '查看设备'
+        : switch (device.status) {
+            DeviceSummaryStatus.disconnected => '连接设备',
+            DeviceSummaryStatus.searching => '查看附近设备',
+            DeviceSummaryStatus.connected => '查看设备',
+          };
     return Column(
       key: key,
       crossAxisAlignment: CrossAxisAlignment.start,

@@ -13,7 +13,7 @@ import 'package:evt_ble_app/features/device_discovery/presentation/discovery_pag
 import 'package:evt_ble_app/features/device_session/application/session_controller.dart';
 import 'package:evt_ble_app/features/device_session/application/session_state.dart';
 import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
-import 'package:evt_ble_app/features/device_session/presentation/session_dashboard_page.dart';
+import 'package:evt_ble_app/features/device_session/presentation/device_detail_page.dart';
 import 'package:evt_ble_app/features/evidence/application/evidence_history_controller.dart';
 import 'package:evt_ble_app/features/evidence/presentation/evidence_history_page.dart';
 import 'package:evt_ble_app/features/evidence/presentation/record_observation_sheet.dart';
@@ -121,11 +121,12 @@ class _AppShellState extends ConsumerState<AppShell> {
           body: switch (_destination) {
             AppDestination.home => HomePage(
               device: _deviceSummary(),
-              onConnectDevice: session == null
-                  ? _openConnectionJourney
-                  : () => _openSessionDashboard(session),
+              onConnectDevice: _openConnectionJourney,
               onStartLocalRecording: _openActiveRecording,
               onOpenSettings: _openSettings,
+              onOpenDevice: session == null
+                  ? null
+                  : () => _openSessionDashboard(session),
             ),
             AppDestination.records =>
               _evidenceHistoryController == null
@@ -230,10 +231,11 @@ class _AppShellState extends ConsumerState<AppShell> {
         MaterialPageRoute(
           builder: (context) => AnimatedBuilder(
             animation: session,
-            builder: (context, _) => SessionDashboardPage(
+            builder: (context, _) => DeviceDetailPage(
               state: session.state,
-              onStartObservation: () => _openObservation(session.state),
+              onDisconnect: () => unawaited(_disconnectSession(session)),
               onRetry: () => _retrySession(session),
+              onOpenChecking: () => _openObservation(session.state),
             ),
           ),
         ),
@@ -304,6 +306,13 @@ class _AppShellState extends ConsumerState<AppShell> {
     final candidate = controller.state.session?.candidate;
     if (candidate != null) {
       unawaited(controller.connect(candidate));
+    }
+  }
+
+  Future<void> _disconnectSession(SessionController controller) async {
+    await controller.disconnect();
+    if (mounted) {
+      setState(() {});
     }
   }
 
