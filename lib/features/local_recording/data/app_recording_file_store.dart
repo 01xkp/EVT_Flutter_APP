@@ -27,8 +27,7 @@ class AppRecordingFileStore implements RecordingFileStore {
     final directory = await _recordingsDirectory();
     return PendingRecordingFile(
       id: id,
-      temporaryPath:
-          '${directory.path}${Platform.pathSeparator}$id.part.m4a',
+      temporaryPath: '${directory.path}${Platform.pathSeparator}$id.part.m4a',
       relativePath: relativePath,
     );
   }
@@ -97,7 +96,9 @@ class AppRecordingFileStore implements RecordingFileStore {
 
   Future<Directory> _recordingsDirectory() async {
     final root = await _rootDirectory();
-    final directory = Directory('${root.path}${Platform.pathSeparator}recordings');
+    final directory = Directory(
+      '${root.path}${Platform.pathSeparator}recordings',
+    );
     if (!await directory.exists()) {
       await directory.create(recursive: true);
     }

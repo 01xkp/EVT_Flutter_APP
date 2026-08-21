@@ -5,7 +5,8 @@ import '../../../support/fake_audio_recorder.dart';
 
 void main() {
   test('recorder exposes pause, resume, and interruption signals', () async {
-    final recorder = FakeAudioRecorder()..permission = RecorderPermission.granted;
+    final recorder = FakeAudioRecorder()
+      ..permission = RecorderPermission.granted;
     await recorder.start('/tmp/recording.part.m4a');
     await recorder.pause();
     await recorder.resume();

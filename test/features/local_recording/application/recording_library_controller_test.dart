@@ -35,30 +35,36 @@ void main() {
     expect(controller.state.errorMessage, '本地录音暂时不可读取。');
   });
 
-  test('starting playback stops the prior selection and blocks it during capture', () async {
-    repository.values.add(savedRecording('two'));
-    await controller.load();
+  test(
+    'starting playback stops the prior selection and blocks it during capture',
+    () async {
+      repository.values.add(savedRecording('two'));
+      await controller.load();
 
-    await controller.play('one');
-    await controller.play('two');
-    expect(player.activePath, endsWith('two.m4a'));
+      await controller.play('one');
+      await controller.play('two');
+      expect(player.activePath, endsWith('two.m4a'));
 
-    controller.setCaptureActive(true);
-    await controller.play('one');
-    expect(controller.state.errorMessage, '录音进行中，结束后可播放。');
-  });
+      controller.setCaptureActive(true);
+      await controller.play('one');
+      expect(controller.state.errorMessage, '录音进行中，结束后可播放。');
+    },
+  );
 
-  test('deleting removes the file before metadata and renaming validates input', () async {
-    await controller.load();
-    final recording = controller.state.items.single;
+  test(
+    'deleting removes the file before metadata and renaming validates input',
+    () async {
+      await controller.load();
+      final recording = controller.state.items.single;
 
-    await controller.rename(recording, '  客户访谈  ');
-    expect(repository.values.single.title, '客户访谈');
+      await controller.rename(recording, '  客户访谈  ');
+      expect(repository.values.single.title, '客户访谈');
 
-    await controller.delete(repository.values.single);
-    expect(files.deletedPaths, {'one.m4a'});
-    expect(repository.values, isEmpty);
-  });
+      await controller.delete(repository.values.single);
+      expect(files.deletedPaths, {'one.m4a'});
+      expect(repository.values, isEmpty);
+    },
+  );
 }
 
 LocalRecording savedRecording(String id) {

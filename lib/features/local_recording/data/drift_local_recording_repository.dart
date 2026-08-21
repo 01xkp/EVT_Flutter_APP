@@ -25,12 +25,16 @@ class DriftLocalRecordingRepository implements LocalRecordingRepository {
 
   @override
   Future<void> save(LocalRecording recording) async {
-    await _database.into(_database.localRecordings).insert(_toCompanion(recording));
+    await _database
+        .into(_database.localRecordings)
+        .insert(_toCompanion(recording));
   }
 
   @override
   Future<void> update(LocalRecording recording) async {
-    await _database.update(_database.localRecordings).replace(_toRow(recording));
+    await _database
+        .update(_database.localRecordings)
+        .replace(_toRow(recording));
   }
 
   LocalRecording _fromRow(LocalRecordingRow row) {

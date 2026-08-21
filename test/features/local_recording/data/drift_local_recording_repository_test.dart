@@ -18,32 +18,46 @@ void main() {
 
   tearDown(() => database.close());
 
-  test('stores local records without device identity and returns newest first', () async {
-    await repository.save(
-      savedRecording(id: 'older', createdAt: DateTime(2026, 8, 20)),
-    );
-    await repository.save(
-      savedRecording(id: 'newer', createdAt: DateTime(2026, 8, 21)),
-    );
+  test(
+    'stores local records without device identity and returns newest first',
+    () async {
+      await repository.save(
+        savedRecording(id: 'older', createdAt: DateTime(2026, 8, 20)),
+      );
+      await repository.save(
+        savedRecording(id: 'newer', createdAt: DateTime(2026, 8, 21)),
+      );
 
-    expect((await repository.all()).map((item) => item.id), ['newer', 'older']);
-  });
+      expect((await repository.all()).map((item) => item.id), [
+        'newer',
+        'older',
+      ]);
+    },
+  );
 
-  test('database version 2 creates local recordings without altering evidence rows', () async {
-    await database.close();
-    final directory = await Directory.systemTemp.createTemp('evt-drift-v1-');
-    addTearDown(() => directory.delete(recursive: true));
-    final v1File = File('${directory.path}${Platform.pathSeparator}v1.sqlite');
-    seedV1EvidenceDatabase(v1File);
-    final migrated = AppDatabase.forTesting(executor: NativeDatabase(v1File));
-    addTearDown(migrated.close);
+  test(
+    'database version 2 creates local recordings without altering evidence rows',
+    () async {
+      await database.close();
+      final directory = await Directory.systemTemp.createTemp('evt-drift-v1-');
+      addTearDown(() => directory.delete(recursive: true));
+      final v1File = File(
+        '${directory.path}${Platform.pathSeparator}v1.sqlite',
+      );
+      seedV1EvidenceDatabase(v1File);
+      final migrated = AppDatabase.forTesting(executor: NativeDatabase(v1File));
+      addTearDown(migrated.close);
 
-    expect(await migrated.select(migrated.evidenceBundles).get(), isNotEmpty);
-    expect(await migrated.select(migrated.localRecordings).get(), isEmpty);
-  });
+      expect(await migrated.select(migrated.evidenceBundles).get(), isNotEmpty);
+      expect(await migrated.select(migrated.localRecordings).get(), isEmpty);
+    },
+  );
 }
 
-LocalRecording savedRecording({required String id, required DateTime createdAt}) {
+LocalRecording savedRecording({
+  required String id,
+  required DateTime createdAt,
+}) {
   return LocalRecording.saved(
     id: id,
     title: '录音 $id',

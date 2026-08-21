@@ -13,9 +13,8 @@ class JustAudioPlayer implements AudioPlayerPort {
   Stream<Duration> get positions => _player.positionStream;
 
   @override
-  Stream<AudioPlaybackState> get states => _player.playerStateStream
-      .map(_mapState)
-      .distinct();
+  Stream<AudioPlaybackState> get states =>
+      _player.playerStateStream.map(_mapState).distinct();
 
   @override
   Future<void> dispose() async {

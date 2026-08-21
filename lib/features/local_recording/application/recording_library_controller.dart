@@ -121,9 +121,7 @@ class RecordingLibraryController extends ChangeNotifier {
         ),
       );
     } catch (_) {
-      _setState(
-        _state.copyWith(isLoading: false, errorMessage: '本地录音暂时不可读取。'),
-      );
+      _setState(_state.copyWith(isLoading: false, errorMessage: '本地录音暂时不可读取。'));
     }
   }
 

@@ -95,10 +95,7 @@ class LocalRecording {
   }
 
   LocalRecording failed(String reason) {
-    return copyWith(
-      status: LocalRecordingStatus.failed,
-      failureReason: reason,
-    );
+    return copyWith(status: LocalRecordingStatus.failed, failureReason: reason);
   }
 
   LocalRecording copyWith({

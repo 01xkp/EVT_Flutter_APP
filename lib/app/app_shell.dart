@@ -241,8 +241,10 @@ class _AppShellState extends ConsumerState<AppShell> {
       player: ref.read(audioPlayerProvider),
     );
     try {
-      await RecordingRecoveryService(repository: repository, files: files)
-          .reconcile();
+      await RecordingRecoveryService(
+        repository: repository,
+        files: files,
+      ).reconcile();
     } catch (_) {
       // The library surfaces repository failures when the user opens it.
     }

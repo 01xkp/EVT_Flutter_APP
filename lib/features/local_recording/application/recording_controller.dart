@@ -146,7 +146,9 @@ class RecordingController extends ChangeNotifier {
     final permission = await _recorder.requestPermission();
     if (permission != RecorderPermission.granted) {
       _setState(
-        const ActiveRecordingState(phase: ActiveRecordingPhase.permissionDenied),
+        const ActiveRecordingState(
+          phase: ActiveRecordingPhase.permissionDenied,
+        ),
       );
       return;
     }
@@ -179,10 +181,7 @@ class RecordingController extends ChangeNotifier {
 
   Future<void> stop() => _finalize(LocalRecordingStatus.saved);
 
-  Future<void> _finalize(
-    LocalRecordingStatus status, {
-    String? reason,
-  }) {
+  Future<void> _finalize(LocalRecordingStatus status, {String? reason}) {
     final current = _finalizing;
     if (current != null) {
       return current;

@@ -50,7 +50,9 @@ void main() {
       expect(find.text('硬件录音'), findsOneWidget);
       expect(find.byTooltip('查看硬件录音'), findsOneWidget);
       expect(
-        tester.widget<RecordingHubPage>(find.byType(RecordingHubPage)).isHardwareObservable,
+        tester
+            .widget<RecordingHubPage>(find.byType(RecordingHubPage))
+            .isHardwareObservable,
         isTrue,
       );
 
@@ -58,9 +60,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('验证场景'), findsOneWidget);
       expect(
-        tester.widget<ChoiceChip>(
-          find.widgetWithText(ChoiceChip, 'VAD 录音'),
-        ).selected,
+        tester
+            .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'VAD 录音'))
+            .selected,
         isTrue,
       );
     },

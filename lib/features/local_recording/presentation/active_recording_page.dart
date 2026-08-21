@@ -49,7 +49,9 @@ class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
         child: LayoutBuilder(
           builder: (context, constraints) => Center(
             child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: constraints.maxWidth > 600 ? 520 : double.infinity),
+              constraints: BoxConstraints(
+                maxWidth: constraints.maxWidth > 600 ? 520 : double.infinity,
+              ),
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
@@ -71,7 +73,10 @@ class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
                     const SizedBox(height: 28),
                     AnimatedSwitcher(
                       duration: EvtTheme.motionDuration,
-                      child: _Controls(controller: widget.controller, state: state),
+                      child: _Controls(
+                        controller: widget.controller,
+                        state: state,
+                      ),
                     ),
                   ],
                 ),
@@ -85,7 +90,9 @@ class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
 
   void _onControllerChanged() {
     final active = widget.controller.state.isCaptureActive;
-    if (_wasActive && !active && widget.controller.state.phase == ActiveRecordingPhase.idle) {
+    if (_wasActive &&
+        !active &&
+        widget.controller.state.phase == ActiveRecordingPhase.idle) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         widget.onFinished?.call();
         if (mounted && Navigator.of(context).canPop()) {

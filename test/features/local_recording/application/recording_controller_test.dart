@@ -32,38 +32,47 @@ void main() {
 
   tearDown(() => controller.close());
 
-  test('start persists in-progress metadata before capture and finalizes to saved', () async {
-    await controller.start();
+  test(
+    'start persists in-progress metadata before capture and finalizes to saved',
+    () async {
+      await controller.start();
 
-    expect(repository.values.single.status, LocalRecordingStatus.inProgress);
-    expect(background.startCalls, 1);
-    expect(recorder.operations, ['start']);
+      expect(repository.values.single.status, LocalRecordingStatus.inProgress);
+      expect(background.startCalls, 1);
+      expect(recorder.operations, ['start']);
 
-    await controller.stop();
+      await controller.stop();
 
-    expect(repository.values.single.status, LocalRecordingStatus.saved);
-    expect(repository.values.single.duration, const Duration(seconds: 12));
-    expect(background.stopCalls, 1);
-    expect(controller.state.phase, ActiveRecordingPhase.idle);
-  });
+      expect(repository.values.single.status, LocalRecordingStatus.saved);
+      expect(repository.values.single.duration, const Duration(seconds: 12));
+      expect(background.stopCalls, 1);
+      expect(controller.state.phase, ActiveRecordingPhase.idle);
+    },
+  );
 
-  test('denied permission does not create metadata or start a service', () async {
-    recorder.permission = RecorderPermission.denied;
+  test(
+    'denied permission does not create metadata or start a service',
+    () async {
+      recorder.permission = RecorderPermission.denied;
 
-    await controller.start();
+      await controller.start();
 
-    expect(repository.values, isEmpty);
-    expect(background.startCalls, 0);
-    expect(controller.state.phase, ActiveRecordingPhase.permissionDenied);
-  });
+      expect(repository.values, isEmpty);
+      expect(background.startCalls, 0);
+      expect(controller.state.phase, ActiveRecordingPhase.permissionDenied);
+    },
+  );
 
-  test('an interruption preserves a readable partial capture as interrupted', () async {
-    await controller.start();
-    recorder.emit(const RecorderSignal.interrupted('来电占用麦克风'));
-    await Future<void>.delayed(Duration.zero);
+  test(
+    'an interruption preserves a readable partial capture as interrupted',
+    () async {
+      await controller.start();
+      recorder.emit(const RecorderSignal.interrupted('来电占用麦克风'));
+      await Future<void>.delayed(Duration.zero);
 
-    expect(repository.values.single.status, LocalRecordingStatus.interrupted);
-    expect(repository.values.single.failureReason, '来电占用麦克风');
-    expect(background.stopCalls, 1);
-  });
+      expect(repository.values.single.status, LocalRecordingStatus.interrupted);
+      expect(repository.values.single.failureReason, '来电占用麦克风');
+      expect(background.stopCalls, 1);
+    },
+  );
 }

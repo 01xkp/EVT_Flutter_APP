@@ -13,7 +13,8 @@ class FakeLocalRecordingRepository implements LocalRecordingRepository {
     if (failReads) {
       throw StateError('read failed');
     }
-    final copy = [...values]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final copy = [...values]
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return List.unmodifiable(copy);
   }
 

@@ -25,7 +25,9 @@ void main() {
     );
 
     expect(
-      tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'VAD 录音')).selected,
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'VAD 录音'))
+          .selected,
       isTrue,
     );
   });

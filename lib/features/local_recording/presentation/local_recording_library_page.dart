@@ -40,7 +40,11 @@ class LocalRecordingLibraryPage extends StatelessWidget {
             child: LayoutBuilder(
               builder: (context, constraints) => Center(
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: constraints.maxWidth > 600 ? 760 : double.infinity),
+                  constraints: BoxConstraints(
+                    maxWidth: constraints.maxWidth > 600
+                        ? 760
+                        : double.infinity,
+                  ),
                   child: _LibraryBody(
                     state: state,
                     controller: controller,
@@ -69,7 +73,10 @@ class LocalRecordingLibraryPage extends StatelessWidget {
   }
 
   Future<void> _rename(BuildContext context, LocalRecording recording) async {
-    final value = await RenameRecordingSheet.show(context, title: recording.title);
+    final value = await RenameRecordingSheet.show(
+      context,
+      title: recording.title,
+    );
     if (value != null) {
       await controller.rename(recording, value);
     }

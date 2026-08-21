@@ -34,8 +34,12 @@ class RecordingListItem extends StatelessWidget {
               message: playing ? '暂停播放' : '播放录音',
               child: IconButton(
                 tooltip: playing ? '暂停播放' : '播放录音',
-                onPressed: recording.isPlayable ? (playing ? onPause : onPlay) : null,
-                icon: Icon(playing ? Icons.pause_outlined : Icons.play_arrow_outlined),
+                onPressed: recording.isPlayable
+                    ? (playing ? onPause : onPlay)
+                    : null,
+                icon: Icon(
+                  playing ? Icons.pause_outlined : Icons.play_arrow_outlined,
+                ),
               ),
             ),
             const SizedBox(width: 8),
