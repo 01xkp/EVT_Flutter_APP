@@ -18,11 +18,11 @@ class StatusLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final statusColors = theme.extension<EvtStatusColors>()!;
+    final statusColors = theme.extension<EvtStatusColors>();
     final color = switch (kind) {
       StatusKind.neutral => theme.colorScheme.onSurfaceVariant,
-      StatusKind.positive => statusColors.positive,
-      StatusKind.danger => statusColors.danger,
+      StatusKind.positive => statusColors?.positive ?? theme.colorScheme.tertiary,
+      StatusKind.danger => statusColors?.danger ?? theme.colorScheme.error,
     };
 
     return Semantics(

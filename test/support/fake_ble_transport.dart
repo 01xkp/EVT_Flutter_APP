@@ -28,6 +28,8 @@ class FakeBleTransport implements BleTransport {
 
   void emitCandidate(DeviceCandidate candidate) => _scanController.add(candidate);
 
+  void emitScanError(Object error) => _scanController.addError(error);
+
   void emitConnection(BleConnectionState state) => _connectionController.add(state);
 
   void emitSubscriptionBytes(List<int> bytes) {
