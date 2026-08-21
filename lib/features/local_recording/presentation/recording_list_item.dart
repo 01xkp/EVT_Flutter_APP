@@ -12,6 +12,7 @@ class RecordingListItem extends StatelessWidget {
     required this.onPause,
     required this.onRename,
     required this.onDelete,
+    this.showActions = true,
   });
 
   final LocalRecording recording;
@@ -21,6 +22,7 @@ class RecordingListItem extends StatelessWidget {
   final VoidCallback onPause;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final bool showActions;
 
   @override
   Widget build(BuildContext context) {
@@ -64,28 +66,29 @@ class RecordingListItem extends StatelessWidget {
                 ],
               ),
             ),
-            PopupMenuButton<_RecordingAction>(
-              tooltip: '更多操作',
-              icon: const Icon(Icons.more_horiz),
-              onSelected: (action) {
-                switch (action) {
-                  case _RecordingAction.rename:
-                    onRename();
-                  case _RecordingAction.delete:
-                    onDelete();
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: _RecordingAction.rename,
-                  child: Text('修改标题'),
-                ),
-                PopupMenuItem(
-                  value: _RecordingAction.delete,
-                  child: Text('删除'),
-                ),
-              ],
-            ),
+            if (showActions)
+              PopupMenuButton<_RecordingAction>(
+                tooltip: '更多操作',
+                icon: const Icon(Icons.more_horiz),
+                onSelected: (action) {
+                  switch (action) {
+                    case _RecordingAction.rename:
+                      onRename();
+                    case _RecordingAction.delete:
+                      onDelete();
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: _RecordingAction.rename,
+                    child: Text('修改标题'),
+                  ),
+                  PopupMenuItem(
+                    value: _RecordingAction.delete,
+                    child: Text('删除'),
+                  ),
+                ],
+              ),
           ],
         ),
       ),
@@ -99,7 +102,7 @@ class RecordingListItem extends StatelessWidget {
     final duration = recording.duration!;
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '${duration.inHours.toString().padLeft(2, '0')}:$minutes:$seconds';
+    return '本机录音 · ${duration.inHours.toString().padLeft(2, '0')}:$minutes:$seconds';
   }
 }
 

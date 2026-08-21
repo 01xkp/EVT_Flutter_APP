@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:evt_ble_app/core/design_system/evt_theme.dart';
+import 'package:evt_ble_app/core/design_system/widgets/app_confirmation_sheet.dart';
 import 'package:evt_ble_app/core/design_system/widgets/status_label.dart';
 import 'package:evt_ble_app/features/local_recording/application/recording_controller.dart';
 import 'package:flutter/material.dart';
@@ -42,43 +43,54 @@ class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
   @override
   Widget build(BuildContext context) {
     final state = widget.controller.state;
-    return Scaffold(
-      appBar: AppBar(title: const Text('本机录音')),
-      body: SafeArea(
-        top: false,
-        child: LayoutBuilder(
-          builder: (context, constraints) => Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: constraints.maxWidth > 600 ? 520 : double.infinity,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      _formatElapsed(state.elapsed),
-                      style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                        fontFeatures: const [FontFeature.tabularFigures()],
+    return PopScope<void>(
+      canPop: !state.isCaptureActive,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          unawaited(_confirmExit(context));
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('本机录音')),
+        body: SafeArea(
+          top: false,
+          child: LayoutBuilder(
+            builder: (context, constraints) => Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: constraints.maxWidth > 600 ? 520 : double.infinity,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        _formatElapsed(state.elapsed),
+                        style: Theme.of(context).textTheme.displaySmall
+                            ?.copyWith(
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                            ),
                       ),
-                    ),
-                    const SizedBox(height: 20),
-                    _LevelMeter(value: state.amplitude),
-                    const SizedBox(height: 20),
-                    AnimatedSwitcher(
-                      duration: EvtTheme.motionDuration,
-                      child: _StatusText(state: state),
-                    ),
-                    const SizedBox(height: 28),
-                    AnimatedSwitcher(
-                      duration: EvtTheme.motionDuration,
-                      child: _Controls(
-                        controller: widget.controller,
-                        state: state,
+                      const SizedBox(height: 20),
+                      _LevelMeter(value: state.amplitude),
+                      const SizedBox(height: 20),
+                      AnimatedSwitcher(
+                        duration: EvtTheme.motionDuration,
+                        child: _StatusText(state: state),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 28),
+                      AnimatedSwitcher(
+                        duration: EvtTheme.motionDuration,
+                        child: _Controls(
+                          controller: widget.controller,
+                          state: state,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -103,6 +115,19 @@ class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
     _wasActive = active;
     if (mounted) {
       setState(() {});
+    }
+  }
+
+  Future<void> _confirmExit(BuildContext context) async {
+    final confirmed = await AppConfirmationSheet.show(
+      context,
+      title: '结束录音？',
+      message: '继续录音可保留当前内容；结束后会保存到本机。',
+      cancelLabel: '继续录音',
+      confirmLabel: '结束并保存',
+    );
+    if (confirmed) {
+      await widget.controller.stop();
     }
   }
 
@@ -152,9 +177,9 @@ class _StatusText extends StatelessWidget {
     return switch (state.phase) {
       ActiveRecordingPhase.recording => const StatusLabel(
         key: ValueKey('recording'),
-        icon: Icons.mic_none_outlined,
-        label: '录音中',
-        kind: StatusKind.positive,
+        icon: Icons.fiber_manual_record,
+        label: '正在录音',
+        kind: StatusKind.danger,
       ),
       ActiveRecordingPhase.paused => const StatusLabel(
         key: ValueKey('paused'),

@@ -4,15 +4,16 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets(
-    'hub leaves local recording enabled offline and explains unavailable hardware',
+    'recording destination exposes local recording as the only start action',
     (tester) async {
       await tester.pumpWidget(
         const MaterialApp(home: RecordingHubPage(isHardwareObservable: false)),
       );
 
-      expect(find.text('本机录音'), findsOneWidget);
-      expect(find.byTooltip('开始本机录音'), findsOneWidget);
-      expect(find.text('连接设备后观察录音状态'), findsOneWidget);
+      expect(find.text('开始本机录音'), findsOneWidget);
+      expect(find.text('无需连接设备'), findsOneWidget);
+      expect(find.text('设备录音状态'), findsOneWidget);
+      expect(find.text('开始设备录音'), findsNothing);
     },
   );
 }

@@ -15,7 +15,6 @@ import 'package:evt_ble_app/features/device_session/application/session_state.da
 import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
 import 'package:evt_ble_app/features/device_session/presentation/device_detail_page.dart';
 import 'package:evt_ble_app/features/evidence/application/evidence_history_controller.dart';
-import 'package:evt_ble_app/features/evidence/presentation/evidence_history_page.dart';
 import 'package:evt_ble_app/features/evidence/presentation/record_observation_sheet.dart';
 import 'package:evt_ble_app/features/home/presentation/home_page.dart';
 import 'package:evt_ble_app/features/local_recording/application/recording_controller.dart';
@@ -28,6 +27,7 @@ import 'package:evt_ble_app/features/observation/domain/observation_scenario.dar
 import 'package:evt_ble_app/features/observation/presentation/observation_page.dart';
 import 'package:evt_ble_app/features/onboarding/application/onboarding_controller.dart';
 import 'package:evt_ble_app/features/onboarding/presentation/welcome_page.dart';
+import 'package:evt_ble_app/features/records/presentation/records_page.dart';
 import 'package:evt_ble_app/features/settings/application/theme_mode_controller.dart';
 import 'package:evt_ble_app/features/settings/presentation/settings_page.dart';
 import 'package:flutter/material.dart';
@@ -129,20 +129,22 @@ class _AppShellState extends ConsumerState<AppShell> {
                   : () => _openSessionDashboard(session),
             ),
             AppDestination.records =>
-              _evidenceHistoryController == null
-                  ? const SizedBox.shrink()
-                  : EvidenceHistoryPage(
-                      controller: _evidenceHistoryController!,
+              _evidenceHistoryController == null ||
+                      _recordingLibraryController == null
+                  ? const Scaffold(
+                      body: Center(child: CircularProgressIndicator()),
+                    )
+                  : RecordsPage(
+                      recordingController: _recordingLibraryController!,
+                      evidenceController: _evidenceHistoryController!,
+                      onStartRecording: _openActiveRecording,
                     ),
             AppDestination.recording => RecordingHubPage(
               isHardwareObservable: canRecord,
               onStartLocal: _openActiveRecording,
               onOpenLibrary: _openLocalRecordingLibrary,
               onOpenHardware: canRecord
-                  ? () => _openObservation(
-                      session!.state,
-                      initialScenario: ObservationScenario.vadRecording,
-                    )
+                  ? () => _openSessionDashboard(session!)
                   : null,
             ),
           },
@@ -298,8 +300,23 @@ class _AppShellState extends ConsumerState<AppShell> {
     _evidenceHistoryController ??= EvidenceHistoryController(
       ref.read(evidenceRepositoryProvider),
     );
-    unawaited(_evidenceHistoryController!.load());
     setState(() => _destination = AppDestination.records);
+    unawaited(_prepareRecords());
+  }
+
+  Future<void> _prepareRecords() async {
+    await _ensureRecordingControllers();
+    final library = _recordingLibraryController;
+    final evidence = _evidenceHistoryController;
+    if (library != null) {
+      unawaited(library.load());
+    }
+    if (evidence != null) {
+      unawaited(evidence.load());
+    }
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _retrySession(SessionController controller) {

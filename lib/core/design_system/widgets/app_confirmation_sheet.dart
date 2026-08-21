@@ -9,6 +9,7 @@ abstract final class AppConfirmationSheet {
     required String title,
     required String message,
     required String confirmLabel,
+    String cancelLabel = '取消',
     AppConfirmationVariant variant = AppConfirmationVariant.normal,
   }) async {
     return await showModalBottomSheet<bool>(
@@ -17,6 +18,7 @@ abstract final class AppConfirmationSheet {
             title: title,
             message: message,
             confirmLabel: confirmLabel,
+            cancelLabel: cancelLabel,
             variant: variant,
           ),
         ) ??
@@ -29,12 +31,14 @@ class _AppConfirmationSheet extends StatelessWidget {
     required this.title,
     required this.message,
     required this.confirmLabel,
+    required this.cancelLabel,
     required this.variant,
   });
 
   final String title;
   final String message;
   final String confirmLabel;
+  final String cancelLabel;
   final AppConfirmationVariant variant;
 
   @override
@@ -53,7 +57,7 @@ class _AppConfirmationSheet extends StatelessWidget {
             Text(message),
             const SizedBox(height: 20),
             AppButton.secondary(
-              label: '取消',
+              label: cancelLabel,
               onPressed: () => Navigator.of(context).pop(false),
             ),
             const SizedBox(height: 8),

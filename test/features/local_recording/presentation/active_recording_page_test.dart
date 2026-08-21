@@ -31,6 +31,11 @@ void main() {
       expect(find.byTooltip('暂停录音'), findsOneWidget);
       expect(find.byTooltip('结束录音'), findsOneWidget);
 
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('继续录音'), findsOneWidget);
+      expect(find.text('结束并保存'), findsOneWidget);
+
       await controller.stop();
       await tester.pump();
     },

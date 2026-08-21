@@ -1,3 +1,5 @@
+import 'package:evt_ble_app/core/design_system/widgets/app_button.dart';
+import 'package:evt_ble_app/core/design_system/widgets/app_surface_card.dart';
 import 'package:flutter/material.dart';
 
 class RecordingHubPage extends StatelessWidget {
@@ -17,127 +19,68 @@ class RecordingHubPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('录音')),
+      appBar: AppBar(
+        title: const Text('录音'),
+        actions: [
+          IconButton(
+            tooltip: '查看本机录音',
+            onPressed: onOpenLibrary,
+            icon: const Icon(Icons.library_music_outlined),
+          ),
+        ],
+      ),
       body: SafeArea(
         top: false,
         child: LayoutBuilder(
-          builder: (context, constraints) {
-            final localCard = _RecordingEntryCard(
-              icon: Icons.mic_none_outlined,
-              title: '本机录音',
-              detail: '离线保存到本机',
-              actionTooltip: '开始本机录音',
-              actionIcon: Icons.fiber_manual_record,
-              onAction: onStartLocal,
-              secondaryTooltip: '查看本机录音',
-              secondaryIcon: Icons.library_music_outlined,
-              onSecondaryAction: onOpenLibrary,
-            );
-            final hardwareCard = _RecordingEntryCard(
-              icon: Icons.memory_outlined,
-              title: '硬件录音',
-              detail: isHardwareObservable ? '观察已连接设备的录音状态' : '连接设备后观察录音状态',
-              actionTooltip: '查看硬件录音',
-              actionIcon: Icons.arrow_forward,
-              onAction: isHardwareObservable ? onOpenHardware : null,
-            );
-            final content = constraints.maxWidth > 600
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: localCard),
-                      const SizedBox(width: 16),
-                      Expanded(child: hardwareCard),
-                    ],
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      localCard,
-                      const SizedBox(height: 12),
-                      hardwareCard,
-                    ],
-                  );
-            return Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 760),
-                child: ListView(
-                  padding: const EdgeInsets.all(20),
-                  children: [
-                    Text('录音', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 4),
-                    Text(
-                      '选择录音来源',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 20),
-                    content,
-                  ],
-                ),
+          builder: (context, constraints) => Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: constraints.maxWidth > 600 ? 520 : double.infinity,
               ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _RecordingEntryCard extends StatelessWidget {
-  const _RecordingEntryCard({
-    required this.icon,
-    required this.title,
-    required this.detail,
-    required this.actionTooltip,
-    required this.actionIcon,
-    required this.onAction,
-    this.secondaryTooltip,
-    this.secondaryIcon,
-    this.onSecondaryAction,
-  });
-
-  final IconData icon;
-  final String title;
-  final String detail;
-  final String actionTooltip;
-  final IconData actionIcon;
-  final VoidCallback? onAction;
-  final String? secondaryTooltip;
-  final IconData? secondaryIcon;
-  final VoidCallback? onSecondaryAction;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Icon(icon, size: 28),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: ListView(
+                padding: const EdgeInsets.all(20),
                 children: [
-                  Text(title, style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 4),
-                  Text(detail, style: Theme.of(context).textTheme.bodySmall),
+                  Text('本机录音', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  Text('无需连接设备', style: Theme.of(context).textTheme.bodyMedium),
+                  const SizedBox(height: 20),
+                  AppButton.primary(
+                    label: '开始本机录音',
+                    onPressed: onStartLocal,
+                    icon: Icons.mic_none_outlined,
+                  ),
+                  const SizedBox(height: 28),
+                  AppSurfaceCard(
+                    onTap: isHardwareObservable ? onOpenHardware : null,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.memory_outlined),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '设备录音状态',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                isHardwareObservable ? '可在设备详情查看' : '暂时无法获取',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (isHardwareObservable)
+                          const Icon(Icons.arrow_forward),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
-            if (secondaryTooltip case final tooltip?)
-              IconButton(
-                tooltip: tooltip,
-                onPressed: onSecondaryAction,
-                icon: Icon(secondaryIcon),
-              ),
-            IconButton.filled(
-              tooltip: actionTooltip,
-              onPressed: onAction,
-              icon: Icon(actionIcon),
-            ),
-          ],
+          ),
         ),
       ),
     );
