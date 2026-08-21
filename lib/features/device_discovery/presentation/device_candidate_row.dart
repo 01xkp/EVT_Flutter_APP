@@ -1,3 +1,4 @@
+import 'package:evt_ble_app/core/design_system/widgets/app_surface_card.dart';
 import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
 import 'package:flutter/material.dart';
 
@@ -15,58 +16,31 @@ class DeviceCandidateRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Semantics(
-      button: true,
+    return AppSurfaceCard(
+      onTap: onTap,
       selected: selected,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 64),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: selected ? theme.colorScheme.primary : null,
-            border: Border(bottom: BorderSide(color: theme.dividerColor)),
-            borderRadius: BorderRadius.circular(8),
+      child: Row(
+        children: [
+          const Icon(Icons.bluetooth_outlined),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              candidate.name,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
           ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      candidate.name,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        color: selected ? theme.colorScheme.onPrimary : null,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      candidate.id,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: selected
-                            ? theme.colorScheme.onPrimary.withValues(
-                                alpha: 0.76,
-                              )
-                            : theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Text(
-                '${candidate.rssi} dBm',
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: selected ? theme.colorScheme.onPrimary : null,
-                ),
-              ),
-            ],
+          Text(
+            _signalLabel(candidate.rssi),
+            style: Theme.of(context).textTheme.labelLarge,
           ),
-        ),
+        ],
       ),
     );
   }
+
+  String _signalLabel(int rssi) => switch (rssi) {
+    >= -55 => '信号良好',
+    >= -70 => '信号一般',
+    _ => '信号较弱',
+  };
 }

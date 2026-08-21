@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:evt_ble_app/core/design_system/evt_theme.dart';
 import 'package:evt_ble_app/core/design_system/widgets/app_button.dart';
 import 'package:evt_ble_app/core/design_system/widgets/status_label.dart';
@@ -13,11 +15,13 @@ class DiscoveryPage extends StatefulWidget {
     this.controller,
     this.onConnect,
     this.onSettings,
+    this.onConnectionHelp,
   });
 
   final DiscoveryController? controller;
   final ValueChanged<DeviceCandidate>? onConnect;
   final VoidCallback? onSettings;
+  final VoidCallback? onConnectionHelp;
 
   @override
   State<DiscoveryPage> createState() => _DiscoveryPageState();
@@ -54,54 +58,64 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('设备联调'),
+        title: const Text('连接设备'),
         actions: [
           IconButton(
             tooltip: '设置',
             onPressed: widget.onSettings,
             icon: const Icon(Icons.settings_outlined),
           ),
-          IconButton(
-            tooltip: '开始扫描',
-            onPressed: widget.controller == null || _state.isScanning
-                ? null
-                : widget.controller!.start,
-            icon: _state.isScanning
-                ? const SizedBox(
-                    height: 18,
-                    width: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.radar_outlined),
-          ),
         ],
       ),
       body: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('附近设备', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text(
-                _state.isScanning
-                    ? '正在匹配 AIPIN 广播'
-                    : '${_state.candidates.length} 台匹配设备',
-                style: Theme.of(context).textTheme.bodySmall,
+        child: LayoutBuilder(
+          builder: (context, constraints) => Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: constraints.maxWidth > 600 ? 640 : double.infinity,
               ),
-              const SizedBox(height: 16),
-              Expanded(child: _buildContent(context)),
-              const SizedBox(height: 16),
-              AppButton.primary(
-                label: '连接设备',
-                onPressed: _state.connectEnabled
-                    ? () => widget.onConnect?.call(_state.selected!)
-                    : null,
-                icon: Icons.bluetooth_connected,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '查找附近设备',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _state.isScanning ? '正在查找附近设备' : '靠近设备后开始查找',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 16),
+                    if (_state.isScanning)
+                      AppButton.secondary(
+                        label: '停止查找',
+                        onPressed: () => unawaited(widget.controller?.stop()),
+                        icon: Icons.close,
+                      )
+                    else
+                      AppButton.primary(
+                        label: '查找附近设备',
+                        onPressed: widget.controller?.start,
+                        icon: Icons.radar_outlined,
+                      ),
+                    const SizedBox(height: 16),
+                    Expanded(child: _buildContent(context)),
+                    const SizedBox(height: 16),
+                    AppButton.primary(
+                      label: '连接设备',
+                      onPressed: _state.connectEnabled
+                          ? () => widget.onConnect?.call(_state.selected!)
+                          : null,
+                      icon: Icons.bluetooth_connected,
+                    ),
+                  ],
+                ),
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -113,6 +127,7 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
       return _DiscoveryFailure(
         message: failure.message,
         onRetry: widget.controller?.start,
+        onHelp: widget.onConnectionHelp ?? () => _showConnectionHelp(context),
       );
     }
     if (_state.candidates.isEmpty) {
@@ -140,6 +155,35 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
       setState(() => _state = widget.controller!.state);
     }
   }
+
+  void _showConnectionHelp(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('连接帮助', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              const Text('确认设备已开机，并尽量靠近手机后重新查找。'),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('知道了'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _DiscoveryEmptyState extends StatelessWidget {
@@ -150,7 +194,7 @@ class _DiscoveryEmptyState extends StatelessWidget {
     return const Center(
       child: StatusLabel(
         icon: Icons.radar_outlined,
-        label: '开始扫描以查找 AIPIN 设备',
+        label: '尚未发现附近设备',
         kind: StatusKind.neutral,
       ),
     );
@@ -158,10 +202,11 @@ class _DiscoveryEmptyState extends StatelessWidget {
 }
 
 class _DiscoveryFailure extends StatelessWidget {
-  const _DiscoveryFailure({required this.message, this.onRetry});
+  const _DiscoveryFailure({required this.message, this.onRetry, this.onHelp});
 
   final String message;
   final VoidCallback? onRetry;
+  final VoidCallback? onHelp;
 
   @override
   Widget build(BuildContext context) {
@@ -175,11 +220,13 @@ class _DiscoveryFailure extends StatelessWidget {
             kind: StatusKind.danger,
           ),
           const SizedBox(height: 12),
-          OutlinedButton.icon(
+          AppButton.secondary(
+            label: '重新查找',
             onPressed: onRetry,
-            icon: const Icon(Icons.refresh),
-            label: const Text('重新扫描'),
+            icon: Icons.refresh,
           ),
+          const SizedBox(height: 8),
+          TextButton(onPressed: onHelp, child: const Text('查看连接帮助')),
         ],
       ),
     );

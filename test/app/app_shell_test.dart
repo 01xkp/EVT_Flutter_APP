@@ -21,8 +21,10 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('首页'), findsOneWidget);
-    expect(find.text('录音'), findsOneWidget);
+    expect(find.text('首页'), findsWidgets);
+    expect(find.text('录音'), findsWidgets);
     expect(find.text('记录'), findsOneWidget);
+    expect(find.text('我的设备'), findsOneWidget);
+    expect(find.text('尚未连接'), findsOneWidget);
   });
 }

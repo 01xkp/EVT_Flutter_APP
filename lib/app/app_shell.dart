@@ -12,10 +12,12 @@ import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.da
 import 'package:evt_ble_app/features/device_discovery/presentation/discovery_page.dart';
 import 'package:evt_ble_app/features/device_session/application/session_controller.dart';
 import 'package:evt_ble_app/features/device_session/application/session_state.dart';
+import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
 import 'package:evt_ble_app/features/device_session/presentation/session_dashboard_page.dart';
 import 'package:evt_ble_app/features/evidence/application/evidence_history_controller.dart';
 import 'package:evt_ble_app/features/evidence/presentation/evidence_history_page.dart';
 import 'package:evt_ble_app/features/evidence/presentation/record_observation_sheet.dart';
+import 'package:evt_ble_app/features/home/presentation/home_page.dart';
 import 'package:evt_ble_app/features/local_recording/application/recording_controller.dart';
 import 'package:evt_ble_app/features/local_recording/application/recording_library_controller.dart';
 import 'package:evt_ble_app/features/local_recording/application/recording_recovery_service.dart';
@@ -117,18 +119,14 @@ class _AppShellState extends ConsumerState<AppShell> {
         final canRecord = session?.state.isObservable ?? false;
         return Scaffold(
           body: switch (_destination) {
-            AppDestination.home =>
-              session == null
-                  ? DiscoveryPage(
-                      controller: _discoveryController,
-                      onConnect: _openSession,
-                      onSettings: _openSettings,
-                    )
-                  : SessionDashboardPage(
-                      state: session.state,
-                      onStartObservation: () => _openObservation(session.state),
-                      onRetry: () => _retrySession(session),
-                    ),
+            AppDestination.home => HomePage(
+              device: _deviceSummary(),
+              onConnectDevice: session == null
+                  ? _openConnectionJourney
+                  : () => _openSessionDashboard(session),
+              onStartLocalRecording: _openActiveRecording,
+              onOpenSettings: _openSettings,
+            ),
             AppDestination.records =>
               _evidenceHistoryController == null
                   ? const SizedBox.shrink()
@@ -185,6 +183,62 @@ class _AppShellState extends ConsumerState<AppShell> {
       return;
     }
     setState(() => _destination = destination);
+  }
+
+  DeviceSummary _deviceSummary() {
+    final session = _sessionController?.state;
+    final candidate = session?.session?.candidate;
+    if (candidate != null) {
+      if (session!.isObservable) {
+        final recordingLabel = switch (session.latestSnapshot?.state) {
+          DeviceState.recording => '正在录音',
+          DeviceState.standby => '未在录音',
+          _ => '暂时无法获取',
+        };
+        return DeviceSummary.connected(
+          name: candidate.name,
+          recordingLabel: recordingLabel,
+        );
+      }
+      return DeviceSummary.searching(name: candidate.name);
+    }
+    final discovery = _discoveryController.state;
+    final name = discovery.selected?.name ?? 'AIPIN';
+    return discovery.isScanning
+        ? DeviceSummary.searching(name: name)
+        : DeviceSummary.disconnected(name: name);
+  }
+
+  void _openConnectionJourney() {
+    _discoveryController.start();
+    unawaited(
+      Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (context) => DiscoveryPage(
+            controller: _discoveryController,
+            onConnect: _openSession,
+            onSettings: _openSettings,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openSessionDashboard(SessionController session) {
+    unawaited(
+      Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (context) => AnimatedBuilder(
+            animation: session,
+            builder: (context, _) => SessionDashboardPage(
+              state: session.state,
+              onStartObservation: () => _openObservation(session.state),
+              onRetry: () => _retrySession(session),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _openSession(DeviceCandidate candidate) async {
