@@ -1090,6 +1090,586 @@ class SessionEventsCompanion extends UpdateCompanion<EvidenceRecordRow> {
   }
 }
 
+class $LocalRecordingsTable extends LocalRecordings
+    with TableInfo<$LocalRecordingsTable, LocalRecordingRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $LocalRecordingsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _titleMeta = const VerificationMeta('title');
+  @override
+  late final GeneratedColumn<String> title = GeneratedColumn<String>(
+    'title',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _relativePathMeta = const VerificationMeta(
+    'relativePath',
+  );
+  @override
+  late final GeneratedColumn<String> relativePath = GeneratedColumn<String>(
+    'relative_path',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _completedAtMeta = const VerificationMeta(
+    'completedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> completedAt = GeneratedColumn<DateTime>(
+    'completed_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _durationMsMeta = const VerificationMeta(
+    'durationMs',
+  );
+  @override
+  late final GeneratedColumn<int> durationMs = GeneratedColumn<int>(
+    'duration_ms',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _sizeBytesMeta = const VerificationMeta(
+    'sizeBytes',
+  );
+  @override
+  late final GeneratedColumn<int> sizeBytes = GeneratedColumn<int>(
+    'size_bytes',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _stateMeta = const VerificationMeta('state');
+  @override
+  late final GeneratedColumn<String> state = GeneratedColumn<String>(
+    'state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _failureReasonMeta = const VerificationMeta(
+    'failureReason',
+  );
+  @override
+  late final GeneratedColumn<String> failureReason = GeneratedColumn<String>(
+    'failure_reason',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    title,
+    relativePath,
+    createdAt,
+    completedAt,
+    durationMs,
+    sizeBytes,
+    state,
+    failureReason,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'local_recordings';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<LocalRecordingRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('title')) {
+      context.handle(
+        _titleMeta,
+        title.isAcceptableOrUnknown(data['title']!, _titleMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_titleMeta);
+    }
+    if (data.containsKey('relative_path')) {
+      context.handle(
+        _relativePathMeta,
+        relativePath.isAcceptableOrUnknown(
+          data['relative_path']!,
+          _relativePathMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_relativePathMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('completed_at')) {
+      context.handle(
+        _completedAtMeta,
+        completedAt.isAcceptableOrUnknown(
+          data['completed_at']!,
+          _completedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('duration_ms')) {
+      context.handle(
+        _durationMsMeta,
+        durationMs.isAcceptableOrUnknown(data['duration_ms']!, _durationMsMeta),
+      );
+    }
+    if (data.containsKey('size_bytes')) {
+      context.handle(
+        _sizeBytesMeta,
+        sizeBytes.isAcceptableOrUnknown(data['size_bytes']!, _sizeBytesMeta),
+      );
+    }
+    if (data.containsKey('state')) {
+      context.handle(
+        _stateMeta,
+        state.isAcceptableOrUnknown(data['state']!, _stateMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_stateMeta);
+    }
+    if (data.containsKey('failure_reason')) {
+      context.handle(
+        _failureReasonMeta,
+        failureReason.isAcceptableOrUnknown(
+          data['failure_reason']!,
+          _failureReasonMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  LocalRecordingRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return LocalRecordingRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      title: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}title'],
+      )!,
+      relativePath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}relative_path'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      completedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}completed_at'],
+      ),
+      durationMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}duration_ms'],
+      ),
+      sizeBytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}size_bytes'],
+      ),
+      state: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}state'],
+      )!,
+      failureReason: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}failure_reason'],
+      ),
+    );
+  }
+
+  @override
+  $LocalRecordingsTable createAlias(String alias) {
+    return $LocalRecordingsTable(attachedDatabase, alias);
+  }
+}
+
+class LocalRecordingRow extends DataClass
+    implements Insertable<LocalRecordingRow> {
+  final String id;
+  final String title;
+  final String relativePath;
+  final DateTime createdAt;
+  final DateTime? completedAt;
+  final int? durationMs;
+  final int? sizeBytes;
+  final String state;
+  final String? failureReason;
+  const LocalRecordingRow({
+    required this.id,
+    required this.title,
+    required this.relativePath,
+    required this.createdAt,
+    this.completedAt,
+    this.durationMs,
+    this.sizeBytes,
+    required this.state,
+    this.failureReason,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['title'] = Variable<String>(title);
+    map['relative_path'] = Variable<String>(relativePath);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || completedAt != null) {
+      map['completed_at'] = Variable<DateTime>(completedAt);
+    }
+    if (!nullToAbsent || durationMs != null) {
+      map['duration_ms'] = Variable<int>(durationMs);
+    }
+    if (!nullToAbsent || sizeBytes != null) {
+      map['size_bytes'] = Variable<int>(sizeBytes);
+    }
+    map['state'] = Variable<String>(state);
+    if (!nullToAbsent || failureReason != null) {
+      map['failure_reason'] = Variable<String>(failureReason);
+    }
+    return map;
+  }
+
+  LocalRecordingsCompanion toCompanion(bool nullToAbsent) {
+    return LocalRecordingsCompanion(
+      id: Value(id),
+      title: Value(title),
+      relativePath: Value(relativePath),
+      createdAt: Value(createdAt),
+      completedAt: completedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(completedAt),
+      durationMs: durationMs == null && nullToAbsent
+          ? const Value.absent()
+          : Value(durationMs),
+      sizeBytes: sizeBytes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sizeBytes),
+      state: Value(state),
+      failureReason: failureReason == null && nullToAbsent
+          ? const Value.absent()
+          : Value(failureReason),
+    );
+  }
+
+  factory LocalRecordingRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return LocalRecordingRow(
+      id: serializer.fromJson<String>(json['id']),
+      title: serializer.fromJson<String>(json['title']),
+      relativePath: serializer.fromJson<String>(json['relativePath']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      completedAt: serializer.fromJson<DateTime?>(json['completedAt']),
+      durationMs: serializer.fromJson<int?>(json['durationMs']),
+      sizeBytes: serializer.fromJson<int?>(json['sizeBytes']),
+      state: serializer.fromJson<String>(json['state']),
+      failureReason: serializer.fromJson<String?>(json['failureReason']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'title': serializer.toJson<String>(title),
+      'relativePath': serializer.toJson<String>(relativePath),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'completedAt': serializer.toJson<DateTime?>(completedAt),
+      'durationMs': serializer.toJson<int?>(durationMs),
+      'sizeBytes': serializer.toJson<int?>(sizeBytes),
+      'state': serializer.toJson<String>(state),
+      'failureReason': serializer.toJson<String?>(failureReason),
+    };
+  }
+
+  LocalRecordingRow copyWith({
+    String? id,
+    String? title,
+    String? relativePath,
+    DateTime? createdAt,
+    Value<DateTime?> completedAt = const Value.absent(),
+    Value<int?> durationMs = const Value.absent(),
+    Value<int?> sizeBytes = const Value.absent(),
+    String? state,
+    Value<String?> failureReason = const Value.absent(),
+  }) => LocalRecordingRow(
+    id: id ?? this.id,
+    title: title ?? this.title,
+    relativePath: relativePath ?? this.relativePath,
+    createdAt: createdAt ?? this.createdAt,
+    completedAt: completedAt.present ? completedAt.value : this.completedAt,
+    durationMs: durationMs.present ? durationMs.value : this.durationMs,
+    sizeBytes: sizeBytes.present ? sizeBytes.value : this.sizeBytes,
+    state: state ?? this.state,
+    failureReason: failureReason.present
+        ? failureReason.value
+        : this.failureReason,
+  );
+  LocalRecordingRow copyWithCompanion(LocalRecordingsCompanion data) {
+    return LocalRecordingRow(
+      id: data.id.present ? data.id.value : this.id,
+      title: data.title.present ? data.title.value : this.title,
+      relativePath: data.relativePath.present
+          ? data.relativePath.value
+          : this.relativePath,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      completedAt: data.completedAt.present
+          ? data.completedAt.value
+          : this.completedAt,
+      durationMs: data.durationMs.present
+          ? data.durationMs.value
+          : this.durationMs,
+      sizeBytes: data.sizeBytes.present ? data.sizeBytes.value : this.sizeBytes,
+      state: data.state.present ? data.state.value : this.state,
+      failureReason: data.failureReason.present
+          ? data.failureReason.value
+          : this.failureReason,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('LocalRecordingRow(')
+          ..write('id: $id, ')
+          ..write('title: $title, ')
+          ..write('relativePath: $relativePath, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('completedAt: $completedAt, ')
+          ..write('durationMs: $durationMs, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('state: $state, ')
+          ..write('failureReason: $failureReason')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    title,
+    relativePath,
+    createdAt,
+    completedAt,
+    durationMs,
+    sizeBytes,
+    state,
+    failureReason,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is LocalRecordingRow &&
+          other.id == this.id &&
+          other.title == this.title &&
+          other.relativePath == this.relativePath &&
+          other.createdAt == this.createdAt &&
+          other.completedAt == this.completedAt &&
+          other.durationMs == this.durationMs &&
+          other.sizeBytes == this.sizeBytes &&
+          other.state == this.state &&
+          other.failureReason == this.failureReason);
+}
+
+class LocalRecordingsCompanion extends UpdateCompanion<LocalRecordingRow> {
+  final Value<String> id;
+  final Value<String> title;
+  final Value<String> relativePath;
+  final Value<DateTime> createdAt;
+  final Value<DateTime?> completedAt;
+  final Value<int?> durationMs;
+  final Value<int?> sizeBytes;
+  final Value<String> state;
+  final Value<String?> failureReason;
+  final Value<int> rowid;
+  const LocalRecordingsCompanion({
+    this.id = const Value.absent(),
+    this.title = const Value.absent(),
+    this.relativePath = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.completedAt = const Value.absent(),
+    this.durationMs = const Value.absent(),
+    this.sizeBytes = const Value.absent(),
+    this.state = const Value.absent(),
+    this.failureReason = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  LocalRecordingsCompanion.insert({
+    required String id,
+    required String title,
+    required String relativePath,
+    required DateTime createdAt,
+    this.completedAt = const Value.absent(),
+    this.durationMs = const Value.absent(),
+    this.sizeBytes = const Value.absent(),
+    required String state,
+    this.failureReason = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       title = Value(title),
+       relativePath = Value(relativePath),
+       createdAt = Value(createdAt),
+       state = Value(state);
+  static Insertable<LocalRecordingRow> custom({
+    Expression<String>? id,
+    Expression<String>? title,
+    Expression<String>? relativePath,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? completedAt,
+    Expression<int>? durationMs,
+    Expression<int>? sizeBytes,
+    Expression<String>? state,
+    Expression<String>? failureReason,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (title != null) 'title': title,
+      if (relativePath != null) 'relative_path': relativePath,
+      if (createdAt != null) 'created_at': createdAt,
+      if (completedAt != null) 'completed_at': completedAt,
+      if (durationMs != null) 'duration_ms': durationMs,
+      if (sizeBytes != null) 'size_bytes': sizeBytes,
+      if (state != null) 'state': state,
+      if (failureReason != null) 'failure_reason': failureReason,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  LocalRecordingsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? title,
+    Value<String>? relativePath,
+    Value<DateTime>? createdAt,
+    Value<DateTime?>? completedAt,
+    Value<int?>? durationMs,
+    Value<int?>? sizeBytes,
+    Value<String>? state,
+    Value<String?>? failureReason,
+    Value<int>? rowid,
+  }) {
+    return LocalRecordingsCompanion(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      relativePath: relativePath ?? this.relativePath,
+      createdAt: createdAt ?? this.createdAt,
+      completedAt: completedAt ?? this.completedAt,
+      durationMs: durationMs ?? this.durationMs,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      state: state ?? this.state,
+      failureReason: failureReason ?? this.failureReason,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (title.present) {
+      map['title'] = Variable<String>(title.value);
+    }
+    if (relativePath.present) {
+      map['relative_path'] = Variable<String>(relativePath.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (completedAt.present) {
+      map['completed_at'] = Variable<DateTime>(completedAt.value);
+    }
+    if (durationMs.present) {
+      map['duration_ms'] = Variable<int>(durationMs.value);
+    }
+    if (sizeBytes.present) {
+      map['size_bytes'] = Variable<int>(sizeBytes.value);
+    }
+    if (state.present) {
+      map['state'] = Variable<String>(state.value);
+    }
+    if (failureReason.present) {
+      map['failure_reason'] = Variable<String>(failureReason.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('LocalRecordingsCompanion(')
+          ..write('id: $id, ')
+          ..write('title: $title, ')
+          ..write('relativePath: $relativePath, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('completedAt: $completedAt, ')
+          ..write('durationMs: $durationMs, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('state: $state, ')
+          ..write('failureReason: $failureReason, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -1097,6 +1677,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     this,
   );
   late final $SessionEventsTable sessionEvents = $SessionEventsTable(this);
+  late final $LocalRecordingsTable localRecordings = $LocalRecordingsTable(
+    this,
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1104,6 +1687,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   List<DatabaseSchemaEntity> get allSchemaEntities => [
     evidenceBundles,
     sessionEvents,
+    localRecordings,
   ];
 }
 
@@ -1658,6 +2242,296 @@ typedef $$SessionEventsTableProcessedTableManager =
       EvidenceRecordRow,
       PrefetchHooks Function()
     >;
+typedef $$LocalRecordingsTableCreateCompanionBuilder =
+    LocalRecordingsCompanion Function({
+      required String id,
+      required String title,
+      required String relativePath,
+      required DateTime createdAt,
+      Value<DateTime?> completedAt,
+      Value<int?> durationMs,
+      Value<int?> sizeBytes,
+      required String state,
+      Value<String?> failureReason,
+      Value<int> rowid,
+    });
+typedef $$LocalRecordingsTableUpdateCompanionBuilder =
+    LocalRecordingsCompanion Function({
+      Value<String> id,
+      Value<String> title,
+      Value<String> relativePath,
+      Value<DateTime> createdAt,
+      Value<DateTime?> completedAt,
+      Value<int?> durationMs,
+      Value<int?> sizeBytes,
+      Value<String> state,
+      Value<String?> failureReason,
+      Value<int> rowid,
+    });
+
+class $$LocalRecordingsTableFilterComposer
+    extends Composer<_$AppDatabase, $LocalRecordingsTable> {
+  $$LocalRecordingsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get title => $composableBuilder(
+    column: $table.title,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get relativePath => $composableBuilder(
+    column: $table.relativePath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sizeBytes => $composableBuilder(
+    column: $table.sizeBytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get state => $composableBuilder(
+    column: $table.state,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get failureReason => $composableBuilder(
+    column: $table.failureReason,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$LocalRecordingsTableOrderingComposer
+    extends Composer<_$AppDatabase, $LocalRecordingsTable> {
+  $$LocalRecordingsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get title => $composableBuilder(
+    column: $table.title,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get relativePath => $composableBuilder(
+    column: $table.relativePath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sizeBytes => $composableBuilder(
+    column: $table.sizeBytes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get state => $composableBuilder(
+    column: $table.state,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get failureReason => $composableBuilder(
+    column: $table.failureReason,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$LocalRecordingsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $LocalRecordingsTable> {
+  $$LocalRecordingsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get title =>
+      $composableBuilder(column: $table.title, builder: (column) => column);
+
+  GeneratedColumn<String> get relativePath => $composableBuilder(
+    column: $table.relativePath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get durationMs => $composableBuilder(
+    column: $table.durationMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get sizeBytes =>
+      $composableBuilder(column: $table.sizeBytes, builder: (column) => column);
+
+  GeneratedColumn<String> get state =>
+      $composableBuilder(column: $table.state, builder: (column) => column);
+
+  GeneratedColumn<String> get failureReason => $composableBuilder(
+    column: $table.failureReason,
+    builder: (column) => column,
+  );
+}
+
+class $$LocalRecordingsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $LocalRecordingsTable,
+          LocalRecordingRow,
+          $$LocalRecordingsTableFilterComposer,
+          $$LocalRecordingsTableOrderingComposer,
+          $$LocalRecordingsTableAnnotationComposer,
+          $$LocalRecordingsTableCreateCompanionBuilder,
+          $$LocalRecordingsTableUpdateCompanionBuilder,
+          (
+            LocalRecordingRow,
+            BaseReferences<
+              _$AppDatabase,
+              $LocalRecordingsTable,
+              LocalRecordingRow
+            >,
+          ),
+          LocalRecordingRow,
+          PrefetchHooks Function()
+        > {
+  $$LocalRecordingsTableTableManager(
+    _$AppDatabase db,
+    $LocalRecordingsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$LocalRecordingsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$LocalRecordingsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$LocalRecordingsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> title = const Value.absent(),
+                Value<String> relativePath = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime?> completedAt = const Value.absent(),
+                Value<int?> durationMs = const Value.absent(),
+                Value<int?> sizeBytes = const Value.absent(),
+                Value<String> state = const Value.absent(),
+                Value<String?> failureReason = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => LocalRecordingsCompanion(
+                id: id,
+                title: title,
+                relativePath: relativePath,
+                createdAt: createdAt,
+                completedAt: completedAt,
+                durationMs: durationMs,
+                sizeBytes: sizeBytes,
+                state: state,
+                failureReason: failureReason,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String title,
+                required String relativePath,
+                required DateTime createdAt,
+                Value<DateTime?> completedAt = const Value.absent(),
+                Value<int?> durationMs = const Value.absent(),
+                Value<int?> sizeBytes = const Value.absent(),
+                required String state,
+                Value<String?> failureReason = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => LocalRecordingsCompanion.insert(
+                id: id,
+                title: title,
+                relativePath: relativePath,
+                createdAt: createdAt,
+                completedAt: completedAt,
+                durationMs: durationMs,
+                sizeBytes: sizeBytes,
+                state: state,
+                failureReason: failureReason,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$LocalRecordingsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $LocalRecordingsTable,
+      LocalRecordingRow,
+      $$LocalRecordingsTableFilterComposer,
+      $$LocalRecordingsTableOrderingComposer,
+      $$LocalRecordingsTableAnnotationComposer,
+      $$LocalRecordingsTableCreateCompanionBuilder,
+      $$LocalRecordingsTableUpdateCompanionBuilder,
+      (
+        LocalRecordingRow,
+        BaseReferences<_$AppDatabase, $LocalRecordingsTable, LocalRecordingRow>,
+      ),
+      LocalRecordingRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -1666,4 +2540,6 @@ class $AppDatabaseManager {
       $$EvidenceBundlesTableTableManager(_db, _db.evidenceBundles);
   $$SessionEventsTableTableManager get sessionEvents =>
       $$SessionEventsTableTableManager(_db, _db.sessionEvents);
+  $$LocalRecordingsTableTableManager get localRecordings =>
+      $$LocalRecordingsTableTableManager(_db, _db.localRecordings);
 }
