@@ -1,0 +1,9 @@
+{
+  "namePrefix": "AIPIN",
+  "manufacturerPrefixHex": "A389",
+  "serviceUuid": "0000AF30-0000-1000-8000-00805F9B34FB",
+  "gattServiceUuid": "",
+  "readCharacteristicUuid": "",
+  "notifyCharacteristicUuid": "",
+  "writeCharacteristicUuid": ""
+}
