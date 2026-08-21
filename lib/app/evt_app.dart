@@ -1,3 +1,4 @@
+import 'package:evt_ble_app/core/design_system/evt_theme.dart';
 import 'package:flutter/material.dart';
 
 class EvtApp extends StatelessWidget {
@@ -5,9 +6,13 @@ class EvtApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: EvtTheme.light(),
+      darkTheme: EvtTheme.dark(),
+      themeMode: ThemeMode.system,
       home: Scaffold(
-        body: Center(
+        body: const Center(
           child: Text('设备联调'),
         ),
       ),
