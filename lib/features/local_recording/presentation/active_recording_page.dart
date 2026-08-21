@@ -86,7 +86,12 @@ class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
   void _onControllerChanged() {
     final active = widget.controller.state.isCaptureActive;
     if (_wasActive && !active && widget.controller.state.phase == ActiveRecordingPhase.idle) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => widget.onFinished?.call());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        widget.onFinished?.call();
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      });
     }
     _wasActive = active;
     if (mounted) {

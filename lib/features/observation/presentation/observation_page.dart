@@ -19,6 +19,7 @@ class ObservationPage extends StatefulWidget {
     required this.deviceName,
     required this.latestSnapshot,
     this.events = const [],
+    this.initialScenario = ObservationScenario.deviceAccess,
     this.onRecordPhysicalFeedback,
     this.onSaved,
   });
@@ -28,6 +29,7 @@ class ObservationPage extends StatefulWidget {
   final String deviceName;
   final DeviceSnapshot latestSnapshot;
   final List<DeviceEvent> events;
+  final ObservationScenario initialScenario;
   final VoidCallback? onRecordPhysicalFeedback;
   final VoidCallback? onSaved;
 
@@ -37,9 +39,15 @@ class ObservationPage extends StatefulWidget {
 
 class _ObservationPageState extends State<ObservationPage> {
   final _verifier = ObservationVerifier();
-  var _scenario = ObservationScenario.deviceAccess;
+  late ObservationScenario _scenario;
   var _isSaving = false;
   var _isSaved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scenario = widget.initialScenario;
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -14,6 +14,13 @@ import 'package:evt_ble_app/features/device_session/presentation/session_dashboa
 import 'package:evt_ble_app/features/evidence/application/evidence_history_controller.dart';
 import 'package:evt_ble_app/features/evidence/presentation/evidence_history_page.dart';
 import 'package:evt_ble_app/features/evidence/presentation/record_observation_sheet.dart';
+import 'package:evt_ble_app/features/local_recording/application/recording_controller.dart';
+import 'package:evt_ble_app/features/local_recording/application/recording_library_controller.dart';
+import 'package:evt_ble_app/features/local_recording/application/recording_recovery_service.dart';
+import 'package:evt_ble_app/features/local_recording/presentation/active_recording_page.dart';
+import 'package:evt_ble_app/features/local_recording/presentation/local_recording_library_page.dart';
+import 'package:evt_ble_app/features/local_recording/presentation/recording_hub_page.dart';
+import 'package:evt_ble_app/features/observation/domain/observation_scenario.dart';
 import 'package:evt_ble_app/features/observation/presentation/observation_page.dart';
 import 'package:evt_ble_app/features/settings/application/theme_mode_controller.dart';
 import 'package:evt_ble_app/features/settings/presentation/settings_page.dart';
@@ -34,6 +41,9 @@ class _AppShellState extends ConsumerState<AppShell> {
   late final DiscoveryController _discoveryController;
   SessionController? _sessionController;
   EvidenceHistoryController? _evidenceHistoryController;
+  RecordingController? _recordingController;
+  RecordingLibraryController? _recordingLibraryController;
+  Future<void>? _recordingSetup;
   DeviceProfile? _profile;
   var _destination = 0;
 
@@ -51,6 +61,15 @@ class _AppShellState extends ConsumerState<AppShell> {
     _discoveryController.dispose();
     _sessionController?.dispose();
     _evidenceHistoryController?.dispose();
+    _recordingController?.removeListener(_syncRecordingLibrary);
+    final recordingController = _recordingController;
+    final recordingLibraryController = _recordingLibraryController;
+    if (recordingLibraryController != null) {
+      unawaited(recordingLibraryController.close());
+    }
+    if (recordingController != null) {
+      unawaited(recordingController.close());
+    }
     super.dispose();
   }
 
@@ -81,6 +100,17 @@ class _AppShellState extends ConsumerState<AppShell> {
                   : EvidenceHistoryPage(
                       controller: _evidenceHistoryController!,
                     ),
+            2 => RecordingHubPage(
+              isHardwareObservable: canRecord,
+              onStartLocal: _openActiveRecording,
+              onOpenLibrary: _openLocalRecordingLibrary,
+              onOpenHardware: canRecord
+                  ? () => _openObservation(
+                      session!.state,
+                      initialScenario: ObservationScenario.vadRecording,
+                    )
+                  : null,
+            ),
             _ => const SizedBox.shrink(),
           },
           bottomNavigationBar: BottomAppBar(
@@ -95,11 +125,9 @@ class _AppShellState extends ConsumerState<AppShell> {
                     icon: const Icon(Icons.bluetooth_searching_outlined),
                   ),
                   IconButton(
-                    tooltip: '记录观察',
-                    onPressed: canRecord
-                        ? () => _showRecordObservation(session!.state)
-                        : null,
-                    icon: const Icon(Icons.edit_note_outlined),
+                    tooltip: '录音',
+                    onPressed: () => setState(() => _destination = 2),
+                    icon: const Icon(Icons.mic_none_outlined),
                   ),
                   IconButton(
                     tooltip: '查看证据',
@@ -181,7 +209,112 @@ class _AppShellState extends ConsumerState<AppShell> {
     }
   }
 
-  Future<void> _openObservation(SessionState state) async {
+  Future<void> _ensureRecordingControllers() async {
+    if (_recordingController != null && _recordingLibraryController != null) {
+      return;
+    }
+    final activeSetup = _recordingSetup;
+    if (activeSetup != null) {
+      return activeSetup;
+    }
+    final setup = _createRecordingControllers();
+    _recordingSetup = setup;
+    try {
+      await setup;
+    } finally {
+      _recordingSetup = null;
+    }
+  }
+
+  Future<void> _createRecordingControllers() async {
+    final repository = ref.read(localRecordingRepositoryProvider);
+    final files = ref.read(recordingFileStoreProvider);
+    final controller = RecordingController(
+      repository: repository,
+      recorder: ref.read(audioRecorderProvider),
+      files: files,
+      background: ref.read(recordingBackgroundProvider),
+    );
+    final library = RecordingLibraryController(
+      repository: repository,
+      files: files,
+      player: ref.read(audioPlayerProvider),
+    );
+    try {
+      await RecordingRecoveryService(repository: repository, files: files)
+          .reconcile();
+    } catch (_) {
+      // The library surfaces repository failures when the user opens it.
+    }
+    if (!mounted) {
+      await library.close();
+      await controller.close();
+      return;
+    }
+    controller.addListener(_syncRecordingLibrary);
+    setState(() {
+      _recordingController = controller;
+      _recordingLibraryController = library;
+    });
+  }
+
+  Future<void> _openActiveRecording() async {
+    await _ensureRecordingControllers();
+    final controller = _recordingController;
+    if (!mounted || controller == null) {
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => ActiveRecordingPage(
+          controller: controller,
+          onFinished: _onRecordingFinished,
+        ),
+      ),
+    );
+    final library = _recordingLibraryController;
+    if (library != null) {
+      unawaited(library.load());
+    }
+  }
+
+  Future<void> _openLocalRecordingLibrary() async {
+    await _ensureRecordingControllers();
+    final library = _recordingLibraryController;
+    if (!mounted || library == null) {
+      return;
+    }
+    await library.load();
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => LocalRecordingLibraryPage(
+          controller: library,
+          onStartRecording: _openActiveRecording,
+        ),
+      ),
+    );
+  }
+
+  void _onRecordingFinished() {
+    final library = _recordingLibraryController;
+    if (library != null) {
+      unawaited(library.load());
+    }
+  }
+
+  void _syncRecordingLibrary() {
+    _recordingLibraryController?.setCaptureActive(
+      _recordingController?.state.isCaptureActive ?? false,
+    );
+  }
+
+  Future<void> _openObservation(
+    SessionState state, {
+    ObservationScenario initialScenario = ObservationScenario.deviceAccess,
+  }) async {
     final session = state.session;
     final snapshot = state.latestSnapshot;
     if (session == null || snapshot == null) {
@@ -195,6 +328,7 @@ class _AppShellState extends ConsumerState<AppShell> {
           deviceName: session.candidate.name,
           latestSnapshot: snapshot,
           events: state.events,
+          initialScenario: initialScenario,
           onRecordPhysicalFeedback: () => _showRecordObservation(state),
           onSaved: _refreshEvidenceHistory,
         ),

@@ -174,6 +174,9 @@ class RecordingLibraryController extends ChangeNotifier {
   }
 
   void setCaptureActive(bool value) {
+    if (_captureActive == value) {
+      return;
+    }
     _captureActive = value;
     if (value) {
       unawaited(stopPlayback());
