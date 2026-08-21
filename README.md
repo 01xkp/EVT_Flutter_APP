@@ -21,7 +21,8 @@ flutter build apk --debug
 2. 选择匹配 `AIPIN`、厂商前缀 `A3 89`、服务 `AF30` 的设备并连接。
 3. 等待服务发现、状态订阅和首个状态读取完成。只有页面显示“状态可观察”后才能记录或开始验证。
 4. 在“验证场景”中选择设备访问、VAD 录音、电池与充电、待机功耗、恢复或物理反馈。场景判定只消费当前会话收到的真实快照和协议事件。
-5. 保存验证结果，或通过底部“记录观察”补充 LED、按键和异常的人工备注；在“证据记录”中查看、展开或删除本地证据。
+5. 保存验证结果，或在“物理反馈”场景中补充 LED、按键和异常的人工备注；在“证据记录”中查看、展开或删除本地证据。
+6. 通过底部“录音”进入本机录音或硬件录音观察；硬件录音仅在“状态可观察”后进入 VAD 验证场景。
 
 缺失字段、未知协议事件、CRC 错误和无法读取的状态一律显示为“不可验证”，不会被推断为通过。模拟数据或缺少设备身份的结果会在仓储层被拒绝保存。
 
@@ -33,13 +34,19 @@ Profile 未完整配置时，扫描规则仍可使用，但连接后的状态验
 
 ## 平台权限
 
-- Android：声明并在扫描前请求 `BLUETOOTH_SCAN` 和 `BLUETOOTH_CONNECT`；旧版 Android 保留 `ACCESS_FINE_LOCATION` 声明（最高 API 30）。
-- iOS：`Info.plist` 声明 `NSBluetoothAlwaysUsageDescription`。当前 Flutter iOS 工程采用 Swift Package Manager，`permission_handler` 会据此自动启用蓝牙权限。
+- Android：声明并在扫描前请求 `BLUETOOTH_SCAN` 和 `BLUETOOTH_CONNECT`；录音开始时请求 `RECORD_AUDIO`，并以 microphone 前台服务维持后台录制。旧版 Android 保留 `ACCESS_FINE_LOCATION` 声明（最高 API 30）。
+- iOS：`Info.plist` 声明 `NSBluetoothAlwaysUsageDescription`、`NSMicrophoneUsageDescription` 和 audio 后台模式。当前 Flutter iOS 工程采用 Swift Package Manager，`permission_handler` 会据此自动启用蓝牙权限。
 - 未授权、蓝牙不可用或连接中断会显示可恢复诊断，不会制造可观察状态。
 
 ## 本地证据
 
 证据通过 Drift 存储在应用沙盒中的 `evt_evidence` 数据库，包含设备身份、判定、原因、来源快照/事件、人工备注和诊断载荷。应用不上传、同步或共享该数据库；需要导出时应通过受控的内部流程读取诊断载荷。
+
+## 本机录音
+
+- 本机录音支持离线 M4A 录制、后台/锁屏连续录制、本地播放、重命名、删除和异常恢复。
+- 录音音频保存在应用私有目录，Drift 只保存标题、时长、状态和文件相对路径等元数据。
+- 手机本机录音与设备自有的硬件录音完全独立，不向设备发送开始或结束录音指令，也不会将本机音频混入设备证据。
 
 ## 工程结构
 
