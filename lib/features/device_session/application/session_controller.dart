@@ -20,7 +20,9 @@ class SessionController extends ChangeNotifier {
   final DeviceProfile _profile;
   final EvtProtocolCodec _codec;
   StreamSubscription<Uint8List>? _notificationSubscription;
-  SessionState _state = const SessionState(phase: SessionPhase.environmentReady);
+  SessionState _state = const SessionState(
+    phase: SessionPhase.environmentReady,
+  );
 
   SessionState get state => _state;
 
@@ -45,28 +47,25 @@ class SessionController extends ChangeNotifier {
       ),
     );
     try {
-      await _transport.connect(candidate.id).firstWhere(
-        (connection) => connection == BleConnectionState.connected,
-      );
+      await _transport
+          .connect(candidate.id)
+          .firstWhere(
+            (connection) => connection == BleConnectionState.connected,
+          );
       _transition(
         SessionPhase.servicesDiscovered,
         session: _state.session!.copyWith(connectedAt: DateTime.now()),
       );
       final services = await _transport.discoverServices(candidate.id);
       if (!_hasRequiredEndpoints(services)) {
-        _fail(
-          EvtFailure.access(
-            message: '设备缺少所需的状态读取或订阅特征。',
-          ),
-        );
+        _fail(EvtFailure.access(message: '设备缺少所需的状态读取或订阅特征。'));
         return;
       }
 
       _transition(SessionPhase.subscribing);
-      _notificationSubscription = _transport.subscribe(_notifyCharacteristic(candidate.id)).listen(
-        _onNotification,
-        onError: _onTransportError,
-      );
+      _notificationSubscription = _transport
+          .subscribe(_notifyCharacteristic(candidate.id))
+          .listen(_onNotification, onError: _onTransportError);
       _transition(SessionPhase.initialSnapshotRead);
       unawaited(_requestInitialRead(candidate.id));
     } catch (error) {
@@ -84,7 +83,10 @@ class SessionController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final snapshot = _snapshotFromFrame(result.value!, source: '首读 0x${result.value!.command.toRadixString(16).toUpperCase()}');
+    final snapshot = _snapshotFromFrame(
+      result.value!,
+      source: '首读 0x${result.value!.command.toRadixString(16).toUpperCase()}',
+    );
     if (snapshot == null) {
       _state = _state.copyWith(
         failure: EvtFailure.protocol(message: '首读返回不包含可验证状态。'),
@@ -131,7 +133,10 @@ class SessionController extends ChangeNotifier {
     }
     final frame = result.value!;
     final event = DeviceEvent.fromFrame(frame, source: '状态订阅');
-    final snapshot = _snapshotFromFrame(frame, source: '状态订阅 0x${frame.command.toRadixString(16).toUpperCase()}');
+    final snapshot = _snapshotFromFrame(
+      frame,
+      source: '状态订阅 0x${frame.command.toRadixString(16).toUpperCase()}',
+    );
     _state = _state.copyWith(
       events: List.unmodifiable([..._state.events, event]),
       latestSnapshot: snapshot ?? _state.latestSnapshot,
@@ -162,7 +167,9 @@ class SessionController extends ChangeNotifier {
           return null;
         }
         return DeviceSnapshot(
-          state: frame.content.first == 1 ? DeviceState.recording : DeviceState.standby,
+          state: frame.content.first == 1
+              ? DeviceState.recording
+              : DeviceState.standby,
           observedAt: DateTime.now(),
           source: source,
         );
@@ -181,7 +188,8 @@ class SessionController extends ChangeNotifier {
       (service) =>
           service.uuid.toUpperCase() == endpoint.serviceUuid.toUpperCase() &&
           service.characteristicUuids.any(
-            (uuid) => uuid.toUpperCase() == endpoint.characteristicUuid.toUpperCase(),
+            (uuid) =>
+                uuid.toUpperCase() == endpoint.characteristicUuid.toUpperCase(),
           ),
     );
   }

@@ -30,7 +30,9 @@ class DiscoveryState {
       selected: identical(selected, _unset)
           ? this.selected
           : selected as DeviceCandidate?,
-      failure: identical(failure, _unset) ? this.failure : failure as EvtFailure?,
+      failure: identical(failure, _unset)
+          ? this.failure
+          : failure as EvtFailure?,
     );
   }
 }

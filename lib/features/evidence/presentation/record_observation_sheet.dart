@@ -4,6 +4,7 @@ import 'package:evt_ble_app/core/design_system/widgets/status_label.dart';
 import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
 import 'package:evt_ble_app/features/evidence/domain/evidence_bundle.dart';
 import 'package:evt_ble_app/features/evidence/domain/evidence_repository.dart';
+import 'package:evt_ble_app/features/evidence/domain/evidence_source_records.dart';
 import 'package:evt_ble_app/features/observation/domain/observation_run.dart';
 import 'package:evt_ble_app/features/observation/domain/observation_scenario.dart';
 import 'package:evt_ble_app/features/observation/domain/observation_verifier.dart';
@@ -141,14 +142,9 @@ class _RecordObservationSheetState extends State<RecordObservationSheet> {
       reason: verdict.reason,
       manualNote: note,
       records: [
-        _snapshotRecord(widget.latestSnapshot),
-        for (final event in widget.events) _eventRecord(event),
-        EvidenceSourceRecord(
-          kind: EvidenceRecordKind.note,
-          source: '人工观察',
-          occurredAt: DateTime.now(),
-          data: {'note': note},
-        ),
+        EvidenceSourceRecords.snapshot(widget.latestSnapshot),
+        for (final event in widget.events) EvidenceSourceRecords.event(event),
+        EvidenceSourceRecords.manualNote(note),
       ],
     );
     try {
@@ -171,32 +167,5 @@ class _RecordObservationSheetState extends State<RecordObservationSheet> {
   String _formatNote() {
     final prefix = _tags.isEmpty ? '' : '[${_tags.join('、')}] ';
     return '$prefix${_noteController.text.trim()}';
-  }
-
-  EvidenceSourceRecord _snapshotRecord(DeviceSnapshot snapshot) {
-    return EvidenceSourceRecord(
-      kind: EvidenceRecordKind.snapshot,
-      source: snapshot.source,
-      occurredAt: snapshot.observedAt,
-      data: {
-        'state': snapshot.state.name,
-        'batteryPercent': snapshot.batteryPercent,
-        'isCharging': snapshot.isCharging,
-        'standbyPowerMilliwatts': snapshot.standbyPowerMilliwatts,
-      },
-    );
-  }
-
-  EvidenceSourceRecord _eventRecord(DeviceEvent event) {
-    return EvidenceSourceRecord(
-      kind: EvidenceRecordKind.event,
-      source: event.source,
-      occurredAt: event.occurredAt,
-      data: {
-        'kind': event.kind.name,
-        'command': event.command,
-        'payload': event.payload.toList(),
-      },
-    );
   }
 }

@@ -32,12 +32,16 @@ class SessionState {
   }) {
     return SessionState(
       phase: phase ?? this.phase,
-      session: identical(session, _unset) ? this.session : session as DeviceSession?,
+      session: identical(session, _unset)
+          ? this.session
+          : session as DeviceSession?,
       latestSnapshot: identical(latestSnapshot, _unset)
           ? this.latestSnapshot
           : latestSnapshot as DeviceSnapshot?,
       events: events ?? this.events,
-      failure: identical(failure, _unset) ? this.failure : failure as EvtFailure?,
+      failure: identical(failure, _unset)
+          ? this.failure
+          : failure as EvtFailure?,
     );
   }
 }

@@ -14,6 +14,7 @@ import 'package:evt_ble_app/features/device_session/presentation/session_dashboa
 import 'package:evt_ble_app/features/evidence/application/evidence_history_controller.dart';
 import 'package:evt_ble_app/features/evidence/presentation/evidence_history_page.dart';
 import 'package:evt_ble_app/features/evidence/presentation/record_observation_sheet.dart';
+import 'package:evt_ble_app/features/observation/presentation/observation_page.dart';
 import 'package:evt_ble_app/features/settings/application/theme_mode_controller.dart';
 import 'package:evt_ble_app/features/settings/presentation/settings_page.dart';
 import 'package:flutter/material.dart';
@@ -71,8 +72,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                     )
                   : SessionDashboardPage(
                       state: session.state,
-                      onStartObservation: () =>
-                          _showRecordObservation(session.state),
+                      onStartObservation: () => _openObservation(session.state),
                       onRetry: () => _retrySession(session),
                     ),
             1 =>
@@ -181,6 +181,27 @@ class _AppShellState extends ConsumerState<AppShell> {
     }
   }
 
+  Future<void> _openObservation(SessionState state) async {
+    final session = state.session;
+    final snapshot = state.latestSnapshot;
+    if (session == null || snapshot == null) {
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => ObservationPage(
+          repository: ref.read(evidenceRepositoryProvider),
+          deviceId: session.candidate.id,
+          deviceName: session.candidate.name,
+          latestSnapshot: snapshot,
+          events: state.events,
+          onRecordPhysicalFeedback: () => _showRecordObservation(state),
+          onSaved: _refreshEvidenceHistory,
+        ),
+      ),
+    );
+  }
+
   Future<void> _openSettings() async {
     DeviceProfile profile;
     try {
@@ -200,5 +221,12 @@ class _AppShellState extends ConsumerState<AppShell> {
         ),
       ),
     );
+  }
+
+  void _refreshEvidenceHistory() {
+    final controller = _evidenceHistoryController;
+    if (controller != null) {
+      unawaited(controller.load());
+    }
   }
 }

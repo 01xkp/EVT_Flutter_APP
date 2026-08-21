@@ -6,30 +6,30 @@ abstract final class EvtTheme {
   static const motionDuration = Duration(milliseconds: 180);
 
   static ThemeData light() => _build(
-        brightness: Brightness.light,
-        canvas: EvtLightColors.canvas,
-        surface: EvtLightColors.surface,
-        subtle: EvtLightColors.subtle,
-        primaryText: EvtLightColors.primaryText,
-        secondaryText: EvtLightColors.secondaryText,
-        action: EvtLightColors.action,
-        border: EvtLightColors.border,
-        positive: EvtLightColors.positive,
-        danger: EvtLightColors.danger,
-      );
+    brightness: Brightness.light,
+    canvas: EvtLightColors.canvas,
+    surface: EvtLightColors.surface,
+    subtle: EvtLightColors.subtle,
+    primaryText: EvtLightColors.primaryText,
+    secondaryText: EvtLightColors.secondaryText,
+    action: EvtLightColors.action,
+    border: EvtLightColors.border,
+    positive: EvtLightColors.positive,
+    danger: EvtLightColors.danger,
+  );
 
   static ThemeData dark() => _build(
-        brightness: Brightness.dark,
-        canvas: EvtDarkColors.canvas,
-        surface: EvtDarkColors.surface,
-        subtle: EvtDarkColors.subtle,
-        primaryText: EvtDarkColors.primaryText,
-        secondaryText: EvtDarkColors.secondaryText,
-        action: EvtDarkColors.action,
-        border: EvtDarkColors.border,
-        positive: EvtDarkColors.positive,
-        danger: EvtDarkColors.danger,
-      );
+    brightness: Brightness.dark,
+    canvas: EvtDarkColors.canvas,
+    surface: EvtDarkColors.surface,
+    subtle: EvtDarkColors.subtle,
+    primaryText: EvtDarkColors.primaryText,
+    secondaryText: EvtDarkColors.secondaryText,
+    action: EvtDarkColors.action,
+    border: EvtDarkColors.border,
+    positive: EvtDarkColors.positive,
+    danger: EvtDarkColors.danger,
+  );
 
   static ThemeData _build({
     required Brightness brightness,
@@ -56,15 +56,14 @@ abstract final class EvtTheme {
       surface: surface,
       onSurface: primaryText,
     );
-    final textTheme = Typography.material2021().black.apply(
-      bodyColor: primaryText,
-      displayColor: primaryText,
-    ).copyWith(
-      bodyMedium: TextStyle(
-        color: primaryText,
-        fontFeatures: const [FontFeature.tabularFigures()],
-      ),
-    );
+    final textTheme = Typography.material2021().black
+        .apply(bodyColor: primaryText, displayColor: primaryText)
+        .copyWith(
+          bodyMedium: TextStyle(
+            color: primaryText,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        );
     final shape = const RoundedRectangleBorder(
       borderRadius: BorderRadius.all(componentRadius),
     );

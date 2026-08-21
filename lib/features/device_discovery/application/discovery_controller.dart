@@ -61,7 +61,9 @@ class DiscoveryController extends ChangeNotifier {
         if (existing.id != candidate.id) existing,
       candidate,
     ]..sort((left, right) => right.rssi.compareTo(left.rssi));
-    final selected = _state.selected?.id == candidate.id ? candidate : _state.selected;
+    final selected = _state.selected?.id == candidate.id
+        ? candidate
+        : _state.selected;
     _state = _state.copyWith(
       candidates: List.unmodifiable(candidates),
       selected: selected,

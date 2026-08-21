@@ -11,8 +11,8 @@ class FakeBleTransport implements BleTransport {
     DeviceProfile? profile,
     List<BleService>? services,
     this.deferRead = false,
-  })  : profile = profile ?? DeviceProfile.empty(),
-        services = services ?? const [];
+  }) : profile = profile ?? DeviceProfile.empty(),
+       services = services ?? const [];
 
   factory FakeBleTransport.withGattReadyProfile() {
     const profile = DeviceProfile(
@@ -53,11 +53,22 @@ class FakeBleTransport implements BleTransport {
   );
 
   static final weakMatchingCandidate = matchingCandidate.copyWith(rssi: -76);
-  static const validBatteryFrame = [0xED, 0x06, 0x00, 0x91, 0x50, 0x01, 0x00, 0x14, 0x59];
+  static const validBatteryFrame = [
+    0xED,
+    0x06,
+    0x00,
+    0x91,
+    0x50,
+    0x01,
+    0x00,
+    0x14,
+    0x59,
+  ];
 
   final DeviceProfile profile;
   final _scanController = StreamController<DeviceCandidate>.broadcast();
-  final _connectionController = StreamController<BleConnectionState>.broadcast();
+  final _connectionController =
+      StreamController<BleConnectionState>.broadcast();
   final _subscriptionController = StreamController<Uint8List>.broadcast();
   final disconnectedDeviceIds = <String>[];
   final List<String> discoveryRequests = [];
@@ -66,11 +77,13 @@ class FakeBleTransport implements BleTransport {
   final List<BleService> services;
   Uint8List readValue = Uint8List(0);
 
-  void emitCandidate(DeviceCandidate candidate) => _scanController.add(candidate);
+  void emitCandidate(DeviceCandidate candidate) =>
+      _scanController.add(candidate);
 
   void emitScanError(Object error) => _scanController.addError(error);
 
-  void emitConnection(BleConnectionState state) => _connectionController.add(state);
+  void emitConnection(BleConnectionState state) =>
+      _connectionController.add(state);
 
   void emitSubscriptionBytes(List<int> bytes) {
     _subscriptionController.add(Uint8List.fromList(bytes));

@@ -8,6 +8,9 @@ void main() {
   ) async {
     await tester.pumpWidget(const MaterialApp(home: DiscoveryPage()));
 
-    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+    expect(
+      tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+      isNull,
+    );
   });
 }

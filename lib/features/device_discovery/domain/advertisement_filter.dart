@@ -15,7 +15,9 @@ class AdvertisementFilter {
 
   AdvertisementEvaluation evaluate(DeviceCandidate candidate) {
     final reasons = <String>[];
-    final nameMatches = candidate.name.toUpperCase().startsWith(namePrefix.toUpperCase());
+    final nameMatches = candidate.name.toUpperCase().startsWith(
+      namePrefix.toUpperCase(),
+    );
     if (nameMatches) {
       reasons.add('名称 $namePrefix');
     }

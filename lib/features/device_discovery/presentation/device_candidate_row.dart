@@ -47,7 +47,9 @@ class DeviceCandidateRow extends StatelessWidget {
                       candidate.id,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: selected
-                            ? theme.colorScheme.onPrimary.withValues(alpha: 0.76)
+                            ? theme.colorScheme.onPrimary.withValues(
+                                alpha: 0.76,
+                              )
                             : theme.colorScheme.onSurfaceVariant,
                       ),
                     ),

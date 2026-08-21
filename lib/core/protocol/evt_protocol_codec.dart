@@ -55,26 +55,29 @@ class EvtProtocolCodec {
     );
   }
 
-  static String _hex(int value) => '0x${value.toRadixString(16).padLeft(4, '0').toUpperCase()}';
+  static String _hex(int value) =>
+      '0x${value.toRadixString(16).padLeft(4, '0').toUpperCase()}';
 }
 
 sealed class ProtocolDecodeResult {
   const ProtocolDecodeResult();
 
-  const factory ProtocolDecodeResult.success(EvtFrame frame) = ProtocolDecodeSuccess;
-  const factory ProtocolDecodeResult.failure(EvtFailure failure) = ProtocolDecodeFailure;
+  const factory ProtocolDecodeResult.success(EvtFrame frame) =
+      ProtocolDecodeSuccess;
+  const factory ProtocolDecodeResult.failure(EvtFailure failure) =
+      ProtocolDecodeFailure;
 
   bool get isSuccess => this is ProtocolDecodeSuccess;
 
   EvtFrame? get value => switch (this) {
-        ProtocolDecodeSuccess(:final frame) => frame,
-        ProtocolDecodeFailure() => null,
-      };
+    ProtocolDecodeSuccess(:final frame) => frame,
+    ProtocolDecodeFailure() => null,
+  };
 
   EvtFailure? get failure => switch (this) {
-        ProtocolDecodeSuccess() => null,
-        ProtocolDecodeFailure(:final failure) => failure,
-      };
+    ProtocolDecodeSuccess() => null,
+    ProtocolDecodeFailure(:final failure) => failure,
+  };
 }
 
 class ProtocolDecodeSuccess extends ProtocolDecodeResult {

@@ -15,14 +15,14 @@ class DeviceProfile {
   });
 
   factory DeviceProfile.empty() => const DeviceProfile(
-        namePrefix: 'AIPIN',
-        manufacturerPrefixHex: 'A389',
-        serviceUuid: '0000AF30-0000-1000-8000-00805F9B34FB',
-        gattServiceUuid: '',
-        readCharacteristicUuid: '',
-        notifyCharacteristicUuid: '',
-      writeCharacteristicUuid: '',
-      );
+    namePrefix: 'AIPIN',
+    manufacturerPrefixHex: 'A389',
+    serviceUuid: '0000AF30-0000-1000-8000-00805F9B34FB',
+    gattServiceUuid: '',
+    readCharacteristicUuid: '',
+    notifyCharacteristicUuid: '',
+    writeCharacteristicUuid: '',
+  );
 
   factory DeviceProfile.fromJson(Map<String, Object?> json) {
     String stringValue(String key) => json[key] as String? ?? '';
@@ -53,23 +53,24 @@ class DeviceProfile {
   final String? writeServiceUuid;
 
   BleEndpoint get readEndpoint => BleEndpoint(
-        serviceUuid: _endpointService(readServiceUuid),
-        characteristicUuid: readCharacteristicUuid,
-      );
+    serviceUuid: _endpointService(readServiceUuid),
+    characteristicUuid: readCharacteristicUuid,
+  );
 
   BleEndpoint get notifyEndpoint => BleEndpoint(
-        serviceUuid: _endpointService(notifyServiceUuid),
-        characteristicUuid: notifyCharacteristicUuid,
-      );
+    serviceUuid: _endpointService(notifyServiceUuid),
+    characteristicUuid: notifyCharacteristicUuid,
+  );
 
   BleEndpoint get writeEndpoint => BleEndpoint(
-        serviceUuid: _endpointService(writeServiceUuid),
-        characteristicUuid: writeCharacteristicUuid,
-      );
+    serviceUuid: _endpointService(writeServiceUuid),
+    characteristicUuid: writeCharacteristicUuid,
+  );
 
   List<int> get manufacturerPrefixBytes {
     final normalized = manufacturerPrefixHex.replaceAll(RegExp(r'\s+'), '');
-    if (normalized.length.isOdd || !RegExp(r'^[0-9A-Fa-f]+$').hasMatch(normalized)) {
+    if (normalized.length.isOdd ||
+        !RegExp(r'^[0-9A-Fa-f]+$').hasMatch(normalized)) {
       return const [];
     }
     return [
@@ -79,14 +80,14 @@ class DeviceProfile {
   }
 
   bool get isGattReady => [
-        gattServiceUuid,
-        _endpointService(readServiceUuid),
-        _endpointService(notifyServiceUuid),
-        _endpointService(writeServiceUuid),
-        readCharacteristicUuid,
-        notifyCharacteristicUuid,
-        writeCharacteristicUuid,
-      ].every(_isUuid);
+    gattServiceUuid,
+    _endpointService(readServiceUuid),
+    _endpointService(notifyServiceUuid),
+    _endpointService(writeServiceUuid),
+    readCharacteristicUuid,
+    notifyCharacteristicUuid,
+    writeCharacteristicUuid,
+  ].every(_isUuid);
 
   EvtFailure? get validationFailure => isGattReady
       ? null

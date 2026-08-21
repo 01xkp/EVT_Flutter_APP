@@ -15,7 +15,10 @@ void main() {
     expect(candidates, [FakeBleTransport.matchingCandidate]);
     await subscription.cancel();
     await transport.disconnect(FakeBleTransport.matchingCandidate.id);
-    expect(transport.disconnectedDeviceIds, contains(FakeBleTransport.matchingCandidate.id));
+    expect(
+      transport.disconnectedDeviceIds,
+      contains(FakeBleTransport.matchingCandidate.id),
+    );
   });
 
   test('transport contracts keep plugin types out of feature code', () {
