@@ -9,10 +9,13 @@ import 'package:flutter_reactive_ble/flutter_reactive_ble.dart' as reactive;
 
 class ReactiveBleTransport implements BleTransport {
   ReactiveBleTransport({reactive.FlutterReactiveBle? ble})
-      : _ble = ble ?? reactive.FlutterReactiveBle();
+      : _client = ble;
 
-  final reactive.FlutterReactiveBle _ble;
+  reactive.FlutterReactiveBle? _client;
   final Map<String, _ActiveConnection> _connections = {};
+
+  reactive.FlutterReactiveBle get _ble =>
+      _client ??= reactive.FlutterReactiveBle();
 
   @override
   Stream<DeviceCandidate> scan() async* {
