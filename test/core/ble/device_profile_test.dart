@@ -39,4 +39,22 @@ void main() {
     expect(profile.namePrefix, 'AIPIN');
     expect(profile.manufacturerPrefixBytes, const [0xA3, 0x89]);
   });
+
+  test('profile supports documented read and notification endpoints on separate services', () {
+    const profile = DeviceProfile(
+      namePrefix: 'AIPIN',
+      manufacturerPrefixHex: 'A389',
+      serviceUuid: '0000AF30-0000-1000-8000-00805F9B34FB',
+      gattServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+      readServiceUuid: '0000FB10-1212-EFDE-1523-785FEABCD123',
+      readCharacteristicUuid: '0000FB11-1212-EFDE-1523-785FEABCD123',
+      notifyServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+      notifyCharacteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
+      writeServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+      writeCharacteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
+    );
+
+    expect(profile.readEndpoint.serviceUuid, '0000FB10-1212-EFDE-1523-785FEABCD123');
+    expect(profile.notifyEndpoint.serviceUuid, '0000FA10-1212-EFDE-1523-785FEABCD123');
+  });
 }
