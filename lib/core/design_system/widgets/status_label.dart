@@ -21,7 +21,8 @@ class StatusLabel extends StatelessWidget {
     final statusColors = theme.extension<EvtStatusColors>();
     final color = switch (kind) {
       StatusKind.neutral => theme.colorScheme.onSurfaceVariant,
-      StatusKind.positive => statusColors?.positive ?? theme.colorScheme.tertiary,
+      StatusKind.positive =>
+        statusColors?.positive ?? theme.colorScheme.tertiary,
       StatusKind.danger => statusColors?.danger ?? theme.colorScheme.error,
     };
 
@@ -32,7 +33,9 @@ class StatusLabel extends StatelessWidget {
         children: [
           Icon(icon, size: 16, color: color),
           const SizedBox(width: 6),
-          Flexible(child: Text(label, style: TextStyle(color: color))),
+          Flexible(
+            child: Text(label, style: TextStyle(color: color)),
+          ),
         ],
       ),
     );

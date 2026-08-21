@@ -69,21 +69,21 @@ class AppButton extends StatelessWidget {
 
     return switch (variant) {
       AppButtonVariant.primary => FilledButton(
-          onPressed: enabledCommand,
-          child: child,
-        ),
+        onPressed: enabledCommand,
+        child: child,
+      ),
       AppButtonVariant.secondary => OutlinedButton(
-          onPressed: enabledCommand,
-          child: child,
-        ),
+        onPressed: enabledCommand,
+        child: child,
+      ),
       AppButtonVariant.destructive => FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: Theme.of(context).colorScheme.error,
-            foregroundColor: Theme.of(context).colorScheme.onError,
-          ),
-          onPressed: enabledCommand,
-          child: child,
+        style: FilledButton.styleFrom(
+          backgroundColor: Theme.of(context).colorScheme.error,
+          foregroundColor: Theme.of(context).colorScheme.onError,
         ),
+        onPressed: enabledCommand,
+        child: child,
+      ),
     };
   }
 }

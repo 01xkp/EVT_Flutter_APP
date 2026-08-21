@@ -66,6 +66,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                       state: session.state,
                       onStartObservation: () =>
                           _showRecordObservation(session.state),
+                      onRetry: () => _retrySession(session),
                     ),
             1 =>
               _evidenceHistoryController == null
@@ -163,5 +164,12 @@ class _AppShellState extends ConsumerState<AppShell> {
     );
     unawaited(_evidenceHistoryController!.load());
     setState(() => _destination = 1);
+  }
+
+  void _retrySession(SessionController controller) {
+    final candidate = controller.state.session?.candidate;
+    if (candidate != null) {
+      unawaited(controller.connect(candidate));
+    }
   }
 }

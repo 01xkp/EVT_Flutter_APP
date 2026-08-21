@@ -15,10 +15,7 @@ class EvtFailure {
   final DateTime occurredAt;
   final String? detail;
 
-  factory EvtFailure.environment({
-    required String message,
-    String? detail,
-  }) {
+  factory EvtFailure.environment({required String message, String? detail}) {
     return EvtFailure(
       kind: EvtFailureKind.environment,
       message: message,
