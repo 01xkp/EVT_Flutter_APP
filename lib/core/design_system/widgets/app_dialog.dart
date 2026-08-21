@@ -1,3 +1,4 @@
+import 'package:evt_ble_app/core/design_system/widgets/app_confirmation_sheet.dart';
 import 'package:flutter/material.dart';
 
 abstract final class AppDialog {
@@ -7,27 +8,12 @@ abstract final class AppDialog {
     required String message,
     required String confirmLabel,
   }) async {
-    return await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text(title),
-            content: Text(message),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.error,
-                  foregroundColor: Theme.of(context).colorScheme.onError,
-                ),
-                onPressed: () => Navigator.pop(context, true),
-                child: Text(confirmLabel),
-              ),
-            ],
-          ),
-        ) ??
-        false;
+    return AppConfirmationSheet.show(
+      context,
+      title: title,
+      message: message,
+      confirmLabel: confirmLabel,
+      variant: AppConfirmationVariant.destructive,
+    );
   }
 }

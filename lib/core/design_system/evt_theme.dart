@@ -50,9 +50,11 @@ abstract final class EvtTheme {
           ? EvtLightColors.surface
           : EvtDarkColors.canvas,
       secondary: secondaryText,
-      onSecondary: surface,
+      onSecondary: canvas,
       error: danger,
-      onError: EvtLightColors.surface,
+      onError: brightness == Brightness.light
+          ? EvtLightColors.surface
+          : EvtDarkColors.canvas,
       surface: surface,
       onSurface: primaryText,
     );
@@ -99,6 +101,24 @@ abstract final class EvtTheme {
         modalBackgroundColor: surface,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: componentRadius),
+        ),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: surface,
+        indicatorColor: subtle,
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => TextStyle(
+            color: states.contains(WidgetState.selected)
+                ? primaryText
+                : secondaryText,
+          ),
+        ),
+        iconTheme: WidgetStateProperty.resolveWith(
+          (states) => IconThemeData(
+            color: states.contains(WidgetState.selected)
+                ? primaryText
+                : secondaryText,
+          ),
         ),
       ),
       extensions: [
