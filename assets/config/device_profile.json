@@ -2,8 +2,11 @@
   "namePrefix": "AIPIN",
   "manufacturerPrefixHex": "A389",
   "serviceUuid": "0000AF30-0000-1000-8000-00805F9B34FB",
-  "gattServiceUuid": "",
-  "readCharacteristicUuid": "",
-  "notifyCharacteristicUuid": "",
-  "writeCharacteristicUuid": ""
+  "gattServiceUuid": "0000FA10-1212-EFDE-1523-785FEABCD123",
+  "readServiceUuid": "0000FB10-1212-EFDE-1523-785FEABCD123",
+  "readCharacteristicUuid": "0000FB11-1212-EFDE-1523-785FEABCD123",
+  "notifyServiceUuid": "0000FA10-1212-EFDE-1523-785FEABCD123",
+  "notifyCharacteristicUuid": "0000FA16-1212-EFDE-1523-785FEABCD123",
+  "writeServiceUuid": "0000FA10-1212-EFDE-1523-785FEABCD123",
+  "writeCharacteristicUuid": "0000FA16-1212-EFDE-1523-785FEABCD123"
 }

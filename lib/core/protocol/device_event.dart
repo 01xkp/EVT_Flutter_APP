@@ -22,7 +22,7 @@ class DeviceEvent {
     required this.kind,
     required this.occurredAt,
     required this.source,
-    required this.command,
+    this.command = 0,
     Uint8List? payload,
   }) : payload = Uint8List.fromList(payload ?? Uint8List(0));
 

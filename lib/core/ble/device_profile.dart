@@ -9,6 +9,9 @@ class DeviceProfile {
     required this.readCharacteristicUuid,
     required this.notifyCharacteristicUuid,
     required this.writeCharacteristicUuid,
+    this.readServiceUuid,
+    this.notifyServiceUuid,
+    this.writeServiceUuid,
   });
 
   factory DeviceProfile.empty() => const DeviceProfile(
@@ -18,7 +21,7 @@ class DeviceProfile {
         gattServiceUuid: '',
         readCharacteristicUuid: '',
         notifyCharacteristicUuid: '',
-        writeCharacteristicUuid: '',
+      writeCharacteristicUuid: '',
       );
 
   factory DeviceProfile.fromJson(Map<String, Object?> json) {
@@ -32,6 +35,9 @@ class DeviceProfile {
       readCharacteristicUuid: stringValue('readCharacteristicUuid'),
       notifyCharacteristicUuid: stringValue('notifyCharacteristicUuid'),
       writeCharacteristicUuid: stringValue('writeCharacteristicUuid'),
+      readServiceUuid: stringValue('readServiceUuid'),
+      notifyServiceUuid: stringValue('notifyServiceUuid'),
+      writeServiceUuid: stringValue('writeServiceUuid'),
     );
   }
 
@@ -42,6 +48,24 @@ class DeviceProfile {
   final String readCharacteristicUuid;
   final String notifyCharacteristicUuid;
   final String writeCharacteristicUuid;
+  final String? readServiceUuid;
+  final String? notifyServiceUuid;
+  final String? writeServiceUuid;
+
+  BleEndpoint get readEndpoint => BleEndpoint(
+        serviceUuid: _endpointService(readServiceUuid),
+        characteristicUuid: readCharacteristicUuid,
+      );
+
+  BleEndpoint get notifyEndpoint => BleEndpoint(
+        serviceUuid: _endpointService(notifyServiceUuid),
+        characteristicUuid: notifyCharacteristicUuid,
+      );
+
+  BleEndpoint get writeEndpoint => BleEndpoint(
+        serviceUuid: _endpointService(writeServiceUuid),
+        characteristicUuid: writeCharacteristicUuid,
+      );
 
   List<int> get manufacturerPrefixBytes {
     final normalized = manufacturerPrefixHex.replaceAll(RegExp(r'\s+'), '');
@@ -56,6 +80,9 @@ class DeviceProfile {
 
   bool get isGattReady => [
         gattServiceUuid,
+        _endpointService(readServiceUuid),
+        _endpointService(notifyServiceUuid),
+        _endpointService(writeServiceUuid),
         readCharacteristicUuid,
         notifyCharacteristicUuid,
         writeCharacteristicUuid,
@@ -73,4 +100,18 @@ class DeviceProfile {
       r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
     ).hasMatch(value);
   }
+
+  String _endpointService(String? value) {
+    return value != null && value.isNotEmpty ? value : gattServiceUuid;
+  }
+}
+
+class BleEndpoint {
+  const BleEndpoint({
+    required this.serviceUuid,
+    required this.characteristicUuid,
+  });
+
+  final String serviceUuid;
+  final String characteristicUuid;
 }

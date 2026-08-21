@@ -3,10 +3,45 @@ import 'dart:typed_data';
 
 import 'package:evt_ble_app/core/ble/ble_models.dart';
 import 'package:evt_ble_app/core/ble/ble_transport.dart';
+import 'package:evt_ble_app/core/ble/device_profile.dart';
 import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
 
 class FakeBleTransport implements BleTransport {
-  FakeBleTransport();
+  FakeBleTransport({
+    DeviceProfile? profile,
+    List<BleService>? services,
+    this.deferRead = false,
+  })  : profile = profile ?? DeviceProfile.empty(),
+        services = services ?? const [];
+
+  factory FakeBleTransport.withGattReadyProfile() {
+    const profile = DeviceProfile(
+      namePrefix: 'AIPIN',
+      manufacturerPrefixHex: 'A389',
+      serviceUuid: '0000AF30-0000-1000-8000-00805F9B34FB',
+      gattServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+      readServiceUuid: '0000FB10-1212-EFDE-1523-785FEABCD123',
+      readCharacteristicUuid: '0000FB11-1212-EFDE-1523-785FEABCD123',
+      notifyServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+      notifyCharacteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
+      writeServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+      writeCharacteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
+    );
+    return FakeBleTransport(
+      profile: profile,
+      deferRead: true,
+      services: const [
+        BleService(
+          uuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuids: ['0000FA16-1212-EFDE-1523-785FEABCD123'],
+        ),
+        BleService(
+          uuid: '0000FB10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuids: ['0000FB11-1212-EFDE-1523-785FEABCD123'],
+        ),
+      ],
+    );
+  }
 
   static final matchingCandidate = DeviceCandidate(
     id: '71:BF:E2:3B:84:23',
@@ -18,12 +53,17 @@ class FakeBleTransport implements BleTransport {
   );
 
   static final weakMatchingCandidate = matchingCandidate.copyWith(rssi: -76);
+  static const validBatteryFrame = [0xED, 0x06, 0x00, 0x91, 0x50, 0x01, 0x00, 0x14, 0x59];
 
+  final DeviceProfile profile;
   final _scanController = StreamController<DeviceCandidate>.broadcast();
   final _connectionController = StreamController<BleConnectionState>.broadcast();
   final _subscriptionController = StreamController<Uint8List>.broadcast();
   final disconnectedDeviceIds = <String>[];
-  List<BleService> services = const [];
+  final List<String> discoveryRequests = [];
+  final bool deferRead;
+  final Completer<Uint8List> _deferredRead = Completer<Uint8List>();
+  final List<BleService> services;
   Uint8List readValue = Uint8List(0);
 
   void emitCandidate(DeviceCandidate candidate) => _scanController.add(candidate);
@@ -40,17 +80,29 @@ class FakeBleTransport implements BleTransport {
   Stream<DeviceCandidate> scan() => _scanController.stream;
 
   @override
-  Stream<BleConnectionState> connect(String deviceId) => _connectionController.stream;
+  Stream<BleConnectionState> connect(String deviceId) =>
+      Stream.value(BleConnectionState.connected);
 
   @override
-  Future<List<BleService>> discoverServices(String deviceId) async => services;
+  Future<List<BleService>> discoverServices(String deviceId) async {
+    discoveryRequests.add(deviceId);
+    return services;
+  }
 
   @override
   Stream<Uint8List> subscribe(BleCharacteristic characteristic) =>
       _subscriptionController.stream;
 
   @override
-  Future<Uint8List> read(BleCharacteristic characteristic) async => readValue;
+  Future<Uint8List> read(BleCharacteristic characteristic) async {
+    return deferRead ? _deferredRead.future : readValue;
+  }
+
+  void completeRead(List<int> bytes) {
+    if (!_deferredRead.isCompleted) {
+      _deferredRead.complete(Uint8List.fromList(bytes));
+    }
+  }
 
   @override
   Future<void> disconnect(String deviceId) async {
