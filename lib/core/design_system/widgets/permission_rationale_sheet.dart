@@ -6,21 +6,30 @@ abstract final class PermissionRationaleSheet {
     BuildContext context, {
     required String title,
     required String message,
+    String continueLabel = '继续',
   }) async {
     return await showModalBottomSheet<bool>(
           context: context,
-          builder: (context) =>
-              _PermissionRationaleSheet(title: title, message: message),
+          builder: (context) => _PermissionRationaleSheet(
+            title: title,
+            message: message,
+            continueLabel: continueLabel,
+          ),
         ) ??
         false;
   }
 }
 
 class _PermissionRationaleSheet extends StatelessWidget {
-  const _PermissionRationaleSheet({required this.title, required this.message});
+  const _PermissionRationaleSheet({
+    required this.title,
+    required this.message,
+    required this.continueLabel,
+  });
 
   final String title;
   final String message;
+  final String continueLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -37,7 +46,7 @@ class _PermissionRationaleSheet extends StatelessWidget {
             Text(message),
             const SizedBox(height: 20),
             AppButton.primary(
-              label: '继续',
+              label: continueLabel,
               onPressed: () => Navigator.of(context).pop(true),
             ),
           ],

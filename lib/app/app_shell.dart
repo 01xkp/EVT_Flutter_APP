@@ -478,6 +478,7 @@ class _AppShellState extends ConsumerState<AppShell> {
         builder: (context) => SettingsPage(
           profile: profile,
           themeController: widget.themeController,
+          permissions: ref.read(appPermissionGatewayProvider),
         ),
       ),
     );

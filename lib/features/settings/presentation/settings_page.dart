@@ -1,15 +1,23 @@
 import 'dart:async';
 
 import 'package:evt_ble_app/core/ble/device_profile.dart';
+import 'package:evt_ble_app/core/design_system/widgets/permission_rationale_sheet.dart';
 import 'package:evt_ble_app/core/design_system/widgets/status_label.dart';
+import 'package:evt_ble_app/core/permissions/app_permission_gateway.dart';
 import 'package:evt_ble_app/features/settings/application/theme_mode_controller.dart';
 import 'package:flutter/material.dart';
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.profile, this.themeController});
+  const SettingsPage({
+    super.key,
+    required this.profile,
+    this.themeController,
+    this.permissions,
+  });
 
   final DeviceProfile profile;
   final ThemeModeController? themeController;
+  final AppPermissionGateway? permissions;
 
   @override
   Widget build(BuildContext context) {
@@ -37,7 +45,27 @@ class SettingsPage extends StatelessWidget {
             ),
             const SizedBox(height: 28),
           ],
-          Text('设备配置', style: Theme.of(context).textTheme.titleMedium),
+          Text('权限', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          if (permissions case final gateway?)
+            _PermissionRow(
+              title: '附近设备',
+              load: gateway.nearbyDevices,
+              onOpenSettings: gateway.openSettings,
+            )
+          else
+            const _StaticRow(label: '附近设备', value: '未检查'),
+          const SizedBox(height: 12),
+          if (permissions case final gateway?)
+            _PermissionRow(
+              title: '麦克风',
+              load: gateway.microphone,
+              onOpenSettings: gateway.openSettings,
+            )
+          else
+            const _StaticRow(label: '麦克风', value: '未检查'),
+          const SizedBox(height: 28),
+          Text('设备', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 12),
           StatusLabel(
             icon: profile.isGattReady
@@ -52,47 +80,81 @@ class SettingsPage extends StatelessWidget {
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 20),
-          _ProfileRow(label: '名称前缀', value: profile.namePrefix),
-          _ProfileRow(label: '厂商数据', value: profile.manufacturerPrefixHex),
-          _ProfileRow(label: '广播服务', value: profile.serviceUuid),
-          _ProfileRow(
-            label: '状态服务',
-            value: _displayValue(profile.gattServiceUuid),
-          ),
-          _ProfileRow(
-            label: '读取特征',
-            value: _displayValue(profile.readCharacteristicUuid),
-          ),
-          _ProfileRow(
-            label: '订阅特征',
-            value: _displayValue(profile.notifyCharacteristicUuid),
-          ),
+          const SizedBox(height: 28),
+          Text('关于', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          const _StaticRow(label: '应用', value: 'AIPIN'),
         ],
       ),
     );
   }
-
-  static String _displayValue(String value) => value.isEmpty ? '未配置' : value;
 }
 
-class _ProfileRow extends StatelessWidget {
-  const _ProfileRow({required this.label, required this.value});
+class _PermissionRow extends StatefulWidget {
+  const _PermissionRow({
+    required this.title,
+    required this.load,
+    required this.onOpenSettings,
+  });
 
-  final String label;
-  final String value;
+  final String title;
+  final Future<AppPermissionState> Function() load;
+  final Future<bool> Function() onOpenSettings;
+
+  @override
+  State<_PermissionRow> createState() => _PermissionRowState();
+}
+
+class _PermissionRowState extends State<_PermissionRow> {
+  AppPermissionState? _state;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(covariant _PermissionRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.load != widget.load) unawaited(_load());
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 2),
-          SelectableText(value, style: Theme.of(context).textTheme.bodyMedium),
-        ],
-      ),
+    final label = _state == AppPermissionState.granted ? '已开启' : '需要开启';
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(widget.title),
+      trailing: Text(label),
+      onTap: _state == AppPermissionState.granted ? null : _recover,
     );
   }
+
+  Future<void> _load() async {
+    final state = await widget.load();
+    if (mounted) setState(() => _state = state);
+  }
+
+  Future<void> _recover() async {
+    final approved = await PermissionRationaleSheet.show(
+      context,
+      title: '需要${widget.title}权限',
+      message: '请在系统设置中开启后再返回应用。',
+      continueLabel: '前往系统设置',
+    );
+    if (approved) await widget.onOpenSettings();
+  }
+}
+
+class _StaticRow extends StatelessWidget {
+  const _StaticRow({required this.label, required this.value});
+  final String label;
+  final String value;
+  @override
+  Widget build(BuildContext context) => ListTile(
+    contentPadding: EdgeInsets.zero,
+    title: Text(label),
+    trailing: Text(value),
+  );
 }

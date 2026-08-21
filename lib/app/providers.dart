@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:evt_ble_app/core/ble/ble_transport.dart';
 import 'package:evt_ble_app/core/ble/reactive_ble_transport.dart';
 import 'package:evt_ble_app/core/persistence/app_database.dart';
+import 'package:evt_ble_app/core/permissions/app_permission_gateway.dart';
+import 'package:evt_ble_app/core/permissions/permission_handler_gateway.dart';
 import 'package:evt_ble_app/features/evidence/data/drift_evidence_repository.dart';
 import 'package:evt_ble_app/features/evidence/domain/evidence_repository.dart';
 import 'package:evt_ble_app/features/onboarding/data/shared_preferences_onboarding_store.dart';
@@ -25,6 +27,10 @@ final bleTransportProvider = Provider<BleTransport>((ref) {
 
 final onboardingStoreProvider = Provider<OnboardingStore>((ref) {
   return SharedPreferencesOnboardingStore();
+});
+
+final appPermissionGatewayProvider = Provider<AppPermissionGateway>((ref) {
+  return PermissionHandlerGateway();
 });
 
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
