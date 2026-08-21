@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:evt_ble_app/app/app_destination.dart';
 import 'package:evt_ble_app/app/providers.dart';
 import 'package:evt_ble_app/core/ble/device_profile.dart';
 import 'package:evt_ble_app/core/ble/device_profile_loader.dart';
+import 'package:evt_ble_app/core/design_system/widgets/app_navigation_bar.dart';
 import 'package:evt_ble_app/core/protocol/evt_protocol_codec.dart';
 import 'package:evt_ble_app/features/device_discovery/application/discovery_controller.dart';
 import 'package:evt_ble_app/features/device_discovery/domain/advertisement_filter.dart';
@@ -22,6 +24,8 @@ import 'package:evt_ble_app/features/local_recording/presentation/local_recordin
 import 'package:evt_ble_app/features/local_recording/presentation/recording_hub_page.dart';
 import 'package:evt_ble_app/features/observation/domain/observation_scenario.dart';
 import 'package:evt_ble_app/features/observation/presentation/observation_page.dart';
+import 'package:evt_ble_app/features/onboarding/application/onboarding_controller.dart';
+import 'package:evt_ble_app/features/onboarding/presentation/welcome_page.dart';
 import 'package:evt_ble_app/features/settings/application/theme_mode_controller.dart';
 import 'package:evt_ble_app/features/settings/presentation/settings_page.dart';
 import 'package:flutter/material.dart';
@@ -39,13 +43,15 @@ class AppShell extends ConsumerStatefulWidget {
 
 class _AppShellState extends ConsumerState<AppShell> {
   late final DiscoveryController _discoveryController;
+  late final OnboardingController _onboardingController;
   SessionController? _sessionController;
   EvidenceHistoryController? _evidenceHistoryController;
   RecordingController? _recordingController;
   RecordingLibraryController? _recordingLibraryController;
   Future<void>? _recordingSetup;
   DeviceProfile? _profile;
-  var _destination = 0;
+  var _destination = AppDestination.home;
+  var _isOnboardingLoaded = false;
 
   @override
   void initState() {
@@ -54,11 +60,16 @@ class _AppShellState extends ConsumerState<AppShell> {
       ref.read(bleTransportProvider),
       const AdvertisementFilter(),
     );
+    _onboardingController = OnboardingController(
+      ref.read(onboardingStoreProvider),
+    );
+    unawaited(_loadOnboarding());
   }
 
   @override
   void dispose() {
     _discoveryController.dispose();
+    _onboardingController.dispose();
     _sessionController?.dispose();
     _evidenceHistoryController?.dispose();
     _recordingController?.removeListener(_syncRecordingLibrary);
@@ -75,6 +86,30 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _onboardingController,
+      builder: (context, _) {
+        if (!_isOnboardingLoaded) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (!_onboardingController.isComplete) {
+          return WelcomePage(
+            onConnectDevice: () => unawaited(
+              _completeOnboarding(destination: AppDestination.home),
+            ),
+            onUseLocalRecording: () => unawaited(
+              _completeOnboarding(destination: AppDestination.recording),
+            ),
+          );
+        }
+        return _buildConsumerShell(context);
+      },
+    );
+  }
+
+  Widget _buildConsumerShell(BuildContext context) {
     final session = _sessionController;
     return AnimatedBuilder(
       animation: session ?? _discoveryController,
@@ -82,7 +117,7 @@ class _AppShellState extends ConsumerState<AppShell> {
         final canRecord = session?.state.isObservable ?? false;
         return Scaffold(
           body: switch (_destination) {
-            0 =>
+            AppDestination.home =>
               session == null
                   ? DiscoveryPage(
                       controller: _discoveryController,
@@ -94,13 +129,13 @@ class _AppShellState extends ConsumerState<AppShell> {
                       onStartObservation: () => _openObservation(session.state),
                       onRetry: () => _retrySession(session),
                     ),
-            1 =>
+            AppDestination.records =>
               _evidenceHistoryController == null
                   ? const SizedBox.shrink()
                   : EvidenceHistoryPage(
                       controller: _evidenceHistoryController!,
                     ),
-            2 => RecordingHubPage(
+            AppDestination.recording => RecordingHubPage(
               isHardwareObservable: canRecord,
               onStartLocal: _openActiveRecording,
               onOpenLibrary: _openLocalRecordingLibrary,
@@ -111,36 +146,45 @@ class _AppShellState extends ConsumerState<AppShell> {
                     )
                   : null,
             ),
-            _ => const SizedBox.shrink(),
           },
-          bottomNavigationBar: BottomAppBar(
-            child: SizedBox(
-              height: 60,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  IconButton(
-                    tooltip: '设备联调',
-                    onPressed: () => setState(() => _destination = 0),
-                    icon: const Icon(Icons.bluetooth_searching_outlined),
-                  ),
-                  IconButton(
-                    tooltip: '录音',
-                    onPressed: () => setState(() => _destination = 2),
-                    icon: const Icon(Icons.mic_none_outlined),
-                  ),
-                  IconButton(
-                    tooltip: '查看证据',
-                    onPressed: _openEvidenceHistory,
-                    icon: const Icon(Icons.fact_check_outlined),
-                  ),
-                ],
-              ),
-            ),
+          bottomNavigationBar: AppNavigationBar(
+            selected: _destination,
+            onSelected: _selectDestination,
           ),
         );
       },
     );
+  }
+
+  Future<void> _loadOnboarding() async {
+    await _onboardingController.load();
+    if (mounted) {
+      setState(() => _isOnboardingLoaded = true);
+    }
+  }
+
+  Future<void> _completeOnboarding({
+    required AppDestination destination,
+  }) async {
+    await _onboardingController.complete();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isOnboardingLoaded = true;
+      _destination = destination;
+    });
+    if (destination == AppDestination.home) {
+      _discoveryController.start();
+    }
+  }
+
+  void _selectDestination(AppDestination destination) {
+    if (destination == AppDestination.records) {
+      _openEvidenceHistory();
+      return;
+    }
+    setState(() => _destination = destination);
   }
 
   Future<void> _openSession(DeviceCandidate candidate) async {
@@ -159,7 +203,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       setState(() {
         _sessionController = controller;
         _profile = profile;
-        _destination = 0;
+        _destination = AppDestination.home;
       });
       await controller.connect(candidate);
     } catch (_) {
@@ -199,7 +243,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       ref.read(evidenceRepositoryProvider),
     );
     unawaited(_evidenceHistoryController!.load());
-    setState(() => _destination = 1);
+    setState(() => _destination = AppDestination.records);
   }
 
   void _retrySession(SessionController controller) {

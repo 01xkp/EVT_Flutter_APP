@@ -5,6 +5,8 @@ import 'package:evt_ble_app/core/ble/reactive_ble_transport.dart';
 import 'package:evt_ble_app/core/persistence/app_database.dart';
 import 'package:evt_ble_app/features/evidence/data/drift_evidence_repository.dart';
 import 'package:evt_ble_app/features/evidence/domain/evidence_repository.dart';
+import 'package:evt_ble_app/features/onboarding/data/shared_preferences_onboarding_store.dart';
+import 'package:evt_ble_app/features/onboarding/domain/onboarding_store.dart';
 import 'package:evt_ble_app/features/local_recording/data/app_recording_file_store.dart';
 import 'package:evt_ble_app/features/local_recording/data/drift_local_recording_repository.dart';
 import 'package:evt_ble_app/features/local_recording/data/foreground_recording_service.dart';
@@ -19,6 +21,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final bleTransportProvider = Provider<BleTransport>((ref) {
   return ReactiveBleTransport();
+});
+
+final onboardingStoreProvider = Provider<OnboardingStore>((ref) {
+  return SharedPreferencesOnboardingStore();
 });
 
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
