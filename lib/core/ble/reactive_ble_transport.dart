@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:evt_ble_app/core/ble/ble_models.dart';
@@ -6,10 +7,10 @@ import 'package:evt_ble_app/core/ble/ble_transport.dart';
 import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
 import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart' as reactive;
+import 'package:permission_handler/permission_handler.dart';
 
 class ReactiveBleTransport implements BleTransport {
-  ReactiveBleTransport({reactive.FlutterReactiveBle? ble})
-      : _client = ble;
+  ReactiveBleTransport({reactive.FlutterReactiveBle? ble}) : _client = ble;
 
   reactive.FlutterReactiveBle? _client;
   final Map<String, _ActiveConnection> _connections = {};
@@ -20,6 +21,7 @@ class ReactiveBleTransport implements BleTransport {
   @override
   Stream<DeviceCandidate> scan() async* {
     try {
+      await _ensureScanPermission();
       await for (final device in _ble.scanForDevices(
         withServices: const [],
         scanMode: reactive.ScanMode.lowLatency,
@@ -55,35 +57,37 @@ class ReactiveBleTransport implements BleTransport {
 
     final controller = StreamController<BleConnectionState>.broadcast();
     late final StreamSubscription<reactive.ConnectionStateUpdate> subscription;
-    subscription = _ble.connectToDevice(
-      id: deviceId,
-      connectionTimeout: const Duration(seconds: 12),
-    ).listen(
-      (update) {
-        if (update.failure != null) {
-          controller.addError(
-            BleTransportException(
-              EvtFailure.transport(
-                message: '蓝牙连接失败。',
-                detail: update.failure.toString(),
+    subscription = _ble
+        .connectToDevice(
+          id: deviceId,
+          connectionTimeout: const Duration(seconds: 12),
+        )
+        .listen(
+          (update) {
+            if (update.failure != null) {
+              controller.addError(
+                BleTransportException(
+                  EvtFailure.transport(
+                    message: '蓝牙连接失败。',
+                    detail: update.failure.toString(),
+                  ),
+                ),
+              );
+            }
+            controller.add(_mapConnectionState(update.connectionState));
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            controller.addError(
+              BleTransportException(
+                EvtFailure.transport(message: '蓝牙连接异常。', detail: '$error'),
               ),
-            ),
-          );
-        }
-        controller.add(_mapConnectionState(update.connectionState));
-      },
-      onError: (Object error, StackTrace stackTrace) {
-        controller.addError(
-          BleTransportException(
-            EvtFailure.transport(message: '蓝牙连接异常。', detail: '$error'),
-          ),
-          stackTrace,
+              stackTrace,
+            );
+          },
+          onDone: () {
+            _finishConnection(deviceId, controller);
+          },
         );
-      },
-      onDone: () {
-        _finishConnection(deviceId, controller);
-      },
-    );
     _connections[deviceId] = _ActiveConnection(controller, subscription);
     return controller.stream;
   }
@@ -98,7 +102,9 @@ class ReactiveBleTransport implements BleTransport {
           (service) => BleService(
             uuid: service.id.toString(),
             characteristicUuids: List.unmodifiable(
-              service.characteristics.map((characteristic) => characteristic.id.toString()),
+              service.characteristics.map(
+                (characteristic) => characteristic.id.toString(),
+              ),
             ),
           ),
         ),
@@ -180,14 +186,39 @@ class ReactiveBleTransport implements BleTransport {
     }
   }
 
+  Future<void> _ensureScanPermission() async {
+    if (Platform.isAndroid) {
+      final statuses = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
+      if (statuses.values.any((status) => !status.isGranted)) {
+        throw BleTransportException(
+          EvtFailure.environment(message: '需要蓝牙扫描和连接权限才能开始联调。'),
+        );
+      }
+      return;
+    }
+    if (Platform.isIOS) {
+      final status = await Permission.bluetooth.request();
+      if (!status.isGranted) {
+        throw BleTransportException(
+          EvtFailure.environment(message: '需要蓝牙权限才能开始联调。'),
+        );
+      }
+    }
+  }
+
   static BleConnectionState _mapConnectionState(
     reactive.DeviceConnectionState state,
   ) => switch (state) {
-        reactive.DeviceConnectionState.connecting => BleConnectionState.connecting,
-        reactive.DeviceConnectionState.connected => BleConnectionState.connected,
-        reactive.DeviceConnectionState.disconnecting => BleConnectionState.disconnecting,
-        reactive.DeviceConnectionState.disconnected => BleConnectionState.disconnected,
-      };
+    reactive.DeviceConnectionState.connecting => BleConnectionState.connecting,
+    reactive.DeviceConnectionState.connected => BleConnectionState.connected,
+    reactive.DeviceConnectionState.disconnecting =>
+      BleConnectionState.disconnecting,
+    reactive.DeviceConnectionState.disconnected =>
+      BleConnectionState.disconnected,
+  };
 }
 
 class _ActiveConnection {

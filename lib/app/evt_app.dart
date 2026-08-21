@@ -38,7 +38,7 @@ class _EvtAppState extends State<EvtApp> {
       theme: EvtTheme.light(),
       darkTheme: EvtTheme.dark(),
       themeMode: _themeController.mode,
-      home: const AppShell(),
+      home: AppShell(themeController: _themeController),
     );
   }
 

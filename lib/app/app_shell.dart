@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:evt_ble_app/app/providers.dart';
+import 'package:evt_ble_app/core/ble/device_profile.dart';
 import 'package:evt_ble_app/core/ble/device_profile_loader.dart';
 import 'package:evt_ble_app/core/protocol/evt_protocol_codec.dart';
 import 'package:evt_ble_app/features/device_discovery/application/discovery_controller.dart';
@@ -13,12 +14,16 @@ import 'package:evt_ble_app/features/device_session/presentation/session_dashboa
 import 'package:evt_ble_app/features/evidence/application/evidence_history_controller.dart';
 import 'package:evt_ble_app/features/evidence/presentation/evidence_history_page.dart';
 import 'package:evt_ble_app/features/evidence/presentation/record_observation_sheet.dart';
+import 'package:evt_ble_app/features/settings/application/theme_mode_controller.dart';
+import 'package:evt_ble_app/features/settings/presentation/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class AppShell extends ConsumerStatefulWidget {
-  const AppShell({super.key});
+  const AppShell({super.key, this.themeController});
+
+  final ThemeModeController? themeController;
 
   @override
   ConsumerState<AppShell> createState() => _AppShellState();
@@ -28,6 +33,7 @@ class _AppShellState extends ConsumerState<AppShell> {
   late final DiscoveryController _discoveryController;
   SessionController? _sessionController;
   EvidenceHistoryController? _evidenceHistoryController;
+  DeviceProfile? _profile;
   var _destination = 0;
 
   @override
@@ -61,6 +67,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                   ? DiscoveryPage(
                       controller: _discoveryController,
                       onConnect: _openSession,
+                      onSettings: _openSettings,
                     )
                   : SessionDashboardPage(
                       state: session.state,
@@ -123,6 +130,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       );
       setState(() {
         _sessionController = controller;
+        _profile = profile;
         _destination = 0;
       });
       await controller.connect(candidate);
@@ -171,5 +179,26 @@ class _AppShellState extends ConsumerState<AppShell> {
     if (candidate != null) {
       unawaited(controller.connect(candidate));
     }
+  }
+
+  Future<void> _openSettings() async {
+    DeviceProfile profile;
+    try {
+      profile = _profile ?? await const DeviceProfileLoader().load(rootBundle);
+    } catch (_) {
+      profile = DeviceProfile.empty();
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() => _profile = profile);
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => SettingsPage(
+          profile: profile,
+          themeController: widget.themeController,
+        ),
+      ),
+    );
   }
 }

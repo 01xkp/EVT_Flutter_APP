@@ -8,17 +8,24 @@ import 'package:evt_ble_app/features/device_discovery/presentation/device_candid
 import 'package:flutter/material.dart';
 
 class DiscoveryPage extends StatefulWidget {
-  const DiscoveryPage({super.key, this.controller, this.onConnect});
+  const DiscoveryPage({
+    super.key,
+    this.controller,
+    this.onConnect,
+    this.onSettings,
+  });
 
   final DiscoveryController? controller;
   final ValueChanged<DeviceCandidate>? onConnect;
+  final VoidCallback? onSettings;
 
   @override
   State<DiscoveryPage> createState() => _DiscoveryPageState();
 }
 
 class _DiscoveryPageState extends State<DiscoveryPage> {
-  late DiscoveryState _state = widget.controller?.state ?? const DiscoveryState();
+  late DiscoveryState _state =
+      widget.controller?.state ?? const DiscoveryState();
 
   @override
   void initState() {
@@ -50,6 +57,11 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
         title: const Text('设备联调'),
         actions: [
           IconButton(
+            tooltip: '设置',
+            onPressed: widget.onSettings,
+            icon: const Icon(Icons.settings_outlined),
+          ),
+          IconButton(
             tooltip: '开始扫描',
             onPressed: widget.controller == null || _state.isScanning
                 ? null
@@ -74,7 +86,9 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
               Text('附近设备', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 4),
               Text(
-                _state.isScanning ? '正在匹配 AIPIN 广播' : '${_state.candidates.length} 台匹配设备',
+                _state.isScanning
+                    ? '正在匹配 AIPIN 广播'
+                    : '${_state.candidates.length} 台匹配设备',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 16),
