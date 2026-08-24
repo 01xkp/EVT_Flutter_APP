@@ -13,13 +13,14 @@ name, icon, and distribution identifiers only.
 | --- | --- |
 | Display name | `AIPIN 声存` |
 | Tagline | `让声音表达更简单` |
-| Icon concept | The selected "随录" sound-wave mark: a central recording stroke, two restrained side waves, and a small archival dot. |
-| Icon colors | `#19212B` background and `#F0F4F8` mark. |
+| Icon concept | The selected "声页" mark: a restrained charcoal waveform that settles into an open page outline, representing a voice being recorded and retained. |
+| Icon colors | `#F0F4F8` background and `#19212B` mark. |
 | Visual language | Retain the current restrained, monochrome material theme and 8 px component radius. |
 
-The icon contains no text. This keeps it recognizable at Android launcher,
-iOS Home Screen, notification, and Settings sizes. The full product name is
-provided by the platform label rather than baked into the bitmap.
+The icon contains no text. Its waveform and page outline remain legible at
+Android launcher, iOS Home Screen, notification, and Settings sizes. The full
+product name is provided by the platform label rather than baked into the
+bitmap.
 
 ## Identifier Migration
 
@@ -39,7 +40,8 @@ are user-facing, keeping this migration focused and reviewable.
 
 ## Platform Assets and Labels
 
-1. Generate one square 1024 px raster source for the approved icon concept.
+1. Generate one square 1024 px raster source for the approved voice-page
+   concept, using the ivory canvas and charcoal line mark.
 2. Generate standard Android launcher densities from that source and replace
    each existing `mipmap-*/ic_launcher.png` file.
 3. Generate each required iOS `AppIcon.appiconset` rendition from the same
@@ -48,6 +50,21 @@ are user-facing, keeping this migration focused and reviewable.
    `CFBundleName` to `AIPIN 声存`.
 5. Update the README title and product references while retaining `EVT` only
    where it denotes the pre-existing wire protocol or database schema.
+
+## Launch Experience
+
+The launch experience uses the same visual system as the app icon rather than
+a separate promotional illustration.
+
+1. The native Android and iOS launch surfaces use a full `#F0F4F8` canvas with
+   the centered charcoal voice-page mark so the first rendered frame matches
+   the new brand.
+2. While the app loads onboarding state, Flutter displays a matching branded
+   splash surface with the mark, `AIPIN 声存`, and `让声音表达更简单`.
+3. When loading finishes, that surface transitions directly to the existing
+   welcome page or consumer shell using the established 180 ms motion timing.
+4. The splash does not add a fixed delay, gradients, marketing copy, or
+   decorative animation. It exists only for the real startup interval.
 
 ## Compatibility and Data Impact
 
@@ -77,8 +94,10 @@ work after the namespace move.
 ## Acceptance Criteria
 
 - Android and iOS show `AIPIN 声存` as the application name.
-- Both launchers use the selected dark square and ivory sound-wave mark at all
-  generated icon sizes.
+- Both launchers use the selected ivory square and charcoal voice-page mark at
+  all generated icon sizes.
+- Native and Flutter startup surfaces display the same selected voice-page
+  identity before the welcome page or consumer shell appears.
 - Android builds with `com.aigutta.aipin`; iOS project configurations use the
   same Runner bundle identifier.
 - The Dart package and all first-party imports no longer use `evt_ble_app`.
