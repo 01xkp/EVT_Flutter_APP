@@ -44,6 +44,35 @@ void main() {
     expect(report.aggregate.totalP50Milliseconds, 2000);
   });
 
+  test('aggregates upload transcription and summary durations separately', () {
+    final report = BenchmarkReport.fromResults(<BenchmarkJobResult>[
+      BenchmarkJobResult(
+        ordinal: 1,
+        status: BenchmarkJobStatus.completed,
+        startedAt: DateTime.utc(2026),
+        total: const Duration(seconds: 3),
+        upload: const Duration(milliseconds: 100),
+        transcription: const Duration(milliseconds: 2000),
+        summary: const Duration(milliseconds: 900),
+      ),
+      BenchmarkJobResult(
+        ordinal: 2,
+        status: BenchmarkJobStatus.completed,
+        startedAt: DateTime.utc(2026),
+        total: const Duration(seconds: 7),
+        upload: const Duration(milliseconds: 300),
+        transcription: const Duration(milliseconds: 5000),
+        summary: const Duration(milliseconds: 1100),
+      ),
+    ]);
+
+    expect(report.aggregate.upload.minimumMilliseconds, 100);
+    expect(report.aggregate.upload.averageMilliseconds, 200);
+    expect(report.aggregate.upload.maximumMilliseconds, 300);
+    expect(report.aggregate.transcription.totalP50Milliseconds, 2000);
+    expect(report.aggregate.summary.totalP95Milliseconds, 1100);
+  });
+
   test('serializes only safe result metadata', () {
     final report = BenchmarkReport.fromResults(<BenchmarkJobResult>[
       _completed(ordinal: 1, total: const Duration(seconds: 1), jobId: 'job-1'),
