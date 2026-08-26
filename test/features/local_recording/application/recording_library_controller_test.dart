@@ -1,5 +1,6 @@
-import 'package:evt_ble_app/features/local_recording/application/recording_library_controller.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/local_recording/application/recording_library_controller.dart';
+import 'package:aipin/features/local_recording/domain/audio_player_port.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_audio_player.dart';
@@ -50,6 +51,30 @@ void main() {
       expect(controller.state.errorMessage, '录音进行中，结束后可播放。');
     },
   );
+
+  test(
+    'delayed idle events do not replace the selected playing item',
+    () async {
+      await controller.load();
+
+      await controller.play('one');
+      player.emitState(AudioPlaybackState.idle);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.state.selectedPlaybackId, 'one');
+      expect(controller.state.playbackState, AudioPlaybackState.playing);
+    },
+  );
+
+  test('a playback failure clears the selected item', () async {
+    await controller.load();
+    player.playError = StateError('unavailable');
+
+    await controller.play('one');
+
+    expect(controller.state.selectedPlaybackId, isNull);
+    expect(controller.state.playbackState, AudioPlaybackState.idle);
+  });
 
   test(
     'deleting removes the file before metadata and renaming validates input',

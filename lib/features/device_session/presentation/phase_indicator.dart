@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/core/design_system/widgets/status_label.dart';
-import 'package:evt_ble_app/features/device_session/domain/session_phase.dart';
+import 'package:aipin/core/design_system/widgets/status_label.dart';
+import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:flutter/material.dart';
 
 class PhaseIndicator extends StatelessWidget {

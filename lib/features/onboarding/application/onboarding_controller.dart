@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/onboarding/domain/onboarding_store.dart';
+import 'package:aipin/features/onboarding/domain/onboarding_store.dart';
 import 'package:flutter/foundation.dart';
 
 class OnboardingController extends ChangeNotifier {

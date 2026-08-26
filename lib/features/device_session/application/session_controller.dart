@@ -1,16 +1,16 @@
 import 'dart:async';
-import 'package:evt_ble_app/core/ble/ble_models.dart';
-import 'package:evt_ble_app/core/ble/ble_transport.dart';
-import 'package:evt_ble_app/core/ble/device_profile.dart';
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
-import 'package:evt_ble_app/core/protocol/device_event.dart';
-import 'package:evt_ble_app/core/protocol/evt_frame.dart';
-import 'package:evt_ble_app/core/protocol/evt_protocol_codec.dart';
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
-import 'package:evt_ble_app/features/device_session/application/session_state.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_session.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
-import 'package:evt_ble_app/features/device_session/domain/session_phase.dart';
+import 'package:aipin/core/ble/ble_models.dart';
+import 'package:aipin/core/ble/ble_transport.dart';
+import 'package:aipin/core/ble/device_profile.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/core/protocol/device_event.dart';
+import 'package:aipin/core/protocol/evt_frame.dart';
+import 'package:aipin/core/protocol/evt_protocol_codec.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/features/device_session/application/session_state.dart';
+import 'package:aipin/features/device_session/domain/device_session.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:flutter/foundation.dart';
 
 class SessionController extends ChangeNotifier {

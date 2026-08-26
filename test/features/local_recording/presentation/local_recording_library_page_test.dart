@@ -1,6 +1,6 @@
-import 'package:evt_ble_app/features/local_recording/application/recording_library_controller.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording.dart';
-import 'package:evt_ble_app/features/local_recording/presentation/local_recording_library_page.dart';
+import 'package:aipin/features/local_recording/application/recording_library_controller.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/local_recording/presentation/local_recording_library_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -29,16 +29,47 @@ void main() {
 
     expect(find.text('删除这条录音？'), findsOneWidget);
   });
+
+  testWidgets('tapping a local recording opens its detail flow', (
+    tester,
+  ) async {
+    final controller = RecordingLibraryController(
+      repository: FakeLocalRecordingRepository([
+        _savedRecording(duration: const Duration(seconds: 61)),
+      ]),
+      files: FakeRecordingFileStore(),
+      player: FakeAudioPlayer(),
+    );
+    addTearDown(controller.close);
+    await controller.load();
+
+    LocalRecording? opened;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LocalRecordingLibraryPage(
+          controller: controller,
+          onOpen: (recording) => opened = recording,
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('客户访谈'));
+    await tester.pump();
+
+    expect(opened?.id, 'recording-1');
+  });
 }
 
-LocalRecording _savedRecording() {
+LocalRecording _savedRecording({
+  Duration duration = const Duration(seconds: 10),
+}) {
   return LocalRecording.saved(
     id: 'recording-1',
     title: '客户访谈',
     relativePath: 'recording-1.m4a',
     createdAt: DateTime(2026, 8, 21),
     completedAt: DateTime(2026, 8, 21, 0, 0, 10),
-    duration: const Duration(seconds: 10),
+    duration: duration,
     sizeBytes: 120000,
   );
 }

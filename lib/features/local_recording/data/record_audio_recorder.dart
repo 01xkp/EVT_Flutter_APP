@@ -1,19 +1,22 @@
 import 'dart:async';
 
-import 'package:evt_ble_app/features/local_recording/domain/audio_recorder_port.dart';
+import 'package:aipin/features/local_recording/domain/audio_recorder_port.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart' as record;
 
 class RecordAudioRecorder implements AudioRecorderPort {
-  RecordAudioRecorder({record.AudioRecorder? recorder})
-    : _recorder = recorder ?? record.AudioRecorder() {
+  RecordAudioRecorder({
+    record.AudioRecorder? recorder,
+    record.RecordConfig? config,
+  }) : _recorder = recorder ?? record.AudioRecorder(),
+       _config = config ?? localRecordConfig {
     _stateSubscription = _recorder.onStateChanged().listen(
       _onRecordState,
       onError: _onStateError,
     );
   }
 
-  static const _config = record.RecordConfig(
+  static const localRecordConfig = record.RecordConfig(
     encoder: record.AudioEncoder.aacLc,
     bitRate: 64000,
     sampleRate: 44100,
@@ -24,6 +27,7 @@ class RecordAudioRecorder implements AudioRecorderPort {
   );
 
   final record.AudioRecorder _recorder;
+  final record.RecordConfig _config;
   final _signals = StreamController<RecorderSignal>.broadcast();
   late final StreamSubscription<record.RecordState> _stateSubscription;
   Stopwatch? _stopwatch;

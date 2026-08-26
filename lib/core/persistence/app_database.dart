@@ -1,13 +1,24 @@
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:drift_flutter/drift_flutter.dart';
-import 'package:evt_ble_app/core/persistence/tables/evidence_bundles.dart';
-import 'package:evt_ble_app/core/persistence/tables/local_recordings.dart';
-import 'package:evt_ble_app/core/persistence/tables/session_events.dart';
+import 'package:aipin/core/persistence/tables/evidence_bundles.dart';
+import 'package:aipin/core/persistence/tables/local_recordings.dart';
+import 'package:aipin/core/persistence/tables/research_captures.dart';
+import 'package:aipin/core/persistence/tables/research_events.dart';
+import 'package:aipin/core/persistence/tables/session_events.dart';
 
 part 'app_database.g.dart';
 
-@DriftDatabase(tables: [EvidenceBundles, SessionEvents, LocalRecordings])
+@DriftDatabase(
+  tables: [
+    EvidenceBundles,
+    SessionEvents,
+    LocalRecordings,
+    ResearchCaptures,
+    ResearchEvents,
+    ResearchAggregates,
+  ],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(driftDatabase(name: 'evt_evidence'));
 
@@ -15,7 +26,7 @@ class AppDatabase extends _$AppDatabase {
     : super(executor ?? NativeDatabase.memory());
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -23,6 +34,16 @@ class AppDatabase extends _$AppDatabase {
     onUpgrade: (migrator, from, to) async {
       if (from < 2) {
         await migrator.createTable(localRecordings);
+      }
+      if (from < 3) {
+        await migrator.createTable(researchCaptures);
+        await migrator.createTable(researchEvents);
+        await migrator.createTable(researchAggregates);
+      } else if (from < 4) {
+        await migrator.addColumn(
+          researchCaptures,
+          researchCaptures.asrSegmentsJson,
+        );
       }
     },
   );

@@ -1,7 +1,7 @@
-import 'package:evt_ble_app/features/device_session/application/session_state.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
-import 'package:evt_ble_app/features/device_session/domain/session_phase.dart';
-import 'package:evt_ble_app/features/device_session/presentation/device_status_view_model.dart';
+import 'package:aipin/features/device_session/application/session_state.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/device_session/domain/session_phase.dart';
+import 'package:aipin/features/device_session/presentation/device_status_view_model.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

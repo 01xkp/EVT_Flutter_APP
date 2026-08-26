@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/core/design_system/widgets/app_button.dart';
+import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:flutter/material.dart';
 
 abstract final class RenameRecordingSheet {
@@ -51,7 +51,7 @@ class _RenameRecordingSheetState extends State<_RenameRecordingSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('修改标题', style: Theme.of(context).textTheme.titleMedium),
+            Text('重命名', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 16),
             TextField(
               controller: _controller,

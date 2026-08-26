@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/core/ble/ble_transport.dart';
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/core/ble/ble_transport.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import '../../support/fake_ble_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 

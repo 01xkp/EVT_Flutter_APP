@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/core/design_system/widgets/app_button.dart';
+import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:flutter/material.dart';
 
 enum AppConfirmationVariant { normal, destructive }

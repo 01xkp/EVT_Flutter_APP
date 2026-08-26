@@ -1,6 +1,6 @@
-import 'package:evt_ble_app/features/device_session/application/session_state.dart';
-import 'package:evt_ble_app/features/device_session/domain/session_phase.dart';
-import 'package:evt_ble_app/features/device_session/presentation/device_detail_page.dart';
+import 'package:aipin/features/device_session/application/session_state.dart';
+import 'package:aipin/features/device_session/domain/session_phase.dart';
+import 'package:aipin/features/device_session/presentation/device_detail_page.dart';
 import 'package:flutter/material.dart';
 
 class SessionDashboardPage extends StatelessWidget {

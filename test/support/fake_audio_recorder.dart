@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:evt_ble_app/features/local_recording/domain/audio_recorder_port.dart';
+import 'package:aipin/features/local_recording/domain/audio_recorder_port.dart';
 
 class FakeAudioRecorder implements AudioRecorderPort {
   final _signals = StreamController<RecorderSignal>.broadcast();

@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:evt_ble_app/core/protocol/evt_frame.dart';
+import 'package:aipin/core/protocol/evt_frame.dart';
 
 enum DeviceEventKind {
   deviceInfo,

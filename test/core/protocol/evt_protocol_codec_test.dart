@@ -1,6 +1,6 @@
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
-import 'package:evt_ble_app/core/protocol/crc16.dart';
-import 'package:evt_ble_app/core/protocol/evt_protocol_codec.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/core/protocol/crc16.dart';
+import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/local_recording/data/foreground_recording_service.dart';
+import 'package:aipin/features/local_recording/data/foreground_recording_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

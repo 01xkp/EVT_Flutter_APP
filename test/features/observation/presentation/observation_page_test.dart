@@ -1,7 +1,7 @@
-import 'package:evt_ble_app/core/protocol/device_event.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_scenario.dart';
-import 'package:evt_ble_app/features/observation/presentation/observation_page.dart';
+import 'package:aipin/core/protocol/device_event.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/observation/domain/observation_scenario.dart';
+import 'package:aipin/features/observation/presentation/observation_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

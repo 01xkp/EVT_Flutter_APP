@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/settings/application/theme_mode_controller.dart';
+import 'package:aipin/features/settings/application/theme_mode_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

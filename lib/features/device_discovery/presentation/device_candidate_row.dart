@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/core/design_system/widgets/app_surface_card.dart';
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:flutter/material.dart';
 
 class DeviceCandidateRow extends StatelessWidget {

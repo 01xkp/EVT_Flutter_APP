@@ -20,3 +20,17 @@ bin-release/
 
 # IDE module metadata contains machine-specific SDK paths.
 *.iml
+
+# Flutter and local build outputs
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+android/build/
+ios/Flutter/ephemeral/
+ios/Flutter/.last_build_id
+
+# Local tooling and crash reports
+.idea/
+android/hs_err_pid*.log

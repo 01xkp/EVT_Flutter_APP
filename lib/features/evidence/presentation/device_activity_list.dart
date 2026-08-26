@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/evidence/application/evidence_history_controller.dart';
+import 'package:aipin/features/evidence/application/evidence_history_controller.dart';
 import 'package:flutter/material.dart';
 
 class DeviceActivityList extends StatelessWidget {

@@ -1,6 +1,6 @@
-import 'package:evt_ble_app/app/app_destination.dart';
-import 'package:evt_ble_app/core/design_system/widgets/app_navigation_bar.dart';
-import 'package:evt_ble_app/core/design_system/widgets/app_surface_card.dart';
+import 'package:aipin/app/app_destination.dart';
+import 'package:aipin/core/design_system/widgets/app_navigation_bar.dart';
+import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

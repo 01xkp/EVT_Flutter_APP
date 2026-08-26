@@ -1,7 +1,7 @@
-import 'package:evt_ble_app/core/ble/device_profile.dart';
-import 'package:evt_ble_app/core/protocol/evt_protocol_codec.dart';
-import 'package:evt_ble_app/features/device_session/application/session_controller.dart';
-import 'package:evt_ble_app/features/device_session/domain/session_phase.dart';
+import 'package:aipin/core/ble/device_profile.dart';
+import 'package:aipin/core/protocol/evt_protocol_codec.dart';
+import 'package:aipin/features/device_session/application/session_controller.dart';
+import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_ble_transport.dart';

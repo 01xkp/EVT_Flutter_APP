@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:aipin/features/local_recording/domain/local_recording.dart';
 import 'package:aipin/features/research_beta/application/research_capture_processing_controller.dart';
 import 'package:aipin/features/research_beta/application/research_processing_poll_schedule.dart';
+import 'package:aipin/features/research_beta/domain/audio_segmenter.dart';
 import 'package:aipin/features/research_beta/domain/research_capture.dart';
 import 'package:aipin/features/research_beta/domain/research_trial.dart';
 import 'package:aipin/features/research_beta/domain/temporary_asr_gateway.dart';
@@ -14,18 +15,21 @@ import '../../../support/fake_research_beta.dart';
 void main() {
   late FakeResearchCaptureRepository repository;
   late FakeResearchCaptureFileStore files;
+  late FakeAudioSegmenter audioSegmenter;
   late FakeTemporaryAsrGateway gateway;
   late ResearchCaptureProcessingController controller;
 
   setUp(() {
     repository = FakeResearchCaptureRepository();
     files = FakeResearchCaptureFileStore();
+    audioSegmenter = FakeAudioSegmenter();
     gateway = FakeTemporaryAsrGateway();
     controller = ResearchCaptureProcessingController(
       repository: repository,
       researchFiles: files,
       localFiles: FakeRecordingFileStore(),
       gateway: gateway,
+      audioSegmenter: audioSegmenter,
       trialStore: FakeResearchTrialStore(
         ResearchTrial.newParticipant(
           participantId: 'participant-1',
@@ -37,6 +41,222 @@ void main() {
       delay: (_) async {},
     );
   });
+
+  test(
+    'uploads playable M4A segments and combines their transcripts by segment order',
+    () async {
+      audioSegmenter.segments = const <AudioSegment>[
+        AudioSegment(index: 0, duration: Duration(minutes: 5)),
+        AudioSegment(index: 1, duration: Duration(minutes: 5)),
+      ];
+      gateway.submitOutcomes.addAll(const <AsrOutcome<AsrJob>>[
+        AsrSuccess<AsrJob>(
+          AsrJob(id: 'job-first', status: AsrJobStatus.pending),
+        ),
+        AsrSuccess<AsrJob>(
+          AsrJob(id: 'job-second', status: AsrJobStatus.pending),
+        ),
+      ]);
+      gateway.transcriptOutcomesByJobId
+          .addAll(const <String, AsrOutcome<AsrTranscript>>{
+            'job-first': AsrSuccess<AsrTranscript>(
+              AsrTranscript(
+                text: '第一段转写',
+                relativePath: 'part-1.m4a',
+                variant: 'original',
+                engine: 'sensevoice',
+              ),
+            ),
+            'job-second': AsrSuccess<AsrTranscript>(
+              AsrTranscript(
+                text: '第二段转写',
+                relativePath: 'part-2.m4a',
+                variant: 'original',
+                engine: 'sensevoice',
+              ),
+            ),
+          });
+      await repository.save(
+        ResearchCapture.fromDirectAiVoice(
+          id: 'capture-1',
+          participantId: 'participant-1',
+          relativePath: 'capture-1.m4a',
+          duration: const Duration(minutes: 10),
+          createdAt: DateTime(2026, 8, 24),
+        ),
+      );
+
+      final result = await controller.process('capture-1');
+
+      expect(gateway.submittedAudioPaths, <String>[
+        '/research/capture-1.segment-0000.m4a',
+        '/research/capture-1.segment-0001.m4a',
+        '/research/capture-1.m4a',
+      ]);
+      expect(result!.asrSegments.map((segment) => segment.jobId), <String?>[
+        'job-first',
+        'job-second',
+      ]);
+      expect(result.rawTranscript, '第一段转写\n第二段转写');
+      expect(gateway.noteRequestCount, 1);
+      expect(result.processingState, ResearchProcessingState.completed);
+    },
+  );
+
+  test(
+    'uses one original-file task for a long recording summary after segment transcription',
+    () async {
+      audioSegmenter.segments = const <AudioSegment>[
+        AudioSegment(index: 0, duration: Duration(minutes: 5)),
+        AudioSegment(index: 1, duration: Duration(minutes: 5)),
+      ];
+      gateway.submitOutcomes.addAll(const <AsrOutcome<AsrJob>>[
+        AsrSuccess<AsrJob>(
+          AsrJob(id: 'job-first', status: AsrJobStatus.pending),
+        ),
+        AsrSuccess<AsrJob>(
+          AsrJob(id: 'job-second', status: AsrJobStatus.pending),
+        ),
+        AsrSuccess<AsrJob>(
+          AsrJob(id: 'job-summary', status: AsrJobStatus.pending),
+        ),
+      ]);
+      gateway.transcriptOutcomesByJobId
+          .addAll(const <String, AsrOutcome<AsrTranscript>>{
+            'job-first': AsrSuccess<AsrTranscript>(
+              AsrTranscript(
+                text: '第一段转写',
+                relativePath: 'part-1.m4a',
+                variant: 'original',
+                engine: 'sensevoice',
+              ),
+            ),
+            'job-second': AsrSuccess<AsrTranscript>(
+              AsrTranscript(
+                text: '第二段转写',
+                relativePath: 'part-2.m4a',
+                variant: 'original',
+                engine: 'sensevoice',
+              ),
+            ),
+            'job-summary': AsrSuccess<AsrTranscript>(
+              AsrTranscript(
+                text: '原始完整录音转写',
+                relativePath: 'capture-1.m4a',
+                variant: 'original',
+                engine: 'sensevoice',
+              ),
+            ),
+          });
+      await repository.save(
+        ResearchCapture.fromDirectAiVoice(
+          id: 'capture-1',
+          participantId: 'participant-1',
+          relativePath: 'capture-1.m4a',
+          duration: const Duration(minutes: 10),
+          createdAt: DateTime(2026, 8, 24),
+        ),
+      );
+
+      final result = await controller.process('capture-1');
+
+      expect(gateway.submittedAudioPaths, <String>[
+        '/research/capture-1.segment-0000.m4a',
+        '/research/capture-1.segment-0001.m4a',
+        '/research/capture-1.m4a',
+      ]);
+      expect(gateway.createdNoteJobIds, <String>['job-summary']);
+      expect(gateway.createdNoteTranscripts, <String>['原始完整录音转写']);
+      expect(result!.rawTranscript, '第一段转写\n第二段转写');
+      expect(result.processingState, ResearchProcessingState.completed);
+    },
+  );
+
+  test(
+    'emits transcription summary and completion updates for segmented recordings',
+    () async {
+      audioSegmenter.segments = const <AudioSegment>[
+        AudioSegment(index: 0, duration: Duration(minutes: 5)),
+        AudioSegment(index: 1, duration: Duration(minutes: 5)),
+      ];
+      gateway.submitOutcomes.addAll(const <AsrOutcome<AsrJob>>[
+        AsrSuccess<AsrJob>(
+          AsrJob(id: 'job-first', status: AsrJobStatus.pending),
+        ),
+        AsrSuccess<AsrJob>(
+          AsrJob(id: 'job-second', status: AsrJobStatus.pending),
+        ),
+      ]);
+      await repository.save(
+        ResearchCapture.fromDirectAiVoice(
+          id: 'capture-1',
+          participantId: 'participant-1',
+          relativePath: 'capture-1.m4a',
+          duration: const Duration(minutes: 10),
+          createdAt: DateTime(2026, 8, 24),
+        ),
+      );
+
+      await controller.process('capture-1');
+
+      final updates = controller.drainUiUpdates();
+      expect(
+        updates.map((update) => update.kind),
+        <ResearchCaptureUiUpdateKind>[
+          ResearchCaptureUiUpdateKind.transcribing,
+          ResearchCaptureUiUpdateKind.transcribing,
+          ResearchCaptureUiUpdateKind.transcriptionCompleted,
+          ResearchCaptureUiUpdateKind.summarizing,
+          ResearchCaptureUiUpdateKind.completed,
+        ],
+      );
+      expect(updates.last.captureId, 'capture-1');
+      expect(updates.last.kind, ResearchCaptureUiUpdateKind.completed);
+    },
+  );
+
+  test(
+    'preserves a rebuilt original-file summary task when a legacy segmented retry fails',
+    () async {
+      gateway.submitOutcome = const AsrSuccess<AsrJob>(
+        AsrJob(id: 'job-summary', status: AsrJobStatus.pending),
+      );
+      gateway.noteOutcome = const AsrFailure<AsrNoteTask>(
+        kind: AsrFailureKind.remote,
+        message: 'AI 整理服务暂不可用。',
+      );
+      await repository.save(
+        ResearchCapture.fromDirectAiVoice(
+              id: 'capture-1',
+              participantId: 'participant-1',
+              relativePath: 'capture-1.m4a',
+              duration: const Duration(minutes: 10),
+              createdAt: DateTime(2026, 8, 24),
+            )
+            .withAsrSegments(const <ResearchAsrSegment>[
+              ResearchAsrSegment(
+                index: 0,
+                relativePath: 'capture-1.segment-0000.m4a',
+                jobId: 'job-first',
+              ),
+              ResearchAsrSegment(
+                index: 1,
+                relativePath: 'capture-1.segment-0001.m4a',
+                jobId: 'job-second',
+              ),
+            ])
+            .toSegmentedTranscribing()
+            .copyWith(rawTranscript: '已有合并转写')
+            .failed(ResearchProcessingState.summaryFailed, '旧版本未支持总结'),
+      );
+
+      await controller.retry('capture-1');
+
+      final saved = await repository.findById('capture-1');
+      expect(saved!.jobId, 'job-summary');
+      expect(saved.processingState, ResearchProcessingState.summaryFailed);
+    },
+  );
 
   test(
     'recovery resumes from saved job ID without resubmitting audio',
@@ -223,6 +443,7 @@ void main() {
       researchFiles: files,
       localFiles: FakeRecordingFileStore(),
       gateway: pendingGateway,
+      audioSegmenter: audioSegmenter,
       trialStore: FakeResearchTrialStore(
         ResearchTrial.newParticipant(
           participantId: 'participant-1',
@@ -269,28 +490,39 @@ void main() {
     },
   );
 
-  test('emits transcription summary and completion updates in order', () async {
-    await repository.save(
-      ResearchCapture.fromDirectAiVoice(
-        id: 'capture-1',
-        participantId: 'participant-1',
-        relativePath: 'capture-1.m4a',
-        duration: const Duration(seconds: 12),
-        createdAt: DateTime(2026, 8, 25, 10),
-      ).toTranscribing('job-1'),
-    );
+  test(
+    'emits a distinct transcription completion before summary processing',
+    () async {
+      await repository.save(
+        ResearchCapture.fromDirectAiVoice(
+          id: 'capture-1',
+          participantId: 'participant-1',
+          relativePath: 'capture-1.m4a',
+          duration: const Duration(seconds: 12),
+          createdAt: DateTime(2026, 8, 25, 10),
+        ).toTranscribing('job-1'),
+      );
 
-    await controller.process('capture-1');
-    final updates = controller.drainUiUpdates();
+      await controller.process('capture-1');
+      final updates = controller.drainUiUpdates();
 
-    expect(updates.map((update) => update.kind), <ResearchCaptureUiUpdateKind>[
-      ResearchCaptureUiUpdateKind.transcribing,
-      ResearchCaptureUiUpdateKind.summarizing,
-      ResearchCaptureUiUpdateKind.completed,
-    ]);
-    expect(updates.every((update) => update.captureId == 'capture-1'), isTrue);
-    expect(updates.last.completedAt, DateTime(2026, 8, 24, 10));
-  });
+      expect(
+        updates.map((update) => update.kind),
+        <ResearchCaptureUiUpdateKind>[
+          ResearchCaptureUiUpdateKind.transcribing,
+          ResearchCaptureUiUpdateKind.transcriptionCompleted,
+          ResearchCaptureUiUpdateKind.summarizing,
+          ResearchCaptureUiUpdateKind.completed,
+        ],
+      );
+      expect(updates.last.kind, ResearchCaptureUiUpdateKind.completed);
+      expect(
+        updates.every((update) => update.captureId == 'capture-1'),
+        isTrue,
+      );
+      expect(updates.last.completedAt, DateTime(2026, 8, 24, 10));
+    },
+  );
 
   test(
     'retention day clears content and preserves aggregate-only counts',
@@ -357,6 +589,7 @@ void main() {
         researchFiles: files,
         localFiles: FakeRecordingFileStore(),
         gateway: stalled,
+        audioSegmenter: audioSegmenter,
         trialStore: FakeResearchTrialStore(
           ResearchTrial.newParticipant(
             participantId: 'participant-1',
@@ -396,6 +629,7 @@ void main() {
         researchFiles: files,
         localFiles: FakeRecordingFileStore(),
         gateway: gateway,
+        audioSegmenter: audioSegmenter,
         trialStore: FakeResearchTrialStore(
           ResearchTrial.newParticipant(
             participantId: 'participant-1',

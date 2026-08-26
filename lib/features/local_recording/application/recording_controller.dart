@@ -1,10 +1,10 @@
 import 'dart:async';
 
-import 'package:evt_ble_app/features/local_recording/domain/audio_recorder_port.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording_repository.dart';
-import 'package:evt_ble_app/features/local_recording/domain/recording_background_port.dart';
-import 'package:evt_ble_app/features/local_recording/domain/recording_file_store.dart';
+import 'package:aipin/features/local_recording/domain/audio_recorder_port.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/local_recording/domain/local_recording_repository.dart';
+import 'package:aipin/features/local_recording/domain/recording_background_port.dart';
+import 'package:aipin/features/local_recording/domain/recording_file_store.dart';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
@@ -59,6 +59,8 @@ class ActiveRecordingState {
 }
 
 class RecordingController extends ChangeNotifier {
+  static const _minimumSavedDuration = Duration(seconds: 2);
+
   factory RecordingController({
     required LocalRecordingRepository repository,
     required AudioRecorderPort recorder,
@@ -101,10 +103,14 @@ class RecordingController extends ChangeNotifier {
   ActiveRecordingState _state = const ActiveRecordingState.idle();
   ActiveRecordingState get state => _state;
 
+  LocalRecording? _lastCompletedRecording;
+  LocalRecording? get lastCompletedRecording => _lastCompletedRecording;
+
   PendingRecordingFile? _pending;
   LocalRecording? _activeRecording;
   Timer? _ticker;
   Future<void>? _finalizing;
+  var _startGeneration = 0;
   var _backgroundStarted = false;
   var _closed = false;
 
@@ -142,8 +148,13 @@ class RecordingController extends ChangeNotifier {
     if (_state.isCaptureActive || _closed) {
       return;
     }
+    _lastCompletedRecording = null;
+    final startGeneration = ++_startGeneration;
     _setState(const ActiveRecordingState(phase: ActiveRecordingPhase.starting));
     final permission = await _recorder.requestPermission();
+    if (!_isCurrentStart(startGeneration)) {
+      return;
+    }
     if (permission != RecorderPermission.granted) {
       _setState(
         const ActiveRecordingState(
@@ -155,6 +166,10 @@ class RecordingController extends ChangeNotifier {
 
     try {
       final pending = await _files.createPending(id: _idGenerator());
+      if (!_isCurrentStart(startGeneration)) {
+        await _discardPendingFile(pending);
+        return;
+      }
       final record = LocalRecording.inProgress(
         id: pending.id,
         title: _titleFor(_now()),
@@ -162,11 +177,24 @@ class RecordingController extends ChangeNotifier {
         createdAt: _now(),
       );
       await _repository.save(record);
+      if (!_isCurrentStart(startGeneration)) {
+        await _discardPendingFile(pending);
+        await _deleteDiscardedRecord(record);
+        return;
+      }
       _pending = pending;
       _activeRecording = record;
       await _background.start();
+      if (!_isCurrentStart(startGeneration)) {
+        await _stopStartedBackgroundSafely();
+        return;
+      }
       _backgroundStarted = true;
       await _recorder.start(pending.temporaryPath);
+      if (!_isCurrentStart(startGeneration)) {
+        await _stopRecorderSafely();
+        return;
+      }
       _setState(
         ActiveRecordingState(
           phase: ActiveRecordingPhase.recording,
@@ -175,11 +203,26 @@ class RecordingController extends ChangeNotifier {
       );
       _startTicker();
     } catch (error) {
-      await _failActive(error);
+      if (_isCurrentStart(startGeneration)) {
+        await _failActive(error);
+      }
     }
   }
 
   Future<void> stop() => _finalize(LocalRecordingStatus.saved);
+
+  Future<void> discard() {
+    if (!_state.isCaptureActive) {
+      return Future.value();
+    }
+    final current = _finalizing;
+    if (current != null) {
+      return current;
+    }
+    final work = _discardInternal();
+    _finalizing = work;
+    return work;
+  }
 
   Future<void> _finalize(LocalRecordingStatus status, {String? reason}) {
     final current = _finalizing;
@@ -204,6 +247,17 @@ class RecordingController extends ChangeNotifier {
     _setState(_state.copyWith(phase: ActiveRecordingPhase.stopping));
     try {
       final captured = await _recorder.stop();
+      if (captured.duration < _minimumSavedDuration) {
+        await _discardPendingFile(pending);
+        await _deleteDiscardedRecord(record);
+        _setState(
+          const ActiveRecordingState(
+            phase: ActiveRecordingPhase.error,
+            errorMessage: '录音不足 2 秒，未保存。',
+          ),
+        );
+        return;
+      }
       final file = await _files.finalize(pending);
       final completed = record.completed(
         status: status,
@@ -213,6 +267,7 @@ class RecordingController extends ChangeNotifier {
         failureReason: reason,
       );
       await _repository.update(completed);
+      _lastCompletedRecording = completed;
       _setState(const ActiveRecordingState.idle());
     } catch (error) {
       await _failActive(error);
@@ -224,10 +279,38 @@ class RecordingController extends ChangeNotifier {
     }
   }
 
+  Future<void> _discardInternal() async {
+    final phase = _state.phase;
+    final record = _activeRecording;
+    final pending = _pending;
+    _startGeneration += 1;
+    _ticker?.cancel();
+    _setState(_state.copyWith(phase: ActiveRecordingPhase.stopping));
+    if (phase == ActiveRecordingPhase.recording ||
+        phase == ActiveRecordingPhase.paused) {
+      await _stopRecorderSafely();
+    }
+    if (pending != null) {
+      await _discardPendingFile(pending);
+    }
+    if (record != null) {
+      await _deleteDiscardedRecord(record);
+    }
+    await _stopBackgroundSafely();
+    _pending = null;
+    _activeRecording = null;
+    _setState(const ActiveRecordingState.idle());
+    _finalizing = null;
+  }
+
   Future<void> _failActive(Object error) async {
     final record = _activeRecording;
+    final pending = _pending;
+    if (pending != null) {
+      await _discardPendingFile(pending);
+    }
     if (record != null) {
-      await _repository.update(record.failed(_errorMessage(error)));
+      await _deleteDiscardedRecord(record);
     }
     await _stopBackground();
     _pending = null;
@@ -278,6 +361,49 @@ class RecordingController extends ChangeNotifier {
     }
     _backgroundStarted = false;
     await _background.stop();
+  }
+
+  bool _isCurrentStart(int generation) =>
+      !_closed && generation == _startGeneration;
+
+  Future<void> _discardPendingFile(PendingRecordingFile pending) async {
+    try {
+      await _files.discard(pending);
+    } catch (_) {
+      // A direct exit must not keep the user on this screen when cleanup fails.
+    }
+  }
+
+  Future<void> _deleteDiscardedRecord(LocalRecording record) async {
+    try {
+      await _repository.delete(record.id);
+    } catch (_) {
+      // The repository can retry cleanup during the next app launch.
+    }
+  }
+
+  Future<void> _stopRecorderSafely() async {
+    try {
+      await _recorder.stop();
+    } catch (_) {
+      // Recording plugins can already be stopped when the app is leaving.
+    }
+  }
+
+  Future<void> _stopBackgroundSafely() async {
+    try {
+      await _stopBackground();
+    } catch (_) {
+      // Exiting the recording screen should not be blocked by service teardown.
+    }
+  }
+
+  Future<void> _stopStartedBackgroundSafely() async {
+    try {
+      await _background.stop();
+    } catch (_) {
+      // Exiting the recording screen should not be blocked by service teardown.
+    }
   }
 
   String _errorMessage(Object error) {

@@ -1,28 +1,48 @@
 import 'dart:async';
 
-import 'package:evt_ble_app/core/ble/ble_transport.dart';
-import 'package:evt_ble_app/core/ble/reactive_ble_transport.dart';
-import 'package:evt_ble_app/core/persistence/app_database.dart';
-import 'package:evt_ble_app/core/permissions/app_permission_gateway.dart';
-import 'package:evt_ble_app/core/permissions/permission_handler_gateway.dart';
-import 'package:evt_ble_app/features/evidence/data/drift_evidence_repository.dart';
-import 'package:evt_ble_app/features/evidence/domain/evidence_repository.dart';
-import 'package:evt_ble_app/features/onboarding/data/shared_preferences_onboarding_store.dart';
-import 'package:evt_ble_app/features/onboarding/domain/onboarding_store.dart';
-import 'package:evt_ble_app/features/local_recording/data/app_recording_file_store.dart';
-import 'package:evt_ble_app/features/local_recording/data/drift_local_recording_repository.dart';
-import 'package:evt_ble_app/features/local_recording/data/foreground_recording_service.dart';
-import 'package:evt_ble_app/features/local_recording/data/just_audio_player.dart';
-import 'package:evt_ble_app/features/local_recording/data/record_audio_recorder.dart';
-import 'package:evt_ble_app/features/local_recording/domain/audio_player_port.dart';
-import 'package:evt_ble_app/features/local_recording/domain/audio_recorder_port.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording_repository.dart';
-import 'package:evt_ble_app/features/local_recording/domain/recording_background_port.dart';
-import 'package:evt_ble_app/features/local_recording/domain/recording_file_store.dart';
+import 'package:flutter/foundation.dart';
+import 'package:aipin/core/ble/bluetooth_enable_gateway.dart';
+import 'package:aipin/core/ble/ble_transport.dart';
+import 'package:aipin/core/ble/reactive_ble_transport.dart';
+import 'package:aipin/core/persistence/app_database.dart';
+import 'package:aipin/core/permissions/app_permission_gateway.dart';
+import 'package:aipin/core/permissions/permission_handler_gateway.dart';
+import 'package:aipin/features/evidence/data/drift_evidence_repository.dart';
+import 'package:aipin/features/evidence/domain/evidence_repository.dart';
+import 'package:aipin/features/onboarding/data/shared_preferences_onboarding_store.dart';
+import 'package:aipin/features/onboarding/domain/onboarding_store.dart';
+import 'package:aipin/features/local_recording/data/app_recording_file_store.dart';
+import 'package:aipin/features/local_recording/data/drift_local_recording_repository.dart';
+import 'package:aipin/features/local_recording/data/foreground_recording_service.dart';
+import 'package:aipin/features/local_recording/data/just_audio_player.dart';
+import 'package:aipin/features/local_recording/data/record_audio_recorder.dart';
+import 'package:aipin/features/local_recording/domain/audio_player_port.dart';
+import 'package:aipin/features/local_recording/domain/audio_recorder_port.dart';
+import 'package:aipin/features/local_recording/domain/local_recording_repository.dart';
+import 'package:aipin/features/local_recording/domain/recording_background_port.dart';
+import 'package:aipin/features/local_recording/domain/recording_file_store.dart';
+import 'package:aipin/features/research_beta/application/research_capture_library_controller.dart';
+import 'package:aipin/features/research_beta/application/research_capture_processing_controller.dart';
+import 'package:aipin/features/research_beta/data/asr_generated_note_mapper.dart';
+import 'package:aipin/features/research_beta/data/ai_voice_service_configuration.dart';
+import 'package:aipin/features/research_beta/data/app_research_capture_file_store.dart';
+import 'package:aipin/features/research_beta/data/drift_research_capture_repository.dart';
+import 'package:aipin/features/research_beta/data/platform_m4a_audio_segmenter.dart';
+import 'package:aipin/features/research_beta/data/shared_preferences_research_trial_store.dart';
+import 'package:aipin/features/research_beta/data/temporary_asr_http_gateway.dart';
+import 'package:aipin/features/research_beta/domain/research_capture_file_store.dart';
+import 'package:aipin/features/research_beta/domain/research_capture_repository.dart';
+import 'package:aipin/features/research_beta/domain/research_trial.dart';
+import 'package:aipin/features/research_beta/domain/audio_segmenter.dart';
+import 'package:aipin/features/research_beta/domain/temporary_asr_gateway.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final bleTransportProvider = Provider<BleTransport>((ref) {
   return ReactiveBleTransport();
+});
+
+final bluetoothEnableGatewayProvider = Provider<BluetoothEnableGateway>((ref) {
+  return const PlatformBluetoothEnableGateway();
 });
 
 final onboardingStoreProvider = Provider<OnboardingStore>((ref) {
@@ -57,6 +77,10 @@ final audioPlayerProvider = Provider<AudioPlayerPort>((ref) {
   return JustAudioPlayer();
 });
 
+final audioPlayerFactoryProvider = Provider<AudioPlayerPort Function()>((ref) {
+  return JustAudioPlayer.new;
+});
+
 final recordingFileStoreProvider = Provider<RecordingFileStore>((ref) {
   return AppRecordingFileStore();
 });
@@ -64,3 +88,57 @@ final recordingFileStoreProvider = Provider<RecordingFileStore>((ref) {
 final recordingBackgroundProvider = Provider<RecordingBackgroundPort>((ref) {
   return ForegroundRecordingService();
 });
+
+final researchCaptureRepositoryProvider = Provider<ResearchCaptureRepository>((
+  ref,
+) {
+  return DriftResearchCaptureRepository(ref.watch(appDatabaseProvider));
+});
+
+final researchCaptureFileStoreProvider = Provider<ResearchCaptureFileStore>((
+  ref,
+) {
+  return AppResearchCaptureFileStore();
+});
+
+final audioSegmenterProvider = Provider<AudioSegmenter>((ref) {
+  return PlatformM4aAudioSegmenter();
+});
+
+final researchTrialStoreProvider = Provider<ResearchTrialStore>((ref) {
+  return SharedPreferencesResearchTrialStore();
+});
+
+final temporaryAsrGatewayProvider = Provider<TemporaryAsrGateway>((ref) {
+  return TemporaryAsrHttpGateway(
+    baseUrl: AiVoiceServiceConfiguration.resolveBaseUrl(
+      debugFallbackValue: kDebugMode
+          ? 'https://foto-amount-saturday-consultation.trycloudflare.com'
+          : '',
+    ),
+    verifiedGenerationPendingStatuses: const <String>{'queued', 'running'},
+    verifiedGenerationCompletionStatuses: const <String>{'completed'},
+    verifiedGenerationFailureStatuses: const <String>{'failed'},
+    verifiedNoteMapper: mapAsrGeneratedNote,
+  );
+});
+
+final researchCaptureProcessingControllerProvider =
+    Provider<ResearchCaptureProcessingController>((ref) {
+      return ResearchCaptureProcessingController(
+        repository: ref.watch(researchCaptureRepositoryProvider),
+        researchFiles: ref.watch(researchCaptureFileStoreProvider),
+        localFiles: ref.watch(recordingFileStoreProvider),
+        gateway: ref.watch(temporaryAsrGatewayProvider),
+        audioSegmenter: ref.watch(audioSegmenterProvider),
+        trialStore: ref.watch(researchTrialStoreProvider),
+      );
+    });
+
+final researchCaptureLibraryControllerProvider =
+    Provider<ResearchCaptureLibraryController>((ref) {
+      return ResearchCaptureLibraryController(
+        repository: ref.watch(researchCaptureRepositoryProvider),
+        trialStore: ref.watch(researchTrialStoreProvider),
+      );
+    });

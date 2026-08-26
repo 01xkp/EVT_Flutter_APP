@@ -1,9 +1,9 @@
-import 'package:evt_ble_app/core/design_system/widgets/app_button.dart';
-import 'package:evt_ble_app/core/design_system/widgets/app_confirmation_sheet.dart';
-import 'package:evt_ble_app/core/design_system/widgets/app_surface_card.dart';
-import 'package:evt_ble_app/features/device_session/application/session_state.dart';
-import 'package:evt_ble_app/features/device_session/presentation/device_status_view_model.dart';
-import 'package:evt_ble_app/features/device_session/presentation/session_failure_panel.dart';
+import 'package:aipin/core/design_system/widgets/app_button.dart';
+import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
+import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
+import 'package:aipin/features/device_session/application/session_state.dart';
+import 'package:aipin/features/device_session/presentation/device_status_view_model.dart';
+import 'package:aipin/features/device_session/presentation/session_failure_panel.dart';
 import 'package:flutter/material.dart';
 
 class DeviceDetailPage extends StatelessWidget {

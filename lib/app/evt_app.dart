@@ -1,8 +1,9 @@
 import 'dart:async';
 
-import 'package:evt_ble_app/app/app_shell.dart';
-import 'package:evt_ble_app/core/design_system/evt_theme.dart';
-import 'package:evt_ble_app/features/settings/application/theme_mode_controller.dart';
+import 'package:aipin/app/branding/aipin_brand.dart';
+import 'package:aipin/app/app_shell.dart';
+import 'package:aipin/core/design_system/evt_theme.dart';
+import 'package:aipin/features/settings/application/theme_mode_controller.dart';
 import 'package:flutter/material.dart';
 
 class EvtApp extends StatefulWidget {
@@ -34,6 +35,7 @@ class _EvtAppState extends State<EvtApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: AipinBrand.displayName,
       debugShowCheckedModeBanner: false,
       theme: EvtTheme.light(),
       darkTheme: EvtTheme.dark(),

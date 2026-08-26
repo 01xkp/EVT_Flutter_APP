@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/core/design_system/evt_theme.dart';
-import 'package:evt_ble_app/core/design_system/widgets/app_surface_card.dart';
+import 'package:aipin/core/design_system/evt_theme.dart';
+import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
 import 'package:flutter/material.dart';
 
 enum DeviceSummaryStatus { disconnected, searching, connected }

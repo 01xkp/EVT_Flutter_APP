@@ -1,4 +1,4 @@
-name: evt_ble_app
+name: aipin
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -45,6 +45,7 @@ dependencies:
   path_provider: 2.1.6
   uuid: 4.6.0
   flutter_foreground_task: 11.0.1
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +59,7 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   build_runner: ^2.15.1
   drift_dev: ^2.34.5
+  image: ^4.5.4
   sqlite3: 3.5.2
 
 # For information on the generic Dart part of this file, see the

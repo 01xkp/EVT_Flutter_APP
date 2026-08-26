@@ -1,12 +1,14 @@
 import 'dart:async';
 
-import 'package:evt_ble_app/core/design_system/evt_theme.dart';
-import 'package:evt_ble_app/core/design_system/widgets/app_button.dart';
-import 'package:evt_ble_app/core/design_system/widgets/status_label.dart';
-import 'package:evt_ble_app/features/device_discovery/application/discovery_controller.dart';
-import 'package:evt_ble_app/features/device_discovery/application/discovery_state.dart';
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
-import 'package:evt_ble_app/features/device_discovery/presentation/device_candidate_row.dart';
+import 'package:aipin/core/ble/bluetooth_enable_gateway.dart';
+import 'package:aipin/core/design_system/widgets/app_button.dart';
+import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
+import 'package:aipin/core/design_system/widgets/status_label.dart';
+import 'package:aipin/features/device_discovery/application/discovery_controller.dart';
+import 'package:aipin/features/device_discovery/application/discovery_state.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/features/device_discovery/presentation/device_candidate_row.dart';
+import 'package:aipin/features/device_discovery/presentation/discovery_scanning_indicator.dart';
 import 'package:flutter/material.dart';
 
 class DiscoveryPage extends StatefulWidget {
@@ -15,26 +17,35 @@ class DiscoveryPage extends StatefulWidget {
     this.controller,
     this.onConnect,
     this.onSettings,
-    this.onConnectionHelp,
+    this.bluetoothEnableGateway = const PlatformBluetoothEnableGateway(),
+    this.onOpenBluetoothSettings,
   });
 
   final DiscoveryController? controller;
   final ValueChanged<DeviceCandidate>? onConnect;
   final VoidCallback? onSettings;
-  final VoidCallback? onConnectionHelp;
+  final BluetoothEnableGateway bluetoothEnableGateway;
+  final Future<void> Function()? onOpenBluetoothSettings;
 
   @override
   State<DiscoveryPage> createState() => _DiscoveryPageState();
 }
 
-class _DiscoveryPageState extends State<DiscoveryPage> {
+class _DiscoveryPageState extends State<DiscoveryPage>
+    with WidgetsBindingObserver {
   late DiscoveryState _state =
       widget.controller?.state ?? const DiscoveryState();
+  var _isBluetoothPromptVisible = false;
+  var _retryScanWhenResumed = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.controller?.addListener(_onStateChanged);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_showBluetoothPromptIfNeeded()),
+    );
   }
 
   @override
@@ -50,8 +61,19 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.controller?.removeListener(_onStateChanged);
+    unawaited(widget.controller?.stop());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !_retryScanWhenResumed) {
+      return;
+    }
+    _retryScanWhenResumed = false;
+    widget.controller?.start();
   }
 
   @override
@@ -127,62 +149,64 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
       return _DiscoveryFailure(
         message: failure.message,
         onRetry: widget.controller?.start,
-        onHelp: widget.onConnectionHelp ?? () => _showConnectionHelp(context),
       );
+    }
+    if (_state.isScanning && _state.candidates.isEmpty) {
+      return const Center(child: DiscoveryScanningIndicator());
     }
     if (_state.candidates.isEmpty) {
       return const _DiscoveryEmptyState();
     }
-    return AnimatedSwitcher(
-      duration: EvtTheme.motionDuration,
-      child: ListView.builder(
-        key: ValueKey(_state.candidates.length),
-        itemCount: _state.candidates.length,
-        itemBuilder: (context, index) {
-          final candidate = _state.candidates[index];
-          return DeviceCandidateRow(
-            candidate: candidate,
-            selected: candidate.id == _state.selected?.id,
-            onTap: () => widget.controller?.select(candidate),
-          );
-        },
-      ),
+    return ListView.builder(
+      itemCount: _state.candidates.length,
+      itemBuilder: (context, index) {
+        final candidate = _state.candidates[index];
+        return DeviceCandidateRow(
+          candidate: candidate,
+          selected: candidate.id == _state.selected?.id,
+          onTap: () => widget.controller?.select(candidate),
+        );
+      },
     );
   }
 
   void _onStateChanged() {
     if (mounted) {
       setState(() => _state = widget.controller!.state);
+      unawaited(_showBluetoothPromptIfNeeded());
     }
   }
 
-  void _showConnectionHelp(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (context) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('连接帮助', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              const Text('确认设备已开机，并尽量靠近手机后重新查找。'),
-              const SizedBox(height: 16),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('知道了'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+  Future<void> _showBluetoothPromptIfNeeded() async {
+    if (!mounted || !_state.isBluetoothOff || _isBluetoothPromptVisible) {
+      return;
+    }
+    _isBluetoothPromptVisible = true;
+    final canRequestEnable = widget.bluetoothEnableGateway.canRequestEnable;
+    final confirmed = await AppConfirmationSheet.show(
+      context,
+      title: canRequestEnable ? '蓝牙未开启？' : '请开启蓝牙',
+      message: canRequestEnable
+          ? '开启蓝牙后即可查找附近设备。'
+          : '请在控制中心开启蓝牙后，返回 App 重新查找设备。',
+      cancelLabel: '暂不',
+      confirmLabel: canRequestEnable ? '开启蓝牙' : '打开应用设置',
     );
+    if (!mounted || !confirmed) {
+      _isBluetoothPromptVisible = false;
+      return;
+    }
+    if (!canRequestEnable) {
+      _retryScanWhenResumed = true;
+      await widget.onOpenBluetoothSettings?.call();
+      _isBluetoothPromptVisible = false;
+      return;
+    }
+    final result = await widget.bluetoothEnableGateway.requestEnable();
+    if (mounted && result == BluetoothEnableResult.enabled) {
+      widget.controller?.start();
+    }
+    _isBluetoothPromptVisible = false;
   }
 }
 
@@ -202,11 +226,10 @@ class _DiscoveryEmptyState extends StatelessWidget {
 }
 
 class _DiscoveryFailure extends StatelessWidget {
-  const _DiscoveryFailure({required this.message, this.onRetry, this.onHelp});
+  const _DiscoveryFailure({required this.message, this.onRetry});
 
   final String message;
   final VoidCallback? onRetry;
-  final VoidCallback? onHelp;
 
   @override
   Widget build(BuildContext context) {
@@ -225,8 +248,6 @@ class _DiscoveryFailure extends StatelessWidget {
             onPressed: onRetry,
             icon: Icons.refresh,
           ),
-          const SizedBox(height: 8),
-          TextButton(onPressed: onHelp, child: const Text('查看连接帮助')),
         ],
       ),
     );

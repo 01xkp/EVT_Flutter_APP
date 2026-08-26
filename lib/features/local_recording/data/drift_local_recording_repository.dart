@@ -1,7 +1,7 @@
 import 'package:drift/drift.dart';
-import 'package:evt_ble_app/core/persistence/app_database.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording_repository.dart';
+import 'package:aipin/core/persistence/app_database.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/local_recording/domain/local_recording_repository.dart';
 
 class DriftLocalRecordingRepository implements LocalRecordingRepository {
   DriftLocalRecordingRepository(this._database);

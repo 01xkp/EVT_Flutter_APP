@@ -1,7 +1,8 @@
-import 'package:evt_ble_app/features/evidence/application/evidence_history_controller.dart';
-import 'package:evt_ble_app/features/evidence/presentation/device_activity_list.dart';
-import 'package:evt_ble_app/features/local_recording/application/recording_library_controller.dart';
-import 'package:evt_ble_app/features/local_recording/presentation/local_recording_list.dart';
+import 'package:aipin/features/evidence/application/evidence_history_controller.dart';
+import 'package:aipin/features/evidence/presentation/device_activity_list.dart';
+import 'package:aipin/features/local_recording/application/recording_library_controller.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/local_recording/presentation/local_recording_list.dart';
 import 'package:flutter/material.dart';
 
 class RecordsPage extends StatefulWidget {
@@ -9,33 +10,26 @@ class RecordsPage extends StatefulWidget {
     super.key,
     required this.recordingController,
     required this.evidenceController,
-    required this.onStartRecording,
+    this.onOpenRecording,
+    this.initialSelection = 0,
   });
 
   final RecordingLibraryController recordingController;
   final EvidenceHistoryController evidenceController;
-  final VoidCallback onStartRecording;
+  final ValueChanged<LocalRecording>? onOpenRecording;
+  final int initialSelection;
 
   @override
   State<RecordsPage> createState() => _RecordsPageState();
 }
 
 class _RecordsPageState extends State<RecordsPage> {
-  var _selection = 0;
+  late var _selection = widget.initialSelection;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('记录'),
-        actions: [
-          IconButton(
-            tooltip: '开始本机录音',
-            onPressed: widget.onStartRecording,
-            icon: const Icon(Icons.fiber_manual_record),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('记录')),
       body: Column(
         children: [
           Padding(
@@ -54,15 +48,18 @@ class _RecordsPageState extends State<RecordsPage> {
           Expanded(
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
-              child: _selection == 0
-                  ? LocalRecordingList(
-                      key: const ValueKey('local'),
-                      controller: widget.recordingController,
-                    )
-                  : DeviceActivityList(
-                      key: const ValueKey('activity'),
-                      controller: widget.evidenceController,
-                    ),
+              child: switch (_selection) {
+                0 => LocalRecordingList(
+                  key: const ValueKey('local'),
+                  controller: widget.recordingController,
+                  onOpen: widget.onOpenRecording,
+                ),
+                1 => DeviceActivityList(
+                  key: const ValueKey('activity'),
+                  controller: widget.evidenceController,
+                ),
+                _ => const SizedBox.shrink(),
+              },
             ),
           ),
         ],

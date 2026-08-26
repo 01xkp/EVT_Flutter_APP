@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
 
 class DeviceProfile {
   const DeviceProfile({

@@ -1,10 +1,10 @@
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
-import 'package:evt_ble_app/core/persistence/app_database.dart';
-import 'package:evt_ble_app/features/evidence/domain/evidence_bundle.dart';
-import 'package:evt_ble_app/features/evidence/domain/evidence_repository.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_verdict.dart';
+import 'package:aipin/core/persistence/app_database.dart';
+import 'package:aipin/features/evidence/domain/evidence_bundle.dart';
+import 'package:aipin/features/evidence/domain/evidence_repository.dart';
+import 'package:aipin/features/observation/domain/observation_verdict.dart';
 
 class DriftEvidenceRepository implements EvidenceRepository {
   DriftEvidenceRepository(this._database);

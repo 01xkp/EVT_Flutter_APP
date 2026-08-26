@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/features/evidence/domain/evidence_bundle.dart';
-import 'package:evt_ble_app/features/evidence/domain/evidence_repository.dart';
+import 'package:aipin/features/evidence/domain/evidence_bundle.dart';
+import 'package:aipin/features/evidence/domain/evidence_repository.dart';
 
 class FakeEvidenceRepository implements EvidenceRepository {
   FakeEvidenceRepository([List<EvidenceBundle> values = const []])

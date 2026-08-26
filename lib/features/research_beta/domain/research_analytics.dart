@@ -132,4 +132,40 @@ class ResearchAggregate {
       notUnderstoodCount: notUnderstoodCount,
     );
   }
+
+  ResearchAggregate recordQualityFeedback({
+    required bool isAccurate,
+    required DateTime occurredAt,
+  }) {
+    return ResearchAggregate(
+      participantId: participantId,
+      createdAt: createdAt,
+      updatedAt: occurredAt,
+      captureCount: captureCount,
+      handledCount: handledCount,
+      usefulReuseCount: usefulReuseCount,
+      accurateFeedbackCount: accurateFeedbackCount + (isAccurate ? 1 : 0),
+      inaccurateFeedbackCount: inaccurateFeedbackCount + (isAccurate ? 0 : 1),
+      understoodCount: understoodCount,
+      notUnderstoodCount: notUnderstoodCount,
+    );
+  }
+
+  ResearchAggregate recordDailyUnderstanding({
+    required bool understood,
+    required DateTime occurredAt,
+  }) {
+    return ResearchAggregate(
+      participantId: participantId,
+      createdAt: createdAt,
+      updatedAt: occurredAt,
+      captureCount: captureCount,
+      handledCount: handledCount,
+      usefulReuseCount: usefulReuseCount,
+      accurateFeedbackCount: accurateFeedbackCount,
+      inaccurateFeedbackCount: inaccurateFeedbackCount,
+      understoodCount: understoodCount + (understood ? 1 : 0),
+      notUnderstoodCount: notUnderstoodCount + (understood ? 0 : 1),
+    );
+  }
 }

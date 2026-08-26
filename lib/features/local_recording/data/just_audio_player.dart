@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/local_recording/domain/audio_player_port.dart';
+import 'package:aipin/features/local_recording/domain/audio_player_port.dart';
 import 'package:just_audio/just_audio.dart' as just_audio;
 
 class JustAudioPlayer implements AudioPlayerPort {
@@ -27,6 +27,9 @@ class JustAudioPlayer implements AudioPlayerPort {
 
   @override
   Future<void> pause() => _player.pause();
+
+  @override
+  Future<void> seek(Duration position) => _player.seek(position);
 
   @override
   Future<void> play(String absolutePath) async {

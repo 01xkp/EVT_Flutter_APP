@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:evt_ble_app/core/ble/device_profile.dart';
+import 'package:aipin/core/ble/device_profile.dart';
 import 'package:flutter/services.dart';
 
 class DeviceProfileLoader {

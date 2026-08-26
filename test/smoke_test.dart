@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/app/evt_app.dart';
-import 'package:evt_ble_app/app/providers.dart';
+import 'package:aipin/app/evt_app.dart';
+import 'package:aipin/app/providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -17,7 +17,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('AIPIN'), findsOneWidget);
+    expect(find.text('AIPIN 声存'), findsOneWidget);
     expect(find.text('连接我的设备'), findsOneWidget);
   });
 }

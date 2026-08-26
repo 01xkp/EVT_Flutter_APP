@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/features/local_recording/domain/local_recording.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording_repository.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/local_recording/domain/local_recording_repository.dart';
 
 class FakeLocalRecordingRepository implements LocalRecordingRepository {
   FakeLocalRecordingRepository([List<LocalRecording> values = const []])

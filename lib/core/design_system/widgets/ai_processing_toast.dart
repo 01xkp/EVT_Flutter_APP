@@ -9,8 +9,9 @@ enum AiProcessingToastStage { transcribing, summarizing }
 class AiProcessingToastController extends ChangeNotifier {
   final Map<String, AiProcessingToastStage> _processing =
       <String, AiProcessingToastStage>{};
-  final Queue<DateTime> _pendingCompletions = Queue<DateTime>();
-  DateTime? _activeCompletion;
+  final Queue<AiProcessingToastDisplay> _pendingCompletions =
+      Queue<AiProcessingToastDisplay>();
+  AiProcessingToastDisplay? _activeCompletion;
   Timer? _completionTimer;
   var _presentationEnabled = true;
 
@@ -20,7 +21,7 @@ class AiProcessingToastController extends ChangeNotifier {
     }
     final completion = _activeCompletion;
     if (completion != null) {
-      return AiProcessingToastDisplay.completed(completion);
+      return completion;
     }
     if (_processing.values.contains(AiProcessingToastStage.transcribing)) {
       return const AiProcessingToastDisplay.processing(
@@ -43,11 +44,38 @@ class AiProcessingToastController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void complete({required String taskId, required DateTime completedAt}) {
+  void complete({
+    required String taskId,
+    required DateTime completedAt,
+    String completionLabel = '完成',
+  }) {
     _processing.remove(taskId);
-    _pendingCompletions.add(completedAt);
+    _pendingCompletions.add(
+      AiProcessingToastDisplay.completed(
+        completedAt,
+        completionLabel: completionLabel,
+      ),
+    );
     _startOrResumeCompletion();
     notifyListeners();
+  }
+
+  void dismiss(String taskId, {String? failureLabel}) {
+    final stage = _processing.remove(taskId);
+    final resolvedFailureLabel =
+        failureLabel ??
+        switch (stage) {
+          AiProcessingToastStage.transcribing => '转写失败',
+          AiProcessingToastStage.summarizing => 'AI 总结失败',
+          null => null,
+        };
+    if (resolvedFailureLabel != null) {
+      _pendingCompletions.add(
+        AiProcessingToastDisplay.failed(resolvedFailureLabel),
+      );
+      _startOrResumeCompletion();
+      notifyListeners();
+    }
   }
 
   void setPresentationEnabled(bool value) {
@@ -89,14 +117,29 @@ class AiProcessingToastController extends ChangeNotifier {
 }
 
 class AiProcessingToastDisplay {
-  const AiProcessingToastDisplay.processing(this.stage) : completedAt = null;
+  const AiProcessingToastDisplay.processing(this.stage)
+    : completedAt = null,
+      completionLabel = null,
+      failureLabel = null;
 
-  const AiProcessingToastDisplay.completed(this.completedAt) : stage = null;
+  const AiProcessingToastDisplay.completed(
+    this.completedAt, {
+    this.completionLabel = '完成',
+  }) : stage = null,
+       failureLabel = null;
+
+  const AiProcessingToastDisplay.failed(this.failureLabel)
+    : stage = null,
+      completedAt = null,
+      completionLabel = null;
 
   final AiProcessingToastStage? stage;
   final DateTime? completedAt;
+  final String? completionLabel;
+  final String? failureLabel;
 
   bool get isCompleted => completedAt != null;
+  bool get isFailed => failureLabel != null;
 }
 
 class AiProcessingToastHost extends StatelessWidget {
@@ -143,12 +186,18 @@ class _AiProcessingToastView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isCompleted = display.isCompleted;
-    final label = isCompleted
-        ? _completionLabel(display.completedAt!)
-        : switch (display.stage!) {
-            AiProcessingToastStage.transcribing => '正在转写',
-            AiProcessingToastStage.summarizing => '正在总结',
-          };
+    final isFailed = display.isFailed;
+    final label = switch ((isCompleted, isFailed)) {
+      (true, _) => _completionLabel(
+        display.completedAt!,
+        display.completionLabel!,
+      ),
+      (_, true) => display.failureLabel!,
+      _ => switch (display.stage!) {
+        AiProcessingToastStage.transcribing => '正在转写',
+        AiProcessingToastStage.summarizing => '正在总结',
+      },
+    };
     return IgnorePointer(
       child: Semantics(
         liveRegion: true,
@@ -171,6 +220,8 @@ class _AiProcessingToastView extends StatelessWidget {
                     color: Colors.white,
                     size: 18,
                   )
+                else if (isFailed)
+                  const Icon(Icons.error_outline, color: Colors.white, size: 18)
                 else
                   const SizedBox(
                     width: 18,
@@ -190,9 +241,9 @@ class _AiProcessingToastView extends StatelessWidget {
     );
   }
 
-  String _completionLabel(DateTime completedAt) {
+  String _completionLabel(DateTime completedAt, String completionLabel) {
     final hour = completedAt.hour.toString().padLeft(2, '0');
     final minute = completedAt.minute.toString().padLeft(2, '0');
-    return '${completedAt.month}-${completedAt.day} $hour:$minute 完成';
+    return '${completedAt.month}-${completedAt.day} $hour:$minute $completionLabel';
   }
 }

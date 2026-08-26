@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 
 class AdvertisementFilter {
   const AdvertisementFilter({
@@ -13,47 +13,9 @@ class AdvertisementFilter {
 
   bool matches(DeviceCandidate candidate) => evaluate(candidate).matches;
 
-  AdvertisementEvaluation evaluate(DeviceCandidate candidate) {
-    final reasons = <String>[];
-    final nameMatches = candidate.name.toUpperCase().startsWith(
-      namePrefix.toUpperCase(),
-    );
-    if (nameMatches) {
-      reasons.add('名称 $namePrefix');
-    }
-
-    final manufacturerMatches = _startsWith(
-      candidate.manufacturerData,
-      manufacturerPrefix,
-    );
-    if (manufacturerMatches) {
-      reasons.add('厂商数据 A3 89');
-    }
-
-    final serviceMatches = candidate.serviceUuids.any(
-      (uuid) => uuid.toUpperCase() == serviceUuid.toUpperCase(),
-    );
-    if (serviceMatches) {
-      reasons.add('服务 AF30');
-    }
-
-    return AdvertisementEvaluation(
-      matches: nameMatches && manufacturerMatches && serviceMatches,
-      reasons: List.unmodifiable(reasons),
-    );
-  }
-
-  static bool _startsWith(List<int> value, List<int> prefix) {
-    if (value.length < prefix.length) {
-      return false;
-    }
-    for (var index = 0; index < prefix.length; index += 1) {
-      if (value[index] != prefix[index]) {
-        return false;
-      }
-    }
-    return true;
-  }
+  // Temporarily accept every advertisement during device commissioning.
+  AdvertisementEvaluation evaluate(DeviceCandidate candidate) =>
+      const AdvertisementEvaluation(matches: true, reasons: []);
 }
 
 class AdvertisementEvaluation {

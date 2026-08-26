@@ -1,6 +1,6 @@
-import 'package:evt_ble_app/core/protocol/device_event.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_scenario.dart';
+import 'package:aipin/core/protocol/device_event.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/observation/domain/observation_scenario.dart';
 
 class ObservationRun {
   ObservationRun({

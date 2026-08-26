@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:aipin/features/local_recording/domain/local_recording.dart';
 import 'package:aipin/features/local_recording/domain/recording_file_store.dart';
 import 'package:aipin/features/research_beta/application/research_processing_poll_schedule.dart';
+import 'package:aipin/features/research_beta/domain/audio_segmenter.dart';
 import 'package:aipin/features/research_beta/domain/research_analytics.dart';
 import 'package:aipin/features/research_beta/domain/research_capture.dart';
 import 'package:aipin/features/research_beta/domain/research_capture_file_store.dart';
@@ -14,18 +15,26 @@ import 'package:aipin/features/research_beta/domain/temporary_asr_gateway.dart';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
-enum ResearchCaptureUiUpdateKind { transcribing, summarizing, completed }
+enum ResearchCaptureUiUpdateKind {
+  transcribing,
+  transcriptionCompleted,
+  summarizing,
+  completed,
+  failed,
+}
 
 class ResearchCaptureUiUpdate {
   const ResearchCaptureUiUpdate({
     required this.captureId,
     required this.kind,
     this.completedAt,
+    this.processingState,
   });
 
   final String captureId;
   final ResearchCaptureUiUpdateKind kind;
   final DateTime? completedAt;
+  final ResearchProcessingState? processingState;
 }
 
 class ResearchCaptureProcessingController extends ChangeNotifier {
@@ -34,6 +43,7 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
     required ResearchCaptureFileStore researchFiles,
     required RecordingFileStore localFiles,
     required TemporaryAsrGateway gateway,
+    required AudioSegmenter audioSegmenter,
     required ResearchTrialStore trialStore,
     String Function()? idGenerator,
     DateTime Function()? now,
@@ -42,22 +52,26 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
         const ResearchProcessingPollSchedule(),
     Duration processingTimeout = const Duration(minutes: 30),
     Duration remoteDeleteTimeout = const Duration(seconds: 5),
+    Duration maximumSegmentDuration = const Duration(minutes: 5),
   }) : _repository = repository,
        _researchFiles = researchFiles,
        _localFiles = localFiles,
        _gateway = gateway,
+       _audioSegmenter = audioSegmenter,
        _trialStore = trialStore,
        _idGenerator = idGenerator ?? const Uuid().v4,
        _now = now ?? DateTime.now,
        _delay = delay ?? Future.delayed,
        _pollSchedule = pollSchedule,
        _processingTimeout = processingTimeout,
-       _remoteDeleteTimeout = remoteDeleteTimeout;
+       _remoteDeleteTimeout = remoteDeleteTimeout,
+       _maximumSegmentDuration = maximumSegmentDuration;
 
   final ResearchCaptureRepository _repository;
   final ResearchCaptureFileStore _researchFiles;
   final RecordingFileStore _localFiles;
   final TemporaryAsrGateway _gateway;
+  final AudioSegmenter _audioSegmenter;
   final ResearchTrialStore _trialStore;
   final String Function() _idGenerator;
   final DateTime Function() _now;
@@ -65,6 +79,7 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
   final ResearchProcessingPollSchedule _pollSchedule;
   final Duration _processingTimeout;
   final Duration _remoteDeleteTimeout;
+  final Duration _maximumSegmentDuration;
   final Map<String, Future<ResearchCapture?>> _inFlight =
       <String, Future<ResearchCapture?>>{};
 
@@ -288,57 +303,276 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
     ResearchCapture capture,
     DateTime deadline,
   ) async {
-    final knownJobId = capture.jobId;
-    if (knownJobId != null) {
-      final resumed = capture.toTranscribing(knownJobId);
+    if (capture.asrSegments.isEmpty && capture.jobId != null) {
+      final resumed = capture.toTranscribing(capture.jobId!);
       await _repository.update(resumed);
       _reportStage(resumed);
       return resumed;
     }
-    final path = await _researchFiles.absolutePathFor(capture.relativePath);
-    final result = await _requestBeforeDeadline(
-      _gateway.submitAudio(path),
+
+    var updated = capture;
+    if (updated.asrSegments.isEmpty) {
+      try {
+        final sourcePath = await _researchFiles.absolutePathFor(
+          updated.relativePath,
+        );
+        final outputPathPrefix = await _researchFiles
+            .segmentOutputPathPrefixFor(captureId: updated.id);
+        final segments = await _valueBeforeDeadline(
+          _audioSegmenter.splitM4a(
+            AudioSegmentationRequest(
+              sourcePath: sourcePath,
+              outputPathPrefix: outputPathPrefix,
+              maximumSegmentDuration: _maximumSegmentDuration,
+            ),
+          ),
+          deadline,
+        );
+        if (segments == null) {
+          return _fail(
+            updated,
+            ResearchProcessingState.uploadFailed,
+            '录音切分超时，请稍后重试。',
+          );
+        }
+        if (segments.isEmpty) {
+          return _fail(
+            updated,
+            ResearchProcessingState.uploadFailed,
+            '录音切分后没有可上传的音频。',
+          );
+        }
+        final tasks = <ResearchAsrSegment>[];
+        for (final segment in segments) {
+          tasks.add(
+            ResearchAsrSegment(
+              index: segment.index,
+              relativePath: await _researchFiles.relativeSegmentPathFor(
+                captureId: updated.id,
+                index: segment.index,
+              ),
+            ),
+          );
+        }
+        updated = updated.withAsrSegments(tasks);
+        await _repository.update(updated);
+      } on TimeoutException {
+        return _fail(
+          updated,
+          ResearchProcessingState.uploadFailed,
+          '录音切分超时，请稍后重试。',
+        );
+      } on Exception {
+        return _fail(
+          updated,
+          ResearchProcessingState.uploadFailed,
+          '录音切分失败，请重新转写。',
+        );
+      }
+    }
+
+    for (final segment in updated.asrSegments) {
+      if (segment.jobId != null) {
+        continue;
+      }
+      final path = await _researchFiles.absolutePathFor(segment.relativePath);
+      final result = await _requestBeforeDeadline(
+        _gateway.submitAudio(path),
+        deadline,
+      );
+      if (result == null) {
+        return _fail(
+          updated,
+          ResearchProcessingState.uploadFailed,
+          '上传处理超时，请稍后重试。',
+        );
+      }
+      if (result is AsrFailure<AsrJob>) {
+        return _fail(
+          updated,
+          ResearchProcessingState.uploadFailed,
+          result.message,
+        );
+      }
+      final job = (result as AsrSuccess<AsrJob>).value;
+      updated = updated.withSubmittedAsrSegment(
+        index: segment.index,
+        jobId: job.id,
+      );
+      await _repository.update(updated);
+    }
+    final summarySourceResult = await _ensureSummarySourceJob(
+      updated,
       deadline,
     );
-    if (result == null) {
+    if (summarySourceResult is AsrFailure<ResearchCapture>) {
       return _fail(
-        capture,
+        updated,
         ResearchProcessingState.uploadFailed,
-        '上传处理超时，请稍后重试。',
+        summarySourceResult.message,
       );
     }
-    if (result is AsrFailure<AsrJob>) {
-      return _fail(
-        capture,
-        ResearchProcessingState.uploadFailed,
-        result.message,
-      );
-    }
-    final job = (result as AsrSuccess<AsrJob>).value;
-    final updated = capture.toTranscribing(job.id);
-    await _repository.update(updated);
-    _reportStage(updated);
-    return updated;
+    updated = (summarySourceResult as AsrSuccess<ResearchCapture>).value;
+    final transcribing = updated.toSegmentedTranscribing();
+    await _repository.update(transcribing);
+    _reportStage(transcribing);
+    return transcribing;
   }
 
   Future<ResearchCapture> _completeTranscription(
     ResearchCapture capture,
     DateTime deadline,
   ) async {
-    final jobId = capture.jobId;
-    if (jobId == null) {
+    final segments = capture.asrSegments.isEmpty
+        ? <ResearchAsrSegment>[
+            ResearchAsrSegment(
+              index: 0,
+              relativePath: capture.relativePath,
+              jobId: capture.jobId,
+            ),
+          ]
+        : capture.asrSegments;
+    if (segments.any((segment) => segment.jobId == null)) {
       return _fail(
         capture,
         ResearchProcessingState.transcriptionFailed,
         '未找到可恢复的转写任务。',
       );
     }
-    while (true) {
-      if (!_now().isBefore(deadline)) {
+    final transcripts = <AsrTranscript>[];
+    for (final segment in segments) {
+      final result = await _completeSegmentTranscription(
+        capture,
+        segment.jobId!,
+        deadline,
+      );
+      if (result is AsrFailure<AsrTranscript>) {
         return _fail(
           capture,
           ResearchProcessingState.transcriptionFailed,
-          '转写处理超时，请稍后重试。',
+          result.message,
+        );
+      }
+      transcripts.add((result as AsrSuccess<AsrTranscript>).value);
+    }
+    final source = transcripts.first;
+    final mergedTranscript = AsrTranscript(
+      text: transcripts.map((transcript) => transcript.text).join('\n'),
+      relativePath: source.relativePath,
+      variant: source.variant,
+      engine: source.engine,
+    );
+    // The completed transcript remains reviewable even when summary creation
+    // fails or the external summary service is temporarily unavailable.
+    final transcribed = capture.copyWith(rawTranscript: mergedTranscript.text);
+    await _repository.update(transcribed);
+    _reportTranscriptionCompletion(transcribed);
+    final summarySourceResult = await _ensureSummarySourceJob(
+      transcribed,
+      deadline,
+    );
+    if (summarySourceResult is AsrFailure<ResearchCapture>) {
+      return _fail(
+        transcribed,
+        ResearchProcessingState.summaryFailed,
+        summarySourceResult.message,
+      );
+    }
+    final summarySourceCapture =
+        (summarySourceResult as AsrSuccess<ResearchCapture>).value;
+    final summaryJobId = summarySourceCapture.jobId ?? segments.first.jobId!;
+    var summarySource = source;
+    if (summarySourceCapture.hasMultipleAsrSegments) {
+      final result = await _completeSegmentTranscription(
+        summarySourceCapture,
+        summaryJobId,
+        deadline,
+      );
+      if (result is AsrFailure<AsrTranscript>) {
+        return _fail(
+          summarySourceCapture,
+          ResearchProcessingState.summaryFailed,
+          result.message,
+        );
+      }
+      summarySource = (result as AsrSuccess<AsrTranscript>).value;
+    }
+    final noteResult = await _requestBeforeDeadline(
+      _gateway.createNote(jobId: summaryJobId, transcript: summarySource),
+      deadline,
+    );
+    if (noteResult == null) {
+      return _fail(
+        summarySourceCapture,
+        ResearchProcessingState.summaryFailed,
+        'AI 整理处理超时，请稍后重试。',
+      );
+    }
+    if (noteResult is AsrFailure<AsrNoteTask>) {
+      return _fail(
+        summarySourceCapture,
+        ResearchProcessingState.summaryFailed,
+        noteResult.message,
+      );
+    }
+    final note = (noteResult as AsrSuccess<AsrNoteTask>).value;
+    final updated = summarySourceCapture.toSummarizing(
+      rawTranscript: mergedTranscript.text,
+      noteId: note.noteId,
+      generationTaskId: note.generationTaskId,
+    );
+    await _repository.update(updated);
+    _reportStage(updated);
+    return updated;
+  }
+
+  Future<AsrOutcome<ResearchCapture>> _ensureSummarySourceJob(
+    ResearchCapture capture,
+    DateTime deadline,
+  ) async {
+    if (!capture.hasMultipleAsrSegments) {
+      return AsrSuccess(capture);
+    }
+    final firstSegmentJobId = capture.asrSegments.first.jobId;
+    final existingJobId = capture.jobId;
+    if (existingJobId != null && existingJobId != firstSegmentJobId) {
+      return AsrSuccess(capture);
+    }
+    final sourcePath = await _researchFiles.absolutePathFor(
+      capture.relativePath,
+    );
+    final result = await _requestBeforeDeadline(
+      _gateway.submitAudio(sourcePath),
+      deadline,
+    );
+    if (result == null) {
+      return const AsrFailure<ResearchCapture>(
+        kind: AsrFailureKind.upload,
+        message: '上传原始录音用于 AI 总结超时，请稍后重试。',
+      );
+    }
+    if (result is AsrFailure<AsrJob>) {
+      return AsrFailure<ResearchCapture>(
+        kind: result.kind,
+        message: result.message,
+      );
+    }
+    final summaryJob = (result as AsrSuccess<AsrJob>).value;
+    final updated = capture.copyWith(jobId: summaryJob.id);
+    await _repository.update(updated);
+    return AsrSuccess(updated);
+  }
+
+  Future<AsrOutcome<AsrTranscript>> _completeSegmentTranscription(
+    ResearchCapture capture,
+    String jobId,
+    DateTime deadline,
+  ) async {
+    while (true) {
+      if (!_now().isBefore(deadline)) {
+        return const AsrFailure<AsrTranscript>(
+          kind: AsrFailureKind.transcription,
+          message: '转写处理超时，请稍后重试。',
         );
       }
       final statusResult = await _requestBeforeDeadline(
@@ -346,17 +580,15 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
         deadline,
       );
       if (statusResult == null) {
-        return _fail(
-          capture,
-          ResearchProcessingState.transcriptionFailed,
-          '转写处理超时，请稍后重试。',
+        return const AsrFailure<AsrTranscript>(
+          kind: AsrFailureKind.transcription,
+          message: '转写处理超时，请稍后重试。',
         );
       }
       if (statusResult is AsrFailure<AsrJob>) {
-        return _fail(
-          capture,
-          ResearchProcessingState.transcriptionFailed,
-          statusResult.message,
+        return AsrFailure<AsrTranscript>(
+          kind: statusResult.kind,
+          message: statusResult.message,
         );
       }
       final job = (statusResult as AsrSuccess<AsrJob>).value;
@@ -365,10 +597,9 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
         continue;
       }
       if (job.status != AsrJobStatus.completed) {
-        return _fail(
-          capture,
-          ResearchProcessingState.transcriptionFailed,
-          job.message ?? '转写处理失败。',
+        return AsrFailure<AsrTranscript>(
+          kind: AsrFailureKind.transcription,
+          message: job.message ?? '转写处理失败。',
         );
       }
       final transcriptResult = await _requestBeforeDeadline(
@@ -376,51 +607,12 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
         deadline,
       );
       if (transcriptResult == null) {
-        return _fail(
-          capture,
-          ResearchProcessingState.transcriptionFailed,
-          '转写处理超时，请稍后重试。',
+        return const AsrFailure<AsrTranscript>(
+          kind: AsrFailureKind.transcription,
+          message: '转写处理超时，请稍后重试。',
         );
       }
-      if (transcriptResult is AsrFailure<AsrTranscript>) {
-        return _fail(
-          capture,
-          ResearchProcessingState.transcriptionFailed,
-          transcriptResult.message,
-        );
-      }
-      final transcript = (transcriptResult as AsrSuccess<AsrTranscript>).value;
-      // The completed transcript remains reviewable even when summary creation
-      // fails or the external summary service is temporarily unavailable.
-      final transcribed = capture.copyWith(rawTranscript: transcript.text);
-      await _repository.update(transcribed);
-      final noteResult = await _requestBeforeDeadline(
-        _gateway.createNote(jobId: jobId, transcript: transcript),
-        deadline,
-      );
-      if (noteResult == null) {
-        return _fail(
-          transcribed,
-          ResearchProcessingState.summaryFailed,
-          'AI 整理处理超时，请稍后重试。',
-        );
-      }
-      if (noteResult is AsrFailure<AsrNoteTask>) {
-        return _fail(
-          transcribed,
-          ResearchProcessingState.summaryFailed,
-          noteResult.message,
-        );
-      }
-      final note = (noteResult as AsrSuccess<AsrNoteTask>).value;
-      final updated = transcribed.toSummarizing(
-        rawTranscript: transcript.text,
-        noteId: note.noteId,
-        generationTaskId: note.generationTaskId,
-      );
-      await _repository.update(updated);
-      _reportStage(updated);
-      return updated;
+      return transcriptResult;
     }
   }
 
@@ -507,11 +699,24 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
     ResearchCapture capture,
     DateTime deadline,
   ) async {
-    final jobId = capture.jobId;
-    final editedTranscript = capture.rawTranscript?.trim();
-    if (jobId == null || editedTranscript == null || editedTranscript.isEmpty) {
+    final summarySourceResult = await _ensureSummarySourceJob(
+      capture,
+      deadline,
+    );
+    if (summarySourceResult is AsrFailure<ResearchCapture>) {
       return _fail(
         capture,
+        ResearchProcessingState.summaryFailed,
+        summarySourceResult.message,
+      );
+    }
+    final summarySourceCapture =
+        (summarySourceResult as AsrSuccess<ResearchCapture>).value;
+    final jobId = summarySourceCapture.jobId;
+    final editedTranscript = summarySourceCapture.rawTranscript?.trim();
+    if (jobId == null || editedTranscript == null || editedTranscript.isEmpty) {
+      return _fail(
+        summarySourceCapture,
         ResearchProcessingState.summaryFailed,
         '未找到可用于生成总结的转写内容。',
       );
@@ -522,14 +727,14 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
     );
     if (transcriptResult == null) {
       return _fail(
-        capture,
+        summarySourceCapture,
         ResearchProcessingState.summaryFailed,
         'AI 整理处理超时，请稍后重试。',
       );
     }
     if (transcriptResult is AsrFailure<AsrTranscript>) {
       return _fail(
-        capture,
+        summarySourceCapture,
         ResearchProcessingState.summaryFailed,
         transcriptResult.message,
       );
@@ -549,20 +754,20 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
     );
     if (noteResult == null) {
       return _fail(
-        capture,
+        summarySourceCapture,
         ResearchProcessingState.summaryFailed,
         'AI 整理处理超时，请稍后重试。',
       );
     }
     if (noteResult is AsrFailure<AsrNoteTask>) {
       return _fail(
-        capture,
+        summarySourceCapture,
         ResearchProcessingState.summaryFailed,
         noteResult.message,
       );
     }
     final note = (noteResult as AsrSuccess<AsrNoteTask>).value;
-    final updated = capture.toSummarizing(
+    final updated = summarySourceCapture.toSummarizing(
       rawTranscript: editedTranscript,
       noteId: note.noteId,
       generationTaskId: note.generationTaskId,
@@ -579,11 +784,14 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
     _lastError = message;
     final failed = capture.failed(state, message);
     await _repository.update(failed);
+    _reportFailure(failed);
     return failed;
   }
 
   void _reportStage(ResearchCapture capture) {
     final kind = switch (capture.processingState) {
+      ResearchProcessingState.uploading =>
+        ResearchCaptureUiUpdateKind.transcribing,
       ResearchProcessingState.transcribing =>
         ResearchCaptureUiUpdateKind.transcribing,
       ResearchProcessingState.summarizing =>
@@ -615,6 +823,28 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _reportTranscriptionCompletion(ResearchCapture capture) {
+    _pendingUiUpdates.add(
+      ResearchCaptureUiUpdate(
+        captureId: capture.id,
+        kind: ResearchCaptureUiUpdateKind.transcriptionCompleted,
+        completedAt: _now(),
+      ),
+    );
+    notifyListeners();
+  }
+
+  void _reportFailure(ResearchCapture capture) {
+    _pendingUiUpdates.add(
+      ResearchCaptureUiUpdate(
+        captureId: capture.id,
+        kind: ResearchCaptureUiUpdateKind.failed,
+        processingState: capture.processingState,
+      ),
+    );
+    notifyListeners();
+  }
+
   Duration _nextPollDelay(ResearchCapture capture) {
     final elapsed = _now().difference(capture.createdAt);
     return _pollSchedule.nextDelay(
@@ -643,7 +873,12 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
 
   Future<void> _deleteLocalCapture(ResearchCapture capture) async {
     try {
-      await _researchFiles.delete(capture.relativePath);
+      await Future.wait(<Future<void>>[
+        _researchFiles.delete(capture.relativePath),
+        ...capture.asrSegments.map(
+          (segment) => _researchFiles.delete(segment.relativePath),
+        ),
+      ]);
     } catch (_) {
       // Local metadata must still be removable when an old file is absent.
     } finally {
@@ -678,6 +913,14 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
     }
   }
 
+  Future<T?> _valueBeforeDeadline<T>(Future<T> request, DateTime deadline) {
+    final remaining = deadline.difference(_now());
+    if (remaining <= Duration.zero) {
+      return Future<T?>.value();
+    }
+    return request.timeout(remaining);
+  }
+
   Future<ResearchTrial> _requireAcceptedTrial() async {
     final trial = await _trialStore.load();
     if (trial == null || !trial.hasAcceptedConsent) {
@@ -690,6 +933,14 @@ class ResearchCaptureProcessingController extends ChangeNotifier {
     if (capture.noteId != null && capture.generationTaskId != null) {
       return capture.copyWith(
         processingState: ResearchProcessingState.summarizing,
+        inboxState: ResearchInboxState.processing,
+        failureReason: '',
+      );
+    }
+    if (capture.asrSegments.isNotEmpty &&
+        capture.asrSegments.every((segment) => segment.jobId != null)) {
+      return capture.copyWith(
+        processingState: ResearchProcessingState.transcribing,
         inboxState: ResearchInboxState.processing,
         failureReason: '',
       );

@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/onboarding/domain/onboarding_store.dart';
+import 'package:aipin/features/onboarding/domain/onboarding_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SharedPreferencesOnboardingStore implements OnboardingStore {

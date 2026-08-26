@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/observation/domain/observation_verdict.dart';
+import 'package:aipin/features/observation/domain/observation_verdict.dart';
 
 enum EvidenceRecordKind { snapshot, event, note }
 

@@ -1,6 +1,6 @@
-import 'package:evt_ble_app/core/design_system/widgets/error_state.dart';
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/core/design_system/widgets/error_state.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:flutter/material.dart';
 
 class SessionFailurePanel extends StatelessWidget {

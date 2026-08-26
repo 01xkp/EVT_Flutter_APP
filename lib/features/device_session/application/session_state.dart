@@ -1,8 +1,8 @@
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
-import 'package:evt_ble_app/core/protocol/device_event.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_session.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
-import 'package:evt_ble_app/features/device_session/domain/session_phase.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/core/protocol/device_event.dart';
+import 'package:aipin/features/device_session/domain/device_session.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/device_session/domain/session_phase.dart';
 
 class SessionState {
   const SessionState({
@@ -22,6 +22,17 @@ class SessionState {
   final EvtFailure? failure;
 
   bool get isObservable => phase == SessionPhase.observable;
+
+  bool get hasActiveBleConnection => switch (phase) {
+    SessionPhase.servicesDiscovered ||
+    SessionPhase.subscribing ||
+    SessionPhase.initialSnapshotRead ||
+    SessionPhase.observable ||
+    SessionPhase.observing ||
+    SessionPhase.verifying ||
+    SessionPhase.completed => true,
+    _ => false,
+  };
 
   SessionState copyWith({
     SessionPhase? phase,

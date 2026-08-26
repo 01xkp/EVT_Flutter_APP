@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:evt_ble_app/core/permissions/app_permission_gateway.dart';
+import 'package:aipin/core/permissions/app_permission_gateway.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class PermissionHandlerGateway implements AppPermissionGateway {

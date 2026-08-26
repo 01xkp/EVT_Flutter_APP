@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:evt_ble_app/core/ble/ble_models.dart';
-import 'package:evt_ble_app/core/ble/ble_transport.dart';
-import 'package:evt_ble_app/core/ble/device_profile.dart';
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/core/ble/ble_models.dart';
+import 'package:aipin/core/ble/ble_transport.dart';
+import 'package:aipin/core/ble/device_profile.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 
 class FakeBleTransport implements BleTransport {
   FakeBleTransport({
@@ -72,6 +72,7 @@ class FakeBleTransport implements BleTransport {
   final _subscriptionController = StreamController<Uint8List>.broadcast();
   final disconnectedDeviceIds = <String>[];
   final List<String> discoveryRequests = [];
+  var scanCallCount = 0;
   final bool deferRead;
   final Completer<Uint8List> _deferredRead = Completer<Uint8List>();
   final List<BleService> services;
@@ -90,7 +91,10 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
-  Stream<DeviceCandidate> scan() => _scanController.stream;
+  Stream<DeviceCandidate> scan() {
+    scanCallCount += 1;
+    return _scanController.stream;
+  }
 
   @override
   Stream<BleConnectionState> connect(String deviceId) =>

@@ -1,9 +1,26 @@
-import 'package:evt_ble_app/core/design_system/evt_colors.dart';
+import 'package:aipin/core/design_system/evt_colors.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 abstract final class EvtTheme {
   static const componentRadius = Radius.circular(8);
   static const motionDuration = Duration(milliseconds: 180);
+
+  static SystemUiOverlayStyle systemUiOverlayStyle(ThemeData theme) {
+    final background = theme.scaffoldBackgroundColor;
+    final isLight = theme.brightness == Brightness.light;
+    return SystemUiOverlayStyle(
+      statusBarColor: background,
+      statusBarIconBrightness: isLight ? Brightness.dark : Brightness.light,
+      statusBarBrightness: isLight ? Brightness.light : Brightness.dark,
+      systemStatusBarContrastEnforced: false,
+      systemNavigationBarColor: background,
+      systemNavigationBarIconBrightness: isLight
+          ? Brightness.dark
+          : Brightness.light,
+      systemNavigationBarContrastEnforced: false,
+    );
+  }
 
   static ThemeData light() => _build(
     brightness: Brightness.light,
@@ -70,7 +87,7 @@ abstract final class EvtTheme {
       borderRadius: BorderRadius.all(componentRadius),
     );
     final buttonStyle = ButtonStyle(
-      minimumSize: const WidgetStatePropertyAll(Size.fromHeight(44)),
+      minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
       animationDuration: motionDuration,
       shape: WidgetStatePropertyAll(shape),
     );
@@ -89,6 +106,12 @@ abstract final class EvtTheme {
         margin: EdgeInsets.zero,
         shape: shape,
       ),
+      appBarTheme: AppBarTheme(
+        backgroundColor: canvas,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+      ),
       filledButtonTheme: FilledButtonThemeData(style: buttonStyle),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: buttonStyle.copyWith(
@@ -104,7 +127,7 @@ abstract final class EvtTheme {
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: surface,
+        backgroundColor: canvas,
         indicatorColor: subtle,
         labelTextStyle: WidgetStateProperty.resolveWith(
           (states) => TextStyle(

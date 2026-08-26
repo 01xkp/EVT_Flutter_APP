@@ -1,9 +1,9 @@
 import 'dart:io';
 
 import 'package:drift/native.dart';
-import 'package:evt_ble_app/core/persistence/app_database.dart';
-import 'package:evt_ble_app/features/local_recording/data/drift_local_recording_repository.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/core/persistence/app_database.dart';
+import 'package:aipin/features/local_recording/data/drift_local_recording_repository.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 

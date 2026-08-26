@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:evt_ble_app/features/local_recording/domain/recording_file_store.dart';
+import 'package:aipin/features/local_recording/domain/recording_file_store.dart';
 import 'package:path_provider/path_provider.dart';
 
 class AppRecordingFileStore implements RecordingFileStore {
@@ -10,6 +10,7 @@ class AppRecordingFileStore implements RecordingFileStore {
     : _rootDirectory = (() async => root);
 
   static final _validRelativePath = RegExp(r'^[A-Za-z0-9-]+\.m4a$');
+  static final _validTemporaryFileName = RegExp(r'^[A-Za-z0-9-]+\.part\.m4a$');
 
   final Future<Directory> Function() _rootDirectory;
 
@@ -33,6 +34,25 @@ class AppRecordingFileStore implements RecordingFileStore {
   }
 
   @override
+  Future<void> discard(PendingRecordingFile pending) async {
+    _validateRelativePath(pending.relativePath);
+    final expectedPath = _temporaryPathFor(
+      await absolutePathFor(pending.relativePath),
+    );
+    if (pending.temporaryPath != expectedPath) {
+      throw const RecordingFileException('录音临时文件路径无效。');
+    }
+    final file = File(expectedPath);
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } on FileSystemException catch (error) {
+      throw RecordingFileException('无法删除录音临时文件：${error.message}');
+    }
+  }
+
+  @override
   Future<void> delete(String relativePath) async {
     final file = File(await absolutePathFor(relativePath));
     if (!await file.exists()) {
@@ -42,6 +62,29 @@ class AppRecordingFileStore implements RecordingFileStore {
       await file.delete();
     } on FileSystemException catch (error) {
       throw RecordingFileException('无法删除录音文件：${error.message}');
+    }
+  }
+
+  @override
+  Future<bool> exists(String relativePath) async {
+    return File(await absolutePathFor(relativePath)).exists();
+  }
+
+  @override
+  Future<void> cleanupOrphanedTemporaryFiles() async {
+    final directory = await _recordingsDirectory();
+    try {
+      await for (final entity in directory.list(followLinks: false)) {
+        if (entity is! File) {
+          continue;
+        }
+        final fileName = entity.path.split(Platform.pathSeparator).last;
+        if (_validTemporaryFileName.hasMatch(fileName)) {
+          await entity.delete();
+        }
+      }
+    } on FileSystemException catch (error) {
+      throw RecordingFileException('无法清理临时录音文件：${error.message}');
     }
   }
 

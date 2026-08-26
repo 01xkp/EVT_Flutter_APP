@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:evt_ble_app/core/ble/ble_models.dart';
-import 'package:evt_ble_app/core/ble/ble_transport.dart';
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/core/ble/ble_models.dart';
+import 'package:aipin/core/ble/ble_transport.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart' as reactive;
 import 'package:permission_handler/permission_handler.dart';
 
@@ -22,6 +22,15 @@ class ReactiveBleTransport implements BleTransport {
   Stream<DeviceCandidate> scan() async* {
     try {
       await _ensureScanPermission();
+      final status = await _ble.statusStream.firstWhere(
+        (status) => status != reactive.BleStatus.unknown,
+      );
+      if (status == reactive.BleStatus.poweredOff) {
+        throw BleTransportException(
+          EvtFailure.environment(message: '蓝牙未开启。'),
+          issue: BleTransportIssue.bluetoothOff,
+        );
+      }
       await for (final device in _ble.scanForDevices(
         withServices: const [],
         scanMode: reactive.ScanMode.lowLatency,
@@ -38,6 +47,8 @@ class ReactiveBleTransport implements BleTransport {
           discoveredAt: DateTime.now(),
         );
       }
+    } on BleTransportException {
+      rethrow;
     } catch (error, stackTrace) {
       Error.throwWithStackTrace(
         BleTransportException(

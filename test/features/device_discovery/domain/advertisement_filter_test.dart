@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/features/device_discovery/domain/advertisement_filter.dart';
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/features/device_discovery/domain/advertisement_filter.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -12,16 +12,25 @@ void main() {
     discoveredAt: DateTime(2026, 8, 21),
   );
 
-  test('accepts a matching documented broadcast', () {
-    final evaluation = const AdvertisementFilter().evaluate(matchingCandidate);
+  test(
+    'accepts a matching broadcast while discovery filtering is disabled',
+    () {
+      final evaluation = const AdvertisementFilter().evaluate(
+        matchingCandidate,
+      );
 
-    expect(evaluation.matches, isTrue);
-    expect(evaluation.reasons, contains('厂商数据 A3 89'));
-  });
+      expect(evaluation.matches, isTrue);
+      expect(evaluation.reasons, isEmpty);
+    },
+  );
 
-  test('rejects a candidate that is missing the documented service UUID', () {
-    final candidate = matchingCandidate.copyWith(serviceUuids: const []);
+  test('accepts an arbitrary Bluetooth broadcast', () {
+    final candidate = matchingCandidate.copyWith(
+      name: '',
+      manufacturerData: const [],
+      serviceUuids: const [],
+    );
 
-    expect(const AdvertisementFilter().matches(candidate), isFalse);
+    expect(const AdvertisementFilter().matches(candidate), isTrue);
   });
 }

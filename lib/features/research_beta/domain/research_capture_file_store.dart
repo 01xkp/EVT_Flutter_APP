@@ -42,6 +42,15 @@ abstract interface class ResearchCaptureFileStore {
     required String sourcePath,
   });
   Future<String> absolutePathFor(String relativePath);
+  Future<String> absoluteSegmentPathFor({
+    required String captureId,
+    required int index,
+  });
+  Future<String> segmentOutputPathPrefixFor({required String captureId});
+  Future<String> relativeSegmentPathFor({
+    required String captureId,
+    required int index,
+  });
   Future<void> delete(String relativePath);
   Future<void> deleteAll();
 }

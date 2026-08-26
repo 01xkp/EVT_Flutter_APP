@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/core/ble/device_profile.dart';
-import 'package:evt_ble_app/features/settings/presentation/settings_page.dart';
+import 'package:aipin/core/ble/device_profile.dart';
+import 'package:aipin/features/settings/presentation/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

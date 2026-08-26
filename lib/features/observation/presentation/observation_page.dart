@@ -1,14 +1,14 @@
-import 'package:evt_ble_app/core/design_system/widgets/app_button.dart';
-import 'package:evt_ble_app/core/design_system/widgets/status_label.dart';
-import 'package:evt_ble_app/core/protocol/device_event.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
-import 'package:evt_ble_app/features/evidence/domain/evidence_bundle.dart';
-import 'package:evt_ble_app/features/evidence/domain/evidence_repository.dart';
-import 'package:evt_ble_app/features/evidence/domain/evidence_source_records.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_run.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_scenario.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_verdict.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_verifier.dart';
+import 'package:aipin/core/design_system/widgets/app_button.dart';
+import 'package:aipin/core/design_system/widgets/status_label.dart';
+import 'package:aipin/core/protocol/device_event.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/evidence/domain/evidence_bundle.dart';
+import 'package:aipin/features/evidence/domain/evidence_repository.dart';
+import 'package:aipin/features/evidence/domain/evidence_source_records.dart';
+import 'package:aipin/features/observation/domain/observation_run.dart';
+import 'package:aipin/features/observation/domain/observation_scenario.dart';
+import 'package:aipin/features/observation/domain/observation_verdict.dart';
+import 'package:aipin/features/observation/domain/observation_verifier.dart';
 import 'package:flutter/material.dart';
 
 class ObservationPage extends StatefulWidget {

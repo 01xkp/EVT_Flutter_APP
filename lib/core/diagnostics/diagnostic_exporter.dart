@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 
 class DiagnosticExporter {
   String format({required EvtFailure failure, DeviceSnapshot? lastSnapshot}) {

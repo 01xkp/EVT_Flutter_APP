@@ -1,21 +1,20 @@
 import 'dart:async';
 
-import 'package:evt_ble_app/core/design_system/evt_theme.dart';
-import 'package:evt_ble_app/core/design_system/widgets/app_confirmation_sheet.dart';
-import 'package:evt_ble_app/core/design_system/widgets/status_label.dart';
-import 'package:evt_ble_app/features/local_recording/application/recording_controller.dart';
+import 'package:aipin/core/design_system/evt_theme.dart';
+import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
+import 'package:aipin/core/design_system/widgets/status_label.dart';
+import 'package:aipin/features/local_recording/application/recording_controller.dart';
+import 'package:aipin/features/local_recording/presentation/recording_level_meter.dart';
 import 'package:flutter/material.dart';
 
 class ActiveRecordingPage extends StatefulWidget {
   const ActiveRecordingPage({
     super.key,
     required this.controller,
-    this.onFinished,
     this.startOnOpen = true,
   });
 
   final RecordingController controller;
-  final VoidCallback? onFinished;
   final bool startOnOpen;
 
   @override
@@ -24,18 +23,59 @@ class ActiveRecordingPage extends StatefulWidget {
 
 class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
   var _wasActive = false;
+  var _saveRequested = false;
+  Animation<double>? _routeAnimation;
+  var _startScheduled = false;
+  var _routeObservationScheduled = false;
 
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_onControllerChanged);
-    if (widget.startOnOpen && !widget.controller.state.isCaptureActive) {
-      unawaited(widget.controller.start());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _observeRouteAfterFirstFrame();
+  }
+
+  void _observeRouteAfterFirstFrame() {
+    if (_routeObservationScheduled ||
+        !widget.startOnOpen ||
+        widget.controller.state.isCaptureActive) {
+      return;
     }
+    _routeObservationScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _routeObservationScheduled = false;
+      if (mounted) {
+        _bindRouteAnimation();
+      }
+    });
+  }
+
+  void _bindRouteAnimation() {
+    if (!widget.startOnOpen || widget.controller.state.isCaptureActive) {
+      return;
+    }
+    final routeAnimation = ModalRoute.of(context)?.animation;
+    if (identical(routeAnimation, _routeAnimation)) {
+      return;
+    }
+    _routeAnimation?.removeStatusListener(_onRouteAnimationChanged);
+    _routeAnimation = routeAnimation;
+    if (routeAnimation == null ||
+        routeAnimation.status == AnimationStatus.completed) {
+      _startAfterEntrance();
+      return;
+    }
+    routeAnimation.addStatusListener(_onRouteAnimationChanged);
   }
 
   @override
   void dispose() {
+    _routeAnimation?.removeStatusListener(_onRouteAnimationChanged);
     widget.controller.removeListener(_onControllerChanged);
     super.dispose();
   }
@@ -43,53 +83,74 @@ class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
   @override
   Widget build(BuildContext context) {
     final state = widget.controller.state;
-    return PopScope<void>(
-      canPop: !state.isCaptureActive,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) {
-          unawaited(_confirmExit(context));
-        }
-      },
-      child: Scaffold(
-        appBar: AppBar(title: const Text('本机录音')),
-        body: SafeArea(
-          top: false,
-          child: LayoutBuilder(
-            builder: (context, constraints) => Center(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: constraints.maxWidth > 600 ? 520 : double.infinity,
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        _formatElapsed(state.elapsed),
-                        style: Theme.of(context).textTheme.displaySmall
-                            ?.copyWith(
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                            ),
-                      ),
-                      const SizedBox(height: 20),
-                      _LevelMeter(value: state.amplitude),
-                      const SizedBox(height: 20),
-                      AnimatedSwitcher(
-                        duration: EvtTheme.motionDuration,
-                        child: _StatusText(state: state),
-                      ),
-                      const SizedBox(height: 28),
-                      AnimatedSwitcher(
-                        duration: EvtTheme.motionDuration,
-                        child: _Controls(
-                          controller: widget.controller,
-                          state: state,
+    final theme = Theme.of(context);
+    final pageBackground = theme.scaffoldBackgroundColor;
+    return AnnotatedRegion(
+      value: EvtTheme.systemUiOverlayStyle(theme),
+      child: PopScope<void>(
+        canPop: !state.isCaptureActive,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) {
+            unawaited(_exit());
+          }
+        },
+        child: Scaffold(
+          backgroundColor: pageBackground,
+          appBar: AppBar(
+            backgroundColor: pageBackground,
+            surfaceTintColor: Colors.transparent,
+            scrolledUnderElevation: 0,
+            title: const Text('本机录音'),
+            actions: [
+              IconButton(
+                tooltip: '退出录音',
+                onPressed: () => unawaited(_exit()),
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+          body: SafeArea(
+            top: false,
+            child: LayoutBuilder(
+              builder: (context, constraints) => Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: constraints.maxWidth > 600
+                        ? 520
+                        : double.infinity,
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          _formatElapsed(state.elapsed),
+                          style: Theme.of(context).textTheme.displaySmall
+                              ?.copyWith(
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 20),
+                        RecordingLevelMeter(value: state.amplitude),
+                        const SizedBox(height: 20),
+                        AnimatedSwitcher(
+                          duration: EvtTheme.motionDuration,
+                          child: _StatusText(state: state),
+                        ),
+                        const SizedBox(height: 28),
+                        AnimatedSwitcher(
+                          duration: EvtTheme.motionDuration,
+                          child: _Controls(
+                            controller: widget.controller,
+                            state: state,
+                            onStop: _stopAndSave,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -105,10 +166,12 @@ class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
     if (_wasActive &&
         !active &&
         widget.controller.state.phase == ActiveRecordingPhase.idle) {
+      final result = _saveRequested
+          ? widget.controller.lastCompletedRecording
+          : null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        widget.onFinished?.call();
         if (mounted && Navigator.of(context).canPop()) {
-          Navigator.of(context).pop();
+          Navigator.of(context).pop(result);
         }
       });
     }
@@ -118,52 +181,53 @@ class _ActiveRecordingPageState extends State<ActiveRecordingPage> {
     }
   }
 
-  Future<void> _confirmExit(BuildContext context) async {
-    final confirmed = await AppConfirmationSheet.show(
-      context,
-      title: '结束录音？',
-      message: '继续录音可保留当前内容；结束后会保存到本机。',
-      cancelLabel: '继续录音',
-      confirmLabel: '结束并保存',
-    );
-    if (confirmed) {
-      await widget.controller.stop();
+  void _onRouteAnimationChanged(AnimationStatus status) {
+    if (status == AnimationStatus.completed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _startAfterEntrance();
+        }
+      });
     }
+  }
+
+  void _startAfterEntrance() {
+    if (_startScheduled ||
+        !widget.startOnOpen ||
+        widget.controller.state.isCaptureActive) {
+      return;
+    }
+    _startScheduled = true;
+    unawaited(widget.controller.start());
+  }
+
+  Future<void> _exit() async {
+    if (widget.controller.state.isCaptureActive) {
+      final confirmed = await AppConfirmationSheet.show(
+        context,
+        title: '退出录音？',
+        message: '退出后本次录音不会保存。',
+        cancelLabel: '继续录音',
+        confirmLabel: '确认退出',
+        variant: AppConfirmationVariant.destructive,
+      );
+      if (confirmed && widget.controller.state.isCaptureActive) {
+        _saveRequested = false;
+        await widget.controller.discard();
+      }
+    } else if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  void _stopAndSave() {
+    _saveRequested = true;
+    unawaited(widget.controller.stop());
   }
 
   String _formatElapsed(Duration value) {
     String part(int item) => item.toString().padLeft(2, '0');
     return '${part(value.inHours)}:${part(value.inMinutes.remainder(60))}:${part(value.inSeconds.remainder(60))}';
-  }
-}
-
-class _LevelMeter extends StatelessWidget {
-  const _LevelMeter({required this.value});
-
-  final double value;
-
-  @override
-  Widget build(BuildContext context) {
-    final level = value.clamp(0.0, 1.0);
-    return SizedBox(
-      height: 36,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          for (var index = 0; index < 9; index += 1)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: AnimatedContainer(
-                duration: EvtTheme.motionDuration,
-                width: 4,
-                height: 8 + level * (index.isEven ? 28 : 20),
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-        ],
-      ),
-    );
   }
 }
 
@@ -187,6 +251,12 @@ class _StatusText extends StatelessWidget {
         label: '已暂停',
         kind: StatusKind.neutral,
       ),
+      ActiveRecordingPhase.starting => const StatusLabel(
+        key: ValueKey('starting'),
+        icon: Icons.mic_none_outlined,
+        label: '正在准备录音',
+        kind: StatusKind.neutral,
+      ),
       ActiveRecordingPhase.permissionDenied => const StatusLabel(
         key: ValueKey('permissionDenied'),
         icon: Icons.mic_off_outlined,
@@ -205,10 +275,15 @@ class _StatusText extends StatelessWidget {
 }
 
 class _Controls extends StatelessWidget {
-  const _Controls({required this.controller, required this.state});
+  const _Controls({
+    required this.controller,
+    required this.state,
+    required this.onStop,
+  });
 
   final RecordingController controller;
   final ActiveRecordingState state;
+  final VoidCallback onStop;
 
   @override
   Widget build(BuildContext context) {
@@ -223,7 +298,7 @@ class _Controls extends StatelessWidget {
           tooltip: '结束录音',
           icon: Icons.stop_outlined,
           destructive: true,
-          onPressed: () => unawaited(controller.stop()),
+          onPressed: onStop,
         ),
       ],
       ActiveRecordingPhase.paused => [
@@ -236,7 +311,7 @@ class _Controls extends StatelessWidget {
           tooltip: '结束录音',
           icon: Icons.stop_outlined,
           destructive: true,
-          onPressed: () => unawaited(controller.stop()),
+          onPressed: onStop,
         ),
       ],
       ActiveRecordingPhase.permissionDenied || ActiveRecordingPhase.error => [

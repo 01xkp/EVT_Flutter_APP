@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
-import 'package:evt_ble_app/features/device_session/presentation/session_failure_panel.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/features/device_session/presentation/session_failure_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

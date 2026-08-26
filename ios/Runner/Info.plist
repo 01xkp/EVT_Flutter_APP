@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Evt Ble App</string>
+	<string>AIPIN 声存</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>evt_ble_app</string>
+	<string>AIPIN 声存</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -27,7 +27,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>用于扫描并连接 EVT 测试设备，读取真实状态以完成内部验证。</string>
+	<string>用于扫描并连接附近的智能录音设备。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>用于录制并保存在本机的语音记录。</string>
 	<key>UIBackgroundModes</key>

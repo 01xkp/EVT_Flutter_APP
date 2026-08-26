@@ -22,21 +22,17 @@ void main() {
     },
   );
 
-  test('AI Voice duration must be from two to sixty seconds', () {
+  test('AI Voice duration must be at least two seconds', () {
     expect(
       () => ResearchCapture.validateDuration(const Duration(seconds: 1)),
       throwsArgumentError,
     );
     expect(
-      () => ResearchCapture.validateDuration(const Duration(seconds: 61)),
-      throwsArgumentError,
-    );
-    expect(
-      () => ResearchCapture.validateDuration(const Duration(seconds: 2)),
+      () => ResearchCapture.validateDuration(const Duration(hours: 2)),
       returnsNormally,
     );
     expect(
-      () => ResearchCapture.validateDuration(const Duration(seconds: 60)),
+      () => ResearchCapture.validateDuration(const Duration(seconds: 2)),
       returnsNormally,
     );
   });

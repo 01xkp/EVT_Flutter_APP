@@ -1,7 +1,7 @@
 import 'dart:io';
 
-import 'package:evt_ble_app/features/local_recording/data/app_recording_file_store.dart';
-import 'package:evt_ble_app/features/local_recording/domain/recording_file_store.dart';
+import 'package:aipin/features/local_recording/data/app_recording_file_store.dart';
+import 'package:aipin/features/local_recording/domain/recording_file_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -44,8 +44,41 @@ void main() {
     },
   );
 
+  test(
+    'discards a temporary capture without creating a completed recording',
+    () async {
+      final pending = await store.createPending(id: 'recording-3');
+      await File(pending.temporaryPath).writeAsBytes([4, 5]);
+
+      await store.discard(pending);
+
+      expect(File(pending.temporaryPath).exists(), completion(isFalse));
+      expect(
+        File(await store.absolutePathFor(pending.relativePath)).exists(),
+        completion(isFalse),
+      );
+    },
+  );
+
+  test(
+    'cleans orphaned temporary files without deleting completed captures',
+    () async {
+      final orphan = await store.createPending(id: 'orphan-recording');
+      await File(orphan.temporaryPath).writeAsBytes([4, 5]);
+
+      final pendingFinal = await store.createPending(id: 'completed-recording');
+      await File(pendingFinal.temporaryPath).writeAsBytes([6, 7, 8]);
+      final completed = await store.finalize(pendingFinal);
+
+      await store.cleanupOrphanedTemporaryFiles();
+
+      expect(File(orphan.temporaryPath).exists(), completion(isFalse));
+      expect(File(completed.absolutePath).exists(), completion(isTrue));
+    },
+  );
+
   test('rejects empty captures and unsafe relative paths', () async {
-    final pending = await store.createPending(id: 'recording-3');
+    final pending = await store.createPending(id: 'recording-4');
     await File(pending.temporaryPath).create(recursive: true);
 
     await expectLater(

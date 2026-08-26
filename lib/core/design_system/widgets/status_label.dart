@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/core/design_system/evt_theme.dart';
+import 'package:aipin/core/design_system/evt_theme.dart';
 import 'package:flutter/material.dart';
 
 enum StatusKind { neutral, positive, danger }

@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/onboarding/application/onboarding_controller.dart';
+import 'package:aipin/features/onboarding/application/onboarding_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_onboarding_store.dart';

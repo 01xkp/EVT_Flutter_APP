@@ -39,19 +39,55 @@ void main() {
     controller.complete(
       taskId: 'capture-1',
       completedAt: DateTime(2026, 8, 25, 10, 56),
+      completionLabel: '转写完成',
     );
     controller.complete(
       taskId: 'capture-2',
       completedAt: DateTime(2026, 8, 25, 10, 57),
     );
     await tester.pump();
-    expect(find.text('8-25 10:56 完成'), findsOneWidget);
+    expect(find.text('8-25 10:56 转写完成'), findsOneWidget);
     expect(find.text('8-25 10:57 完成'), findsNothing);
 
     await tester.pump(const Duration(seconds: 2));
     await tester.pump(const Duration(milliseconds: 180));
-    expect(find.text('8-25 10:56 完成'), findsNothing);
+    expect(find.text('8-25 10:56 转写完成'), findsNothing);
     expect(find.text('8-25 10:57 完成'), findsOneWidget);
+    controller.dispose();
+  });
+
+  testWidgets('shows a summary failure after ending an active task', (
+    tester,
+  ) async {
+    final controller = AiProcessingToastController();
+    await tester.pumpWidget(_host(controller));
+
+    controller.showProcessing(
+      taskId: 'capture-1',
+      stage: AiProcessingToastStage.summarizing,
+    );
+    await tester.pump();
+    expect(find.text('正在总结'), findsOneWidget);
+
+    controller.dismiss('capture-1');
+    await tester.pump();
+
+    expect(find.text('AI 总结失败'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    controller.dispose();
+  });
+
+  testWidgets('shows a supplied failure when no processing stage remains', (
+    tester,
+  ) async {
+    final controller = AiProcessingToastController();
+    await tester.pumpWidget(_host(controller));
+
+    controller.dismiss('capture-1', failureLabel: 'AI 总结失败');
+    await tester.pump();
+
+    expect(find.text('AI 总结失败'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
     controller.dispose();
   });
 

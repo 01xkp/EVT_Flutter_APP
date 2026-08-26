@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/core/diagnostics/diagnostic_exporter.dart';
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
+import 'package:aipin/core/diagnostics/diagnostic_exporter.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/device_fixtures.dart';

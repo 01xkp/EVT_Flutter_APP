@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/local_recording/domain/audio_recorder_port.dart';
+import 'package:aipin/features/local_recording/domain/audio_recorder_port.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_audio_recorder.dart';

@@ -1,6 +1,8 @@
-import 'package:evt_ble_app/features/local_recording/application/recording_controller.dart';
-import 'package:evt_ble_app/features/local_recording/domain/audio_recorder_port.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording.dart';
+import 'dart:async';
+
+import 'package:aipin/features/local_recording/application/recording_controller.dart';
+import 'package:aipin/features/local_recording/domain/audio_recorder_port.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_audio_recorder.dart';
@@ -51,6 +53,48 @@ void main() {
   );
 
   test(
+    'discard stops capture and removes temporary data without saving',
+    () async {
+      await controller.start();
+
+      await controller.discard();
+
+      expect(recorder.operations, ['start', 'stop']);
+      expect(files.discardedIds, {'recording-1'});
+      expect(repository.values, isEmpty);
+      expect(background.stopCalls, 1);
+      expect(controller.state.phase, ActiveRecordingPhase.idle);
+    },
+  );
+
+  test(
+    'discard during startup stops a background service that just started',
+    () async {
+      final delayedBackground = _DelayedBackgroundService();
+      final startupController = RecordingController(
+        repository: repository,
+        recorder: recorder,
+        files: files,
+        background: delayedBackground,
+        idGenerator: () => 'recording-2',
+        now: () => DateTime(2026, 8, 21, 9, 28),
+      );
+      addTearDown(startupController.close);
+
+      unawaited(startupController.start());
+      await delayedBackground.started;
+      await startupController.discard();
+      delayedBackground.allowStartToFinish();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(delayedBackground.stopCalls, 1);
+      expect(repository.values, isEmpty);
+      expect(files.discardedIds, {'recording-2'});
+      expect(startupController.state.phase, ActiveRecordingPhase.idle);
+    },
+  );
+
+  test(
     'denied permission does not create metadata or start a service',
     () async {
       recorder.permission = RecorderPermission.denied;
@@ -75,4 +119,42 @@ void main() {
       expect(background.stopCalls, 1);
     },
   );
+
+  test('a capture shorter than two seconds is discarded', () async {
+    recorder.stopDuration = const Duration(milliseconds: 1999);
+
+    await controller.start();
+    await controller.stop();
+
+    expect(repository.values, isEmpty);
+    expect(files.discardedIds, {'recording-1'});
+    expect(controller.state.phase, ActiveRecordingPhase.error);
+  });
+
+  test('a save failure discards its temporary file and metadata', () async {
+    files.failFinalization = true;
+
+    await controller.start();
+    await controller.stop();
+
+    expect(repository.values, isEmpty);
+    expect(files.discardedIds, {'recording-1'});
+    expect(controller.state.phase, ActiveRecordingPhase.error);
+  });
+}
+
+class _DelayedBackgroundService extends FakeRecordingBackgroundService {
+  final _started = Completer<void>();
+  final _canFinishStarting = Completer<void>();
+
+  Future<void> get started => _started.future;
+
+  void allowStartToFinish() => _canFinishStarting.complete();
+
+  @override
+  Future<void> start() async {
+    startCalls += 1;
+    _started.complete();
+    await _canFinishStarting.future;
+  }
 }

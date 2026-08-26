@@ -1,13 +1,17 @@
 import 'dart:async';
 
-import 'package:evt_ble_app/features/local_recording/application/recording_library_controller.dart';
-import 'package:evt_ble_app/features/local_recording/presentation/recording_list_item.dart';
+import 'package:aipin/core/design_system/widgets/app_dialog.dart';
+import 'package:aipin/features/local_recording/application/recording_library_controller.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/local_recording/presentation/recording_list_item.dart';
+import 'package:aipin/features/local_recording/presentation/rename_recording_sheet.dart';
 import 'package:flutter/material.dart';
 
 class LocalRecordingList extends StatelessWidget {
-  const LocalRecordingList({super.key, required this.controller});
+  const LocalRecordingList({super.key, required this.controller, this.onOpen});
 
   final RecordingLibraryController controller;
+  final ValueChanged<LocalRecording>? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -29,17 +33,38 @@ class LocalRecordingList extends StatelessWidget {
             final recording = state.items[index];
             return RecordingListItem(
               recording: recording,
-              isSelected: state.selectedPlaybackId == recording.id,
-              playbackState: state.playbackState,
-              onPlay: () => unawaited(controller.play(recording.id)),
-              onPause: () => unawaited(controller.pause()),
-              onRename: () {},
-              onDelete: () {},
-              showActions: false,
+              onOpen: onOpen == null ? null : () => onOpen!(recording),
+              showActions: true,
+              showDeleteAction: false,
+              showDeleteButton: true,
+              onRename: () => unawaited(_rename(context, recording)),
+              onDelete: () => unawaited(_delete(context, recording)),
             );
           },
         );
       },
     );
+  }
+
+  Future<void> _delete(BuildContext context, LocalRecording recording) async {
+    final approved = await AppDialog.confirmDestructive(
+      context,
+      title: '删除这条录音？',
+      message: '删除后将无法恢复本机音频文件。',
+      confirmLabel: '删除',
+    );
+    if (approved) {
+      await controller.delete(recording);
+    }
+  }
+
+  Future<void> _rename(BuildContext context, LocalRecording recording) async {
+    final value = await RenameRecordingSheet.show(
+      context,
+      title: recording.title,
+    );
+    if (value != null) {
+      await controller.rename(recording, value);
+    }
   }
 }

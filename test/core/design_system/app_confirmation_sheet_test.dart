@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/core/design_system/widgets/app_confirmation_sheet.dart';
-import 'package:evt_ble_app/core/design_system/widgets/permission_rationale_sheet.dart';
+import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
+import 'package:aipin/core/design_system/widgets/permission_rationale_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

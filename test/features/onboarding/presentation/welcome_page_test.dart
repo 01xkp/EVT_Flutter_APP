@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/onboarding/presentation/welcome_page.dart';
+import 'package:aipin/features/onboarding/presentation/welcome_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

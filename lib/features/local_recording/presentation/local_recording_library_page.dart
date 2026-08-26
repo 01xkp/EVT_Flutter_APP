@@ -1,11 +1,9 @@
-import 'dart:async';
-
-import 'package:evt_ble_app/core/design_system/widgets/app_dialog.dart';
-import 'package:evt_ble_app/core/design_system/widgets/status_label.dart';
-import 'package:evt_ble_app/features/local_recording/application/recording_library_controller.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording.dart';
-import 'package:evt_ble_app/features/local_recording/presentation/recording_list_item.dart';
-import 'package:evt_ble_app/features/local_recording/presentation/rename_recording_sheet.dart';
+import 'package:aipin/core/design_system/widgets/app_dialog.dart';
+import 'package:aipin/core/design_system/widgets/status_label.dart';
+import 'package:aipin/features/local_recording/application/recording_library_controller.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/local_recording/presentation/recording_list_item.dart';
+import 'package:aipin/features/local_recording/presentation/rename_recording_sheet.dart';
 import 'package:flutter/material.dart';
 
 class LocalRecordingLibraryPage extends StatelessWidget {
@@ -13,13 +11,19 @@ class LocalRecordingLibraryPage extends StatelessWidget {
     super.key,
     required this.controller,
     this.onStartRecording,
+    this.onOpen,
   });
 
   final RecordingLibraryController controller;
   final VoidCallback? onStartRecording;
+  final ValueChanged<LocalRecording>? onOpen;
 
   @override
   Widget build(BuildContext context) {
+    return _buildScaffold(context);
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
@@ -50,6 +54,7 @@ class LocalRecordingLibraryPage extends StatelessWidget {
                     controller: controller,
                     onRename: (recording) => _rename(context, recording),
                     onDelete: (recording) => _delete(context, recording),
+                    onOpen: onOpen,
                   ),
                 ),
               ),
@@ -89,12 +94,14 @@ class _LibraryBody extends StatelessWidget {
     required this.controller,
     required this.onRename,
     required this.onDelete,
+    this.onOpen,
   });
 
   final RecordingLibraryState state;
   final RecordingLibraryController controller;
   final ValueChanged<LocalRecording> onRename;
   final ValueChanged<LocalRecording> onDelete;
+  final ValueChanged<LocalRecording>? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -129,10 +136,7 @@ class _LibraryBody extends StatelessWidget {
         final recording = state.items[itemIndex];
         return RecordingListItem(
           recording: recording,
-          isSelected: state.selectedPlaybackId == recording.id,
-          playbackState: state.playbackState,
-          onPlay: () => unawaited(controller.play(recording.id)),
-          onPause: () => unawaited(controller.pause()),
+          onOpen: onOpen == null ? null : () => onOpen!(recording),
           onRename: () => onRename(recording),
           onDelete: () => onDelete(recording),
         );

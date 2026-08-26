@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/app/app_destination.dart';
+import 'package:aipin/app/app_destination.dart';
 import 'package:flutter/material.dart';
 
 class AppNavigationBar extends StatelessWidget {

@@ -1,5 +1,5 @@
-import 'package:evt_ble_app/core/ble/device_profile.dart';
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/core/ble/device_profile.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 
 class DeviceSession {
   const DeviceSession({

@@ -1,4 +1,5 @@
-import 'package:evt_ble_app/core/design_system/widgets/app_button.dart';
+import 'package:aipin/app/branding/aipin_brand.dart';
+import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:flutter/material.dart';
 
 class WelcomePage extends StatelessWidget {
@@ -25,7 +26,7 @@ class WelcomePage extends StatelessWidget {
                 children: [
                   const Spacer(),
                   Text(
-                    'AIPIN',
+                    AipinBrand.displayName,
                     style: Theme.of(context).textTheme.headlineLarge,
                   ),
                   const SizedBox(height: 12),

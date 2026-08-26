@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:evt_ble_app/core/ble/ble_models.dart';
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
-import 'package:evt_ble_app/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/core/ble/ble_models.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 
 abstract interface class BleTransport {
   Stream<DeviceCandidate> scan();
@@ -13,10 +13,13 @@ abstract interface class BleTransport {
   Future<void> disconnect(String deviceId);
 }
 
+enum BleTransportIssue { bluetoothOff }
+
 class BleTransportException implements Exception {
-  const BleTransportException(this.failure);
+  const BleTransportException(this.failure, {this.issue});
 
   final EvtFailure failure;
+  final BleTransportIssue? issue;
 
   @override
   String toString() => 'BleTransportException(${failure.message})';

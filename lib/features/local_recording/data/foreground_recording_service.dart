@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:evt_ble_app/features/local_recording/domain/recording_background_port.dart';
+import 'package:aipin/features/local_recording/domain/recording_background_port.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 class RecordingBackgroundException implements Exception {

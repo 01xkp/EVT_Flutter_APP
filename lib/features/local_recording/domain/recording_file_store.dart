@@ -33,8 +33,11 @@ class RecordingFileException implements Exception {
 
 abstract interface class RecordingFileStore {
   Future<PendingRecordingFile> createPending({required String id});
+  Future<void> discard(PendingRecordingFile pending);
   Future<CompletedRecordingFile> finalize(PendingRecordingFile pending);
   Future<CompletedRecordingFile?> recoverPartial(String relativePath);
   Future<String> absolutePathFor(String relativePath);
+  Future<bool> exists(String relativePath);
   Future<void> delete(String relativePath);
+  Future<void> cleanupOrphanedTemporaryFiles();
 }

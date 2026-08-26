@@ -1,8 +1,11 @@
-import 'package:evt_ble_app/features/local_recording/domain/recording_file_store.dart';
+import 'package:aipin/features/local_recording/domain/recording_file_store.dart';
 
 class FakeRecordingFileStore implements RecordingFileStore {
   final Map<String, int> recoverablePaths = {};
   final Set<String> deletedPaths = {};
+  final Set<String> discardedIds = {};
+  final Set<String> missingPaths = {};
+  var cleanupTemporaryFilesCalls = 0;
   int finalizedSizeBytes = 160000;
   bool failFinalization = false;
   bool failDelete = false;
@@ -22,11 +25,25 @@ class FakeRecordingFileStore implements RecordingFileStore {
   }
 
   @override
+  Future<void> discard(PendingRecordingFile pending) async {
+    discardedIds.add(pending.id);
+  }
+
+  @override
   Future<void> delete(String relativePath) async {
     if (failDelete) {
       throw const RecordingFileException('无法删除录音文件。');
     }
     deletedPaths.add(relativePath);
+  }
+
+  @override
+  Future<bool> exists(String relativePath) async =>
+      !missingPaths.contains(relativePath);
+
+  @override
+  Future<void> cleanupOrphanedTemporaryFiles() async {
+    cleanupTemporaryFilesCalls += 1;
   }
 
   @override

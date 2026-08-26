@@ -1,6 +1,6 @@
-import 'package:evt_ble_app/core/protocol/device_event.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
-import 'package:evt_ble_app/features/evidence/domain/evidence_bundle.dart';
+import 'package:aipin/core/protocol/device_event.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/evidence/domain/evidence_bundle.dart';
 
 abstract final class EvidenceSourceRecords {
   static EvidenceSourceRecord snapshot(DeviceSnapshot snapshot) {

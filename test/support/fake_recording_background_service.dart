@@ -1,4 +1,4 @@
-import 'package:evt_ble_app/features/local_recording/domain/recording_background_port.dart';
+import 'package:aipin/features/local_recording/domain/recording_background_port.dart';
 
 class FakeRecordingBackgroundService implements RecordingBackgroundPort {
   int startCalls = 0;

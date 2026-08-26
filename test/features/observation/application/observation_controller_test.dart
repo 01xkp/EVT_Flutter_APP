@@ -1,9 +1,9 @@
-import 'package:evt_ble_app/core/protocol/device_event.dart';
-import 'package:evt_ble_app/features/device_session/domain/device_snapshot.dart';
-import 'package:evt_ble_app/features/observation/application/observation_controller.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_scenario.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_verdict.dart';
-import 'package:evt_ble_app/features/observation/domain/observation_verifier.dart';
+import 'package:aipin/core/protocol/device_event.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/observation/application/observation_controller.dart';
+import 'package:aipin/features/observation/domain/observation_scenario.dart';
+import 'package:aipin/features/observation/domain/observation_verdict.dart';
+import 'package:aipin/features/observation/domain/observation_verifier.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/device_fixtures.dart';

@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:evt_ble_app/core/diagnostics/evt_failure.dart';
-import 'package:evt_ble_app/core/protocol/crc16.dart';
-import 'package:evt_ble_app/core/protocol/evt_frame.dart';
+import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/core/protocol/crc16.dart';
+import 'package:aipin/core/protocol/evt_frame.dart';
 
 class EvtProtocolCodec {
   static const _head = 0xED;

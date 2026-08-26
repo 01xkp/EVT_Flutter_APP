@@ -14,6 +14,34 @@ enum ResearchInboxState { processing, needsReview, handled }
 
 enum ResearchCardAction { retained, edited, copied, useful, notUseful }
 
+class ResearchAsrSegment {
+  const ResearchAsrSegment({
+    required this.index,
+    required this.relativePath,
+    this.jobId,
+  }) : assert(index >= 0);
+
+  final int index;
+  final String relativePath;
+  final String? jobId;
+
+  ResearchAsrSegment withJobId(String value) => ResearchAsrSegment(
+    index: index,
+    relativePath: relativePath,
+    jobId: value,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      other is ResearchAsrSegment &&
+      other.index == index &&
+      other.relativePath == relativePath &&
+      other.jobId == jobId;
+
+  @override
+  int get hashCode => Object.hash(index, relativePath, jobId);
+}
+
 class ResearchCapture {
   const ResearchCapture({
     required this.id,
@@ -27,6 +55,7 @@ class ResearchCapture {
     required this.inboxState,
     this.originalLocalRecordingId,
     this.jobId,
+    this.asrSegments = const [],
     this.noteId,
     this.generationTaskId,
     this.rawTranscript,
@@ -54,6 +83,7 @@ class ResearchCapture {
   final ResearchInboxState inboxState;
   final String? originalLocalRecordingId;
   final String? jobId;
+  final List<ResearchAsrSegment> asrSegments;
   final String? noteId;
   final String? generationTaskId;
   final String? rawTranscript;
@@ -74,6 +104,8 @@ class ResearchCapture {
       processingState == ResearchProcessingState.summaryFailed;
 
   bool get canRetry => processingState != ResearchProcessingState.completed;
+
+  bool get hasMultipleAsrSegments => asrSegments.length > 1;
 
   factory ResearchCapture.fromDirectAiVoice({
     required String id,
@@ -120,9 +152,8 @@ class ResearchCapture {
   }
 
   static void validateDuration(Duration duration) {
-    if (duration < const Duration(seconds: 2) ||
-        duration > const Duration(seconds: 60)) {
-      throw ArgumentError.value(duration, 'duration', 'AI 语音仅支持 2 至 60 秒');
+    if (duration < const Duration(seconds: 2)) {
+      throw ArgumentError.value(duration, 'duration', 'AI 语音至少需要 2 秒');
     }
   }
 
@@ -131,6 +162,46 @@ class ResearchCapture {
       processingState: ResearchProcessingState.transcribing,
       inboxState: ResearchInboxState.processing,
       jobId: jobId,
+      failureReason: '',
+    );
+  }
+
+  ResearchCapture withAsrSegments(List<ResearchAsrSegment> segments) {
+    final ordered = List<ResearchAsrSegment>.from(segments)
+      ..sort((left, right) => left.index.compareTo(right.index));
+    for (var index = 0; index < ordered.length; index += 1) {
+      if (ordered[index].index != index) {
+        throw ArgumentError.value(segments, 'segments', '分段索引必须从 0 连续递增。');
+      }
+    }
+    return copyWith(asrSegments: List.unmodifiable(ordered));
+  }
+
+  ResearchCapture withSubmittedAsrSegment({
+    required int index,
+    required String jobId,
+  }) {
+    final updated = asrSegments
+        .map(
+          (segment) =>
+              segment.index == index ? segment.withJobId(jobId) : segment,
+        )
+        .toList(growable: false);
+    if (!updated.any((segment) => segment.index == index)) {
+      throw ArgumentError.value(index, 'index', '未找到对应的音频分段。');
+    }
+    return withAsrSegments(updated);
+  }
+
+  ResearchCapture toSegmentedTranscribing() {
+    if (asrSegments.isEmpty ||
+        asrSegments.any((segment) => segment.jobId == null)) {
+      throw StateError('所有音频分段提交成功后才能开始转写。');
+    }
+    return copyWith(
+      processingState: ResearchProcessingState.transcribing,
+      inboxState: ResearchInboxState.processing,
+      jobId: jobId ?? asrSegments.first.jobId,
       failureReason: '',
     );
   }
@@ -196,10 +267,48 @@ class ResearchCapture {
   ResearchCapture withCorrectedTranscript(String value) =>
       copyWith(correctedTranscript: value.trim());
 
+  ResearchCapture restartSummary() {
+    return ResearchCapture(
+      id: id,
+      participantId: participantId,
+      origin: origin,
+      sourceType: sourceType,
+      relativePath: relativePath,
+      duration: duration,
+      createdAt: createdAt,
+      processingState: ResearchProcessingState.summarizing,
+      inboxState: ResearchInboxState.processing,
+      originalLocalRecordingId: originalLocalRecordingId,
+      jobId: jobId,
+      asrSegments: asrSegments,
+      rawTranscript: rawTranscript,
+      correctedTranscript: correctedTranscript,
+      openedAt: openedAt,
+    );
+  }
+
+  ResearchCapture restartTranscription() {
+    return ResearchCapture(
+      id: id,
+      participantId: participantId,
+      origin: origin,
+      sourceType: sourceType,
+      relativePath: relativePath,
+      duration: duration,
+      createdAt: createdAt,
+      processingState: ResearchProcessingState.uploading,
+      inboxState: ResearchInboxState.processing,
+      originalLocalRecordingId: originalLocalRecordingId,
+      asrSegments: const [],
+      openedAt: openedAt,
+    );
+  }
+
   ResearchCapture copyWith({
     ResearchProcessingState? processingState,
     ResearchInboxState? inboxState,
     String? jobId,
+    List<ResearchAsrSegment>? asrSegments,
     String? noteId,
     String? generationTaskId,
     String? rawTranscript,
@@ -225,6 +334,7 @@ class ResearchCapture {
       inboxState: inboxState ?? this.inboxState,
       originalLocalRecordingId: originalLocalRecordingId,
       jobId: jobId ?? this.jobId,
+      asrSegments: asrSegments ?? this.asrSegments,
       noteId: noteId ?? this.noteId,
       generationTaskId: generationTaskId ?? this.generationTaskId,
       rawTranscript: rawTranscript ?? this.rawTranscript,

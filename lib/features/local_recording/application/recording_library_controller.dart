@@ -1,9 +1,9 @@
 import 'dart:async';
 
-import 'package:evt_ble_app/features/local_recording/domain/audio_player_port.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording.dart';
-import 'package:evt_ble_app/features/local_recording/domain/local_recording_repository.dart';
-import 'package:evt_ble_app/features/local_recording/domain/recording_file_store.dart';
+import 'package:aipin/features/local_recording/domain/audio_player_port.dart';
+import 'package:aipin/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/local_recording/domain/local_recording_repository.dart';
+import 'package:aipin/features/local_recording/domain/recording_file_store.dart';
 import 'package:flutter/foundation.dart';
 
 class RecordingLibraryState {
@@ -130,6 +130,7 @@ class RecordingLibraryController extends ChangeNotifier {
       return;
     }
     await _player.pause();
+    _setState(_state.copyWith(playbackState: AudioPlaybackState.paused));
   }
 
   Future<void> play(String id) async {
@@ -144,7 +145,6 @@ class RecordingLibraryController extends ChangeNotifier {
     }
     try {
       final absolutePath = await _files.absolutePathFor(recording.relativePath);
-      await _player.play(absolutePath);
       _setState(
         _state.copyWith(
           selectedPlaybackId: id,
@@ -153,10 +153,25 @@ class RecordingLibraryController extends ChangeNotifier {
           errorMessage: null,
         ),
       );
+      await _player.play(absolutePath);
     } on RecordingFileException catch (error) {
-      _setState(_state.copyWith(errorMessage: error.message));
+      _setState(
+        _state.copyWith(
+          selectedPlaybackId: null,
+          playbackState: AudioPlaybackState.idle,
+          playbackPosition: Duration.zero,
+          errorMessage: error.message,
+        ),
+      );
     } catch (_) {
-      _setState(_state.copyWith(errorMessage: '无法播放这条录音。'));
+      _setState(
+        _state.copyWith(
+          selectedPlaybackId: null,
+          playbackState: AudioPlaybackState.idle,
+          playbackPosition: Duration.zero,
+          errorMessage: '无法播放这条录音。',
+        ),
+      );
     }
   }
 
@@ -202,7 +217,9 @@ class RecordingLibraryController extends ChangeNotifier {
   }
 
   void _onPlayerState(AudioPlaybackState playbackState) {
-    if (!_closed && _state.selectedPlaybackId != null) {
+    if (!_closed &&
+        _state.selectedPlaybackId != null &&
+        playbackState == AudioPlaybackState.completed) {
       _setState(_state.copyWith(playbackState: playbackState));
     }
   }
