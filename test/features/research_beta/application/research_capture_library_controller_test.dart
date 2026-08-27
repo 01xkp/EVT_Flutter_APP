@@ -102,6 +102,66 @@ void main() {
     expect(saved.inboxState, ResearchInboxState.handled);
     expect(repository.events.single.action, ResearchCardAction.edited);
   });
+
+  test(
+    'renames only the requested document and records an edit action',
+    () async {
+      final capture = _completedCapture().withDocumentTitle(
+        ResearchDocumentType.summary,
+        '原总结名称',
+      );
+      await repository.save(capture);
+
+      await controller.renameDocument(
+        capture,
+        ResearchDocumentType.transcript,
+        '  访谈:转写.txt ',
+      );
+
+      final saved = repository.captures[capture.id]!;
+      expect(saved.transcriptTitle, '访谈转写');
+      expect(saved.summaryTitle, '原总结名称');
+      expect(saved.inboxState, ResearchInboxState.handled);
+      expect(repository.events.single.action, ResearchCardAction.edited);
+    },
+  );
+
+  test('rejects an empty or fully illegal document name', () async {
+    final capture = _completedCapture().withDocumentTitle(
+      ResearchDocumentType.summary,
+      '已有名称',
+    );
+    await repository.save(capture);
+
+    await expectLater(
+      controller.renameDocument(
+        capture,
+        ResearchDocumentType.summary,
+        ' \\ / : * ? " < > | ',
+      ),
+      throwsArgumentError,
+    );
+
+    expect(repository.captures[capture.id]!.summaryTitle, '已有名称');
+    expect(repository.events, isEmpty);
+  });
+
+  test('does not record an edit when a document name is unchanged', () async {
+    final capture = _completedCapture();
+    await repository.save(capture);
+
+    await controller.renameDocument(
+      capture,
+      ResearchDocumentType.transcript,
+      '转写',
+    );
+
+    final saved = repository.captures[capture.id]!;
+    expect(saved.transcriptTitle, isNull);
+    expect(saved.inboxState, ResearchInboxState.needsReview);
+    expect(repository.events, isEmpty);
+    expect(await repository.loadAggregate(capture.participantId), isNull);
+  });
 }
 
 ResearchCapture _completedCapture() {

@@ -146,4 +146,83 @@ void main() {
     expect(find.byTooltip('复制总结'), findsOneWidget);
     expect(find.byTooltip('导出总结'), findsOneWidget);
   });
+
+  testWidgets('shows a custom summary title and forwards document rename', (
+    tester,
+  ) async {
+    ResearchDocumentType? requestedType;
+    final capture = ResearchCapture(
+      id: 'capture-1',
+      participantId: 'participant-1',
+      origin: ResearchCaptureOrigin.directAiVoice,
+      sourceType: ResearchCapture.sourceTypeResearchImport,
+      relativePath: 'recordings/capture-1.m4a',
+      duration: const Duration(seconds: 10),
+      createdAt: DateTime(2026, 8, 25),
+      processingState: ResearchProcessingState.completed,
+      inboxState: ResearchInboxState.needsReview,
+      summary: '总结正文',
+      summaryTitle: '客户访谈纪要',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ResearchCaptureSummaryPanel(
+            capture: capture,
+            onRetry: () async {},
+            onRenameDocument: (type) async => requestedType = type,
+            onSaveMarkdownSummary: (_) async {},
+            onCopy: (_) async {},
+            onExport: (_) async {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('客户访谈纪要'), findsOneWidget);
+    await tester.tap(find.byTooltip('重命名总结'));
+    expect(requestedType, ResearchDocumentType.summary);
+  });
+
+  testWidgets('keeps the two-row summary toolbar within a 320dp viewport', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final capture = ResearchCapture(
+      id: 'capture-1',
+      participantId: 'participant-1',
+      origin: ResearchCaptureOrigin.directAiVoice,
+      sourceType: ResearchCapture.sourceTypeResearchImport,
+      relativePath: 'recordings/capture-1.m4a',
+      duration: const Duration(seconds: 10),
+      createdAt: DateTime(2026, 8, 25),
+      processingState: ResearchProcessingState.completed,
+      inboxState: ResearchInboxState.needsReview,
+      summary: '总结正文',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ResearchCaptureSummaryPanel(
+            capture: capture,
+            onRetry: () async {},
+            onSaveMarkdownSummary: (_) async {},
+            onCopy: (_) async {},
+            onExport: (_) async {},
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byTooltip('编辑总结'));
+    await tester.pump();
+
+    expect(
+      tester.getSize(find.byKey(const ValueKey('markdown-format-row-1'))).width,
+      lessThanOrEqualTo(280),
+    );
+    expect(tester.takeException(), isNull);
+  });
 }

@@ -20,6 +20,8 @@ class ResearchCaptures extends Table {
   TextColumn get rawTranscript => text().nullable()();
   TextColumn get correctedTranscript => text().nullable()();
   TextColumn get title => text().nullable()();
+  TextColumn get transcriptTitle => text().nullable()();
+  TextColumn get summaryTitle => text().nullable()();
   TextColumn get summary => text().nullable()();
   TextColumn get tagsJson => text().withDefault(const Constant('[]'))();
   TextColumn get actionContext => text().nullable()();

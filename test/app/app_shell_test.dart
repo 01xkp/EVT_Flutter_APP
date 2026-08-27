@@ -111,34 +111,36 @@ void main() {
   ) async {
     final repository = FakeResearchCaptureRepository();
     final processing = _researchProcessing(repository);
+    final recording = _savedLocalRecording();
     addTearDown(processing.dispose);
     await tester.pumpWidget(
       _appWithResearchProcessing(
         processing: processing,
         repository: repository,
+        localRecordings: <LocalRecording>[recording],
       ),
     );
     await tester.pump();
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump();
-    await repository.save(_transcribingCapture('capture-1'));
+    await repository.save(_transcribingCapture('capture-1', recording.id));
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     await processing.process('capture-1');
     await tester.pump();
-    expect(find.text('8-25 10:00 完成'), findsNothing);
+    expect(find.text('客户访谈 完成'), findsNothing);
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump();
 
-    expect(find.text('8-25 10:00 转写完成'), findsOneWidget);
+    expect(find.text('客户访谈 转写完成'), findsOneWidget);
     expect(find.text('AI 转写和总结已完成'), findsNothing);
 
     await tester.pump(const Duration(seconds: 2));
     await tester.pump(const Duration(milliseconds: 180));
 
-    expect(find.text('8-25 10:00 转写完成'), findsNothing);
-    expect(find.text('8-25 10:00 完成'), findsOneWidget);
+    expect(find.text('客户访谈 转写完成'), findsNothing);
+    expect(find.text('客户访谈 完成'), findsOneWidget);
   });
 
   testWidgets('does not coalesce AI completions received while inactive', (
@@ -146,18 +148,26 @@ void main() {
   ) async {
     final repository = FakeResearchCaptureRepository();
     final processing = _researchProcessing(repository);
+    final recording = _savedLocalRecording();
+    final secondRecording = _savedLocalRecording(
+      id: 'recording-2',
+      title: '项目复盘',
+    );
     addTearDown(processing.dispose);
     await tester.pumpWidget(
       _appWithResearchProcessing(
         processing: processing,
         repository: repository,
+        localRecordings: <LocalRecording>[recording, secondRecording],
       ),
     );
     await tester.pump();
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump();
-    await repository.save(_transcribingCapture('capture-1'));
-    await repository.save(_transcribingCapture('capture-2'));
+    await repository.save(_transcribingCapture('capture-1', recording.id));
+    await repository.save(
+      _transcribingCapture('capture-2', secondRecording.id),
+    );
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     await Future.wait([
@@ -169,7 +179,7 @@ void main() {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump();
 
-    expect(find.text('8-25 10:00 转写完成'), findsOneWidget);
+    expect(find.text('客户访谈 转写完成'), findsOneWidget);
     expect(find.text('2 条 AI 处理已完成'), findsNothing);
     expect(find.text('AI 转写和总结已完成'), findsNothing);
   });
@@ -223,6 +233,52 @@ void main() {
 
       gateway.completeUpload();
       await work;
+    },
+  );
+
+  testWidgets(
+    'does not show a transcription completion notice after leaving its detail',
+    (tester) async {
+      final repository = FakeResearchCaptureRepository();
+      final gateway = _StalledUploadGateway();
+      final processing = _researchProcessing(repository, gateway: gateway);
+      addTearDown(processing.dispose);
+      final recording = _savedLocalRecording();
+      await tester.pumpWidget(
+        _appWithResearchProcessing(
+          processing: processing,
+          repository: repository,
+          localRecordings: <LocalRecording>[recording],
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.text('记录'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(recording.title));
+      await tester.pumpAndSettle();
+
+      await repository.save(
+        ResearchCapture.fromLocalRecording(
+          id: 'capture-1',
+          participantId: 'participant-1',
+          originalLocalRecordingId: recording.id,
+          relativePath: 'capture-1.m4a',
+          duration: const Duration(seconds: 12),
+          createdAt: DateTime(2026, 8, 25, 10),
+        ),
+      );
+      final work = processing.process('capture-1');
+      await gateway.uploadStarted;
+      gateway.completeUpload();
+      await work;
+      await tester.pump();
+      await tester.pageBack();
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump();
+
+      expect(find.text('客户访谈 转写完成'), findsNothing);
     },
   );
 }
@@ -308,9 +364,12 @@ class _StalledUploadGateway extends FakeTemporaryAsrGateway {
   }
 }
 
-LocalRecording _savedLocalRecording() => LocalRecording.saved(
-  id: 'recording-1',
-  title: '客户访谈',
+LocalRecording _savedLocalRecording({
+  String id = 'recording-1',
+  String title = '客户访谈',
+}) => LocalRecording.saved(
+  id: id,
+  title: title,
   relativePath: 'recording-1.m4a',
   createdAt: DateTime(2026, 8, 25, 10),
   completedAt: DateTime(2026, 8, 25, 10, 0, 12),
@@ -318,10 +377,11 @@ LocalRecording _savedLocalRecording() => LocalRecording.saved(
   sizeBytes: 160000,
 );
 
-ResearchCapture _transcribingCapture(String id) {
-  return ResearchCapture.fromDirectAiVoice(
+ResearchCapture _transcribingCapture(String id, String recordingId) {
+  return ResearchCapture.fromLocalRecording(
     id: id,
     participantId: 'participant-1',
+    originalLocalRecordingId: recordingId,
     relativePath: '$id.m4a',
     duration: const Duration(seconds: 12),
     createdAt: DateTime(2026, 8, 25, 10),

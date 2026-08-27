@@ -217,6 +217,8 @@ class FakeResearchTrialStore implements ResearchTrialStore {
 class FakeTemporaryAsrGateway implements TemporaryAsrGateway {
   int submitCount = 0;
   int noteRequestCount = 0;
+  final List<AsrAggregateNoteRequest> aggregateRequests =
+      <AsrAggregateNoteRequest>[];
   final List<String> pollJobIds = <String>[];
   final List<String> deletedNoteIds = <String>[];
   final List<String> createdNoteJobIds = <String>[];
@@ -242,6 +244,9 @@ class FakeTemporaryAsrGateway implements TemporaryAsrGateway {
   AsrOutcome<AsrNoteTask> noteOutcome = const AsrSuccess<AsrNoteTask>(
     AsrNoteTask(noteId: 'note-1', generationTaskId: 'task-1'),
   );
+  AsrOutcome<AsrNoteTask> aggregateNoteOutcome = const AsrSuccess<AsrNoteTask>(
+    AsrNoteTask(noteId: 'note-aggregate', generationTaskId: 'task-aggregate'),
+  );
   AsrOutcome<AsrGenerationStatus> generationOutcome =
       const AsrSuccess<AsrGenerationStatus>(AsrGenerationStatus.completed);
   AsrOutcome<AsrGeneratedNote> generatedNoteOutcome =
@@ -260,6 +265,22 @@ class FakeTemporaryAsrGateway implements TemporaryAsrGateway {
     createdNoteJobIds.add(jobId);
     createdNoteTranscripts.add(transcript.text);
     return noteOutcome;
+  }
+
+  @override
+  Future<AsrOutcome<AsrNoteTask>> createAggregateNote({
+    required String recordingId,
+    String? title,
+    required List<AsrAggregateSource> sources,
+  }) async {
+    aggregateRequests.add(
+      AsrAggregateNoteRequest(
+        recordingId: recordingId,
+        title: title,
+        sources: List<AsrAggregateSource>.unmodifiable(sources),
+      ),
+    );
+    return aggregateNoteOutcome;
   }
 
   @override

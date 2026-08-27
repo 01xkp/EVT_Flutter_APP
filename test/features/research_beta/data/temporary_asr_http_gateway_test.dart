@@ -19,7 +19,6 @@ void main() {
     logger = _CapturingLogger();
     gateway = TemporaryAsrHttpGateway(
       baseUrl: 'http://${server.address.address}:${server.port}',
-      verifiedGenerationCompletionStatuses: const {'completed'},
       allowInsecureHttpForTesting: true,
       logger: logger,
     );
@@ -59,6 +58,30 @@ void main() {
       expect(body, contains('name="language"\r\n\r\nzh'));
       expect(body, contains('name="semantic_eval"\r\n\r\nfalse'));
       expect(outcome, isA<AsrSuccess<AsrJob>>());
+    },
+  );
+
+  test(
+    'submitAudio sends a multipart request with a known content length',
+    () async {
+      final audio = File(
+        '${directory.path}${Platform.pathSeparator}sized-capture.m4a',
+      );
+      await audio.writeAsBytes(
+        List<int>.generate(1024, (index) => index % 256),
+      );
+
+      final outcomeFuture = gateway.submitAudio(audio.path);
+      final request = await server.first;
+      final body = await _readBodyBytes(request);
+      await _respondJson(request, <String, Object?>{
+        'job_id': 'job-1',
+        'status': 'queued',
+      });
+
+      expect(request.headers.contentLength, body.length);
+      expect(request.headers.value(HttpHeaders.transferEncodingHeader), isNull);
+      expect(await outcomeFuture, isA<AsrSuccess<AsrJob>>());
     },
   );
 
@@ -207,6 +230,93 @@ void main() {
     );
   });
 
+  test(
+    'posts ordered source quadruples to the aggregate note endpoint',
+    () async {
+      final outcomeFuture = gateway.createAggregateNote(
+        recordingId: 'capture-1',
+        sources: const <AsrAggregateSource>[
+          AsrAggregateSource(
+            segmentIndex: 0,
+            jobId: 'job-first',
+            transcript: AsrTranscript(
+              text: '第一段',
+              relativePath: 'capture-1.segment-0000.m4a',
+              variant: 'original',
+              engine: 'sensevoice',
+            ),
+          ),
+          AsrAggregateSource(
+            segmentIndex: 1,
+            jobId: 'job-second',
+            transcript: AsrTranscript(
+              text: '第二段',
+              relativePath: 'capture-1.segment-0001.m4a',
+              variant: 'original',
+              engine: 'sensevoice',
+            ),
+          ),
+        ],
+      );
+      final request = await server.first;
+      final body = await _readJsonBody(request);
+      await _respondJson(request, <String, Object?>{
+        'note': <String, Object?>{'note_id': 'note-aggregate'},
+        'generation_task': <String, Object?>{'task_id': 'task-aggregate'},
+      });
+
+      expect(request.uri.path, '/api/meeting-notes/aggregate');
+      expect(body['recording_id'], 'capture-1');
+      expect(body['title'], isNull);
+      expect(body['sources'], <Object?>[
+        <String, Object?>{
+          'segment_index': 0,
+          'job_id': 'job-first',
+          'relative_path': 'capture-1.segment-0000.m4a',
+          'variant': 'original',
+          'engine': 'sensevoice',
+        },
+        <String, Object?>{
+          'segment_index': 1,
+          'job_id': 'job-second',
+          'relative_path': 'capture-1.segment-0001.m4a',
+          'variant': 'original',
+          'engine': 'sensevoice',
+        },
+      ]);
+      expect(
+        await outcomeFuture,
+        isA<AsrSuccess<AsrNoteTask>>()
+            .having((value) => value.value.noteId, 'note ID', 'note-aggregate')
+            .having(
+              (value) => value.value.generationTaskId,
+              'task ID',
+              'task-aggregate',
+            ),
+      );
+    },
+  );
+
+  test('accepts the documented succeeded generation status', () async {
+    final outcomeFuture = gateway.pollGenerationTask(
+      noteId: 'note-1',
+      generationTaskId: 'task-1',
+    );
+    final request = await server.first;
+    await _respondJson(request, <String, Object?>{
+      'generation_task': <String, Object?>{'status': 'succeeded'},
+    });
+
+    expect(
+      await outcomeFuture,
+      isA<AsrSuccess<AsrGenerationStatus>>().having(
+        (value) => value.value,
+        'status',
+        AsrGenerationStatus.completed,
+      ),
+    );
+  });
+
   test('uses the deployed generation failure message', () async {
     final outcomeFuture = gateway.pollGenerationTask(
       noteId: 'note-1',
@@ -302,6 +412,15 @@ void main() {
     );
   });
 
+  test('accepts a private-network HTTP endpoint only for explicit testing', () {
+    final internal = TemporaryAsrHttpGateway(
+      baseUrl: 'http://192.168.0.156:8000',
+      allowInsecureHttpForTesting: true,
+    );
+
+    expect(internal.isConfigured, isTrue);
+  });
+
   test('a response timeout returns a retryable network failure', () async {
     final timeoutGateway = TemporaryAsrHttpGateway(
       baseUrl: 'http://${server.address.address}:${server.port}',
@@ -327,11 +446,22 @@ void main() {
 }
 
 Future<String> _readBody(HttpRequest request) async {
-  final bytes = await request.fold<List<int>>(<int>[], (buffer, chunk) {
+  final bytes = await _readBodyBytes(request);
+  return latin1.decode(bytes);
+}
+
+Future<Map<String, Object?>> _readJsonBody(HttpRequest request) async {
+  final value = jsonDecode(await utf8.decodeStream(request));
+  return (value as Map).map<String, Object?>(
+    (key, item) => MapEntry('$key', item),
+  );
+}
+
+Future<List<int>> _readBodyBytes(HttpRequest request) {
+  return request.fold<List<int>>(<int>[], (buffer, chunk) {
     buffer.addAll(chunk);
     return buffer;
   });
-  return latin1.decode(bytes);
 }
 
 Future<void> _respondJson(

@@ -163,6 +163,8 @@ class DriftResearchCaptureRepository implements ResearchCaptureRepository {
       rawTranscript: row.rawTranscript,
       correctedTranscript: row.correctedTranscript,
       title: row.title,
+      transcriptTitle: row.transcriptTitle,
+      summaryTitle: row.summaryTitle,
       summary: row.summary,
       tags: decodedTags is List
           ? List.unmodifiable(decodedTags.whereType<String>())
@@ -205,6 +207,8 @@ class DriftResearchCaptureRepository implements ResearchCaptureRepository {
       rawTranscript: value.rawTranscript,
       correctedTranscript: value.correctedTranscript,
       title: value.title,
+      transcriptTitle: value.transcriptTitle,
+      summaryTitle: value.summaryTitle,
       summary: value.summary,
       tagsJson: jsonEncode(value.tags),
       actionContext: value.actionContext,
@@ -246,6 +250,8 @@ class DriftResearchCaptureRepository implements ResearchCaptureRepository {
       rawTranscript: Value(value.rawTranscript),
       correctedTranscript: Value(value.correctedTranscript),
       title: Value(value.title),
+      transcriptTitle: Value(value.transcriptTitle),
+      summaryTitle: Value(value.summaryTitle),
       summary: Value(value.summary),
       tagsJson: Value(jsonEncode(value.tags)),
       actionContext: Value(value.actionContext),

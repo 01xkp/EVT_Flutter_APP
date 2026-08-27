@@ -57,4 +57,25 @@ void main() {
     expect(completed.inboxState, ResearchInboxState.needsReview);
     expect(completed.title, '整理后的标题');
   });
+
+  test('keeps independent document names when processing is restarted', () {
+    final capture = ResearchCapture.fromDirectAiVoice(
+      id: 'capture-1',
+      participantId: 'participant-1',
+      relativePath: 'research_captures/capture-1.m4a',
+      duration: const Duration(seconds: 12),
+      createdAt: DateTime(2026, 8, 24),
+    )
+        .withDocumentTitle(ResearchDocumentType.transcript, '访谈转写')
+        .withDocumentTitle(ResearchDocumentType.summary, '访谈纪要');
+
+    expect(capture.transcriptTitle, '访谈转写');
+    expect(capture.summaryTitle, '访谈纪要');
+    expect(capture.documentTitle(ResearchDocumentType.transcript), '访谈转写');
+    expect(capture.documentTitle(ResearchDocumentType.summary), '访谈纪要');
+    expect(capture.restartTranscription().transcriptTitle, '访谈转写');
+    expect(capture.restartTranscription().summaryTitle, '访谈纪要');
+    expect(capture.restartSummary().transcriptTitle, '访谈转写');
+    expect(capture.restartSummary().summaryTitle, '访谈纪要');
+  });
 }

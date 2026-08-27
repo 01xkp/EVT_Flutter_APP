@@ -72,6 +72,7 @@ class _AppShellState extends ConsumerState<AppShell>
       AiProcessingToastController();
   final List<ResearchCaptureUiUpdate> _deferredResearchUpdates =
       <ResearchCaptureUiUpdate>[];
+  Future<void> _researchUpdateForwarding = Future<void>.value();
   var _isAppForeground = true;
   var _recordingDetailDepth = 0;
   OverlayEntry? _aiProcessingToastEntry;
@@ -273,6 +274,15 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   void _forwardResearchUpdates(Iterable<ResearchCaptureUiUpdate> updates) {
+    final batch = List<ResearchCaptureUiUpdate>.of(updates);
+    _researchUpdateForwarding = _researchUpdateForwarding.then(
+      (_) => _forwardResearchUpdatesInOrder(batch),
+    );
+  }
+
+  Future<void> _forwardResearchUpdatesInOrder(
+    Iterable<ResearchCaptureUiUpdate> updates,
+  ) async {
     for (final update in updates) {
       switch (update.kind) {
         case ResearchCaptureUiUpdateKind.transcribing:
@@ -284,7 +294,9 @@ class _AppShellState extends ConsumerState<AppShell>
           _aiProcessingToast.complete(
             taskId: update.captureId,
             completedAt: update.completedAt!,
+            recordingName: await _recordingNameFor(update),
             completionLabel: '转写完成',
+            showCompletion: _recordingDetailDepth == 0,
           );
         case ResearchCaptureUiUpdateKind.summarizing:
           _aiProcessingToast.showProcessing(
@@ -295,6 +307,7 @@ class _AppShellState extends ConsumerState<AppShell>
           _aiProcessingToast.complete(
             taskId: update.captureId,
             completedAt: update.completedAt!,
+            recordingName: await _recordingNameFor(update),
           );
         case ResearchCaptureUiUpdateKind.failed:
           _aiProcessingToast.dismiss(
@@ -308,6 +321,20 @@ class _AppShellState extends ConsumerState<AppShell>
           );
       }
     }
+  }
+
+  Future<String> _recordingNameFor(ResearchCaptureUiUpdate update) async {
+    final recordingId = update.originalLocalRecordingId;
+    if (recordingId == null) {
+      return 'AI 语音';
+    }
+    final recordings = await ref.read(localRecordingRepositoryProvider).all();
+    for (final recording in recordings) {
+      if (recording.id == recordingId && recording.title.trim().isNotEmpty) {
+        return recording.title.trim();
+      }
+    }
+    return '录音';
   }
 
   void _syncAiToastVisibility() {

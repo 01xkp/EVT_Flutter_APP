@@ -111,14 +111,8 @@ final researchTrialStoreProvider = Provider<ResearchTrialStore>((ref) {
 
 final temporaryAsrGatewayProvider = Provider<TemporaryAsrGateway>((ref) {
   return TemporaryAsrHttpGateway(
-    baseUrl: AiVoiceServiceConfiguration.resolveBaseUrl(
-      debugFallbackValue: kDebugMode
-          ? 'https://foto-amount-saturday-consultation.trycloudflare.com'
-          : '',
-    ),
-    verifiedGenerationPendingStatuses: const <String>{'queued', 'running'},
-    verifiedGenerationCompletionStatuses: const <String>{'completed'},
-    verifiedGenerationFailureStatuses: const <String>{'failed'},
+    baseUrl: AiVoiceServiceConfiguration.resolveBaseUrl(),
+    allowInsecureHttpForTesting: kDebugMode,
     verifiedNoteMapper: mapAsrGeneratedNote,
   );
 });

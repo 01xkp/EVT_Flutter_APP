@@ -7,14 +7,18 @@ class ResearchTranscriptEditor extends StatefulWidget {
     super.key,
     required this.source,
     required this.onSave,
+    this.title = '转写',
     this.onRegenerate,
+    this.onRename,
     this.onCopy,
     this.onExport,
   });
 
   final String source;
   final Future<void> Function(String value) onSave;
+  final String title;
   final Future<void> Function()? onRegenerate;
+  final Future<void> Function()? onRename;
   final Future<void> Function(String value)? onCopy;
   final Future<void> Function(String value)? onExport;
 
@@ -59,7 +63,24 @@ class _ResearchTranscriptEditorState extends State<ResearchTranscriptEditor> {
         Row(
           children: [
             Expanded(
-              child: Text('转写', style: Theme.of(context).textTheme.titleSmall),
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  if (widget.onRename != null)
+                    IconButton(
+                      tooltip: '重命名转写',
+                      onPressed: _isEditing || _isSaving ? null : _rename,
+                      icon: const Icon(Icons.drive_file_rename_outline),
+                    ),
+                ],
+              ),
             ),
             ResearchEditorModeToggle(
               label: '转写',
@@ -158,6 +179,13 @@ class _ResearchTranscriptEditorState extends State<ResearchTranscriptEditor> {
       _isEditing = false;
       _isPreviewing = false;
     });
+  }
+
+  Future<void> _rename() async {
+    final rename = widget.onRename;
+    if (rename != null) {
+      await rename();
+    }
   }
 
   Future<void> _regenerate() async {

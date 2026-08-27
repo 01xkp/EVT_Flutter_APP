@@ -1,5 +1,7 @@
 import 'package:aipin/features/research_beta/presentation/research_document_actions.dart';
 import 'package:aipin/features/research_beta/presentation/research_editor_mode_toggle.dart';
+import 'package:aipin/features/research_beta/presentation/research_markdown_editing.dart';
+import 'package:aipin/features/research_beta/presentation/research_markdown_preview.dart';
 import 'package:flutter/material.dart';
 
 class ResearchMarkdownDocumentEditor extends StatefulWidget {
@@ -7,14 +9,18 @@ class ResearchMarkdownDocumentEditor extends StatefulWidget {
     super.key,
     required this.source,
     required this.onSave,
+    this.title = 'AI 总结',
     this.onRegenerate,
+    this.onRename,
     this.onCopy,
     this.onExport,
   });
 
   final String source;
   final Future<void> Function(String value) onSave;
+  final String title;
   final Future<void> Function()? onRegenerate;
+  final Future<void> Function()? onRename;
   final Future<void> Function(String value)? onCopy;
   final Future<void> Function(String value)? onExport;
 
@@ -60,9 +66,23 @@ class _ResearchMarkdownDocumentEditorState
         Row(
           children: [
             Expanded(
-              child: Text(
-                'AI 总结',
-                style: Theme.of(context).textTheme.titleSmall,
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  if (widget.onRename != null)
+                    IconButton(
+                      tooltip: '重命名总结',
+                      onPressed: _isEditing || _isSaving ? null : _rename,
+                      icon: const Icon(Icons.drive_file_rename_outline),
+                    ),
+                ],
               ),
             ),
             ResearchEditorModeToggle(
@@ -93,9 +113,10 @@ class _ResearchMarkdownDocumentEditorState
         const SizedBox(height: 8),
         if (_isEditing && !_isPreviewing) ...[
           _FormattingToolbar(
-            onHeading: () => _insertAtLineStart('# '),
-            onBullet: () => _insertAtLineStart('- '),
-            onBold: _insertBold,
+            onApplyLinePrefix: _applyLinePrefix,
+            onApplyInline: _applyInline,
+            onInsertDivider: _insertDivider,
+            onInsertLink: _showLinkDialog,
           ),
           const SizedBox(height: 8),
           TextField(
@@ -111,7 +132,7 @@ class _ResearchMarkdownDocumentEditorState
             onChanged: (_) => setState(() {}),
           ),
         ] else
-          _MarkdownPreview(source: _controller.text),
+          ResearchMarkdownPreview(source: _controller.text),
         if (!_isEditing || _isPreviewing) ...[
           const SizedBox(height: 4),
           ResearchDocumentActions(
@@ -186,45 +207,105 @@ class _ResearchMarkdownDocumentEditorState
 
   void _showPreview() => setState(() => _isPreviewing = true);
 
-  void _insertAtLineStart(String prefix) {
-    final value = _controller.value;
-    final selectionStart = value.selection.start < 0
-        ? 0
-        : value.selection.start;
-    final lineStart = selectionStart == 0
-        ? 0
-        : value.text.lastIndexOf('\n', selectionStart - 1) + 1;
-    final updated =
-        '${value.text.substring(0, lineStart)}$prefix'
-        '${value.text.substring(lineStart)}';
-    _controller.value = TextEditingValue(
-      text: updated,
-      selection: TextSelection.collapsed(
-        offset: selectionStart + prefix.length,
-      ),
-    );
+  Future<void> _rename() async {
+    final rename = widget.onRename;
+    if (rename != null) {
+      await rename();
+    }
+  }
+
+  void _applyLinePrefix(String prefix) => _updateEditingValue(
+    ResearchMarkdownEditing.applyLinePrefix(_controller.value, prefix),
+  );
+
+  void _applyInline({
+    required String marker,
+    required String placeholder,
+    String? closingMarker,
+  }) => _updateEditingValue(
+    ResearchMarkdownEditing.applyInline(
+      _controller.value,
+      marker: marker,
+      closingMarker: closingMarker,
+      placeholder: placeholder,
+    ),
+  );
+
+  void _insertDivider() => _updateEditingValue(
+    ResearchMarkdownEditing.insertDivider(_controller.value),
+  );
+
+  void _updateEditingValue(TextEditingValue value) {
+    _controller.value = value;
     setState(() {});
   }
 
-  void _insertBold() {
-    final value = _controller.value;
-    final selection = value.selection;
-    final start = selection.start < 0 ? 0 : selection.start;
-    final end = selection.end < 0 ? start : selection.end;
-    final selected = value.text.substring(start, end);
-    const markers = '**';
-    final updated =
-        '${value.text.substring(0, start)}$markers'
-        '${selected.isEmpty ? '加粗文字' : selected}$markers'
-        '${value.text.substring(end)}';
-    _controller.value = TextEditingValue(
-      text: updated,
-      selection: TextSelection.collapsed(
-        offset:
-            start + markers.length + (selected.isEmpty ? 4 : selected.length),
+  Future<void> _showLinkDialog() async {
+    final urlController = TextEditingController();
+    final labelController = TextEditingController();
+    final result = await showDialog<_MarkdownLinkData>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('插入链接'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              key: const ValueKey('markdown-link-url'),
+              controller: urlController,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(labelText: '链接地址'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('markdown-link-label'),
+              controller: labelController,
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(labelText: '显示文字（可选）'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final url = urlController.text.trim();
+              if (!_isHttpUrl(url)) {
+                return;
+              }
+              Navigator.of(context).pop(
+                _MarkdownLinkData(url: url, label: labelController.text.trim()),
+              );
+            },
+            child: const Text('插入'),
+          ),
+        ],
       ),
     );
-    setState(() {});
+    urlController.dispose();
+    labelController.dispose();
+    if (result == null || !mounted) {
+      return;
+    }
+    _updateEditingValue(
+      ResearchMarkdownEditing.insertLink(
+        _controller.value,
+        url: result.url,
+        fallbackLabel: result.label.isEmpty ? '链接文字' : result.label,
+      ),
+    );
+  }
+
+  bool _isHttpUrl(String value) {
+    final uri = Uri.tryParse(value);
+    return uri != null &&
+        uri.hasAuthority &&
+        (uri.scheme == 'http' || uri.scheme == 'https');
   }
 
   Future<void> _runDocumentAction(
@@ -261,146 +342,136 @@ class _ResearchMarkdownDocumentEditorState
 
 class _FormattingToolbar extends StatelessWidget {
   const _FormattingToolbar({
-    required this.onHeading,
-    required this.onBullet,
-    required this.onBold,
+    required this.onApplyLinePrefix,
+    required this.onApplyInline,
+    required this.onInsertDivider,
+    required this.onInsertLink,
   });
 
-  final VoidCallback onHeading;
-  final VoidCallback onBullet;
-  final VoidCallback onBold;
+  final ValueChanged<String> onApplyLinePrefix;
+  final void Function({
+    required String marker,
+    required String placeholder,
+    String? closingMarker,
+  })
+  onApplyInline;
+  final VoidCallback onInsertDivider;
+  final Future<void> Function() onInsertLink;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        IconButton(
-          tooltip: '添加一级标题',
-          onPressed: onHeading,
-          icon: const Icon(Icons.title),
+        Row(
+          key: const ValueKey('markdown-format-row-1'),
+          children: [
+            _action(
+              tooltip: '一级标题',
+              icon: Icons.title,
+              onPressed: () =>
+                  onApplyLinePrefix(ResearchMarkdownEditing.headingOnePrefix),
+            ),
+            _action(
+              tooltip: '二级标题',
+              icon: Icons.format_size,
+              onPressed: () =>
+                  onApplyLinePrefix(ResearchMarkdownEditing.headingTwoPrefix),
+            ),
+            _action(
+              tooltip: '加粗',
+              icon: Icons.format_bold,
+              onPressed: () => onApplyInline(
+                marker: ResearchMarkdownEditing.boldMarker,
+                placeholder: '加粗文字',
+              ),
+            ),
+            _action(
+              tooltip: '斜体',
+              icon: Icons.format_italic,
+              onPressed: () => onApplyInline(
+                marker: ResearchMarkdownEditing.italicMarker,
+                placeholder: '斜体文字',
+              ),
+            ),
+            _action(
+              tooltip: '下划线',
+              icon: Icons.format_underlined,
+              onPressed: () => onApplyInline(
+                marker: ResearchMarkdownEditing.underlineMarker,
+                closingMarker: ResearchMarkdownEditing.underlineClosingMarker,
+                placeholder: '下划线文字',
+              ),
+            ),
+            _action(
+              tooltip: '无序列表',
+              icon: Icons.format_list_bulleted,
+              onPressed: () => onApplyLinePrefix(
+                ResearchMarkdownEditing.unorderedListPrefix,
+              ),
+            ),
+          ],
         ),
-        IconButton(
-          tooltip: '添加项目符号',
-          onPressed: onBullet,
-          icon: const Icon(Icons.format_list_bulleted),
-        ),
-        IconButton(
-          tooltip: '添加加粗文字',
-          onPressed: onBold,
-          icon: const Icon(Icons.format_bold),
+        Row(
+          key: const ValueKey('markdown-format-row-2'),
+          children: [
+            _action(
+              tooltip: '有序列表',
+              icon: Icons.format_list_numbered,
+              onPressed: () =>
+                  onApplyLinePrefix(ResearchMarkdownEditing.orderedListPrefix),
+            ),
+            _action(
+              tooltip: '待办项',
+              icon: Icons.checklist,
+              onPressed: () =>
+                  onApplyLinePrefix(ResearchMarkdownEditing.checklistPrefix),
+            ),
+            _action(
+              tooltip: '引用',
+              icon: Icons.format_quote,
+              onPressed: () =>
+                  onApplyLinePrefix(ResearchMarkdownEditing.quotePrefix),
+            ),
+            _action(
+              tooltip: '分割线',
+              icon: Icons.horizontal_rule,
+              onPressed: onInsertDivider,
+            ),
+            _action(
+              tooltip: '插入链接',
+              icon: Icons.link,
+              onPressed: () => onInsertLink(),
+            ),
+          ],
         ),
       ],
     );
   }
-}
 
-class _MarkdownPreview extends StatelessWidget {
-  const _MarkdownPreview({required this.source});
-
-  final String source;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final lines = source.split('\n');
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.35,
+  Widget _action({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    return Expanded(
+      child: SizedBox(
+        height: 44,
+        child: IconButton(
+          tooltip: tooltip,
+          constraints: const BoxConstraints(),
+          padding: EdgeInsets.zero,
+          onPressed: onPressed,
+          icon: Icon(icon),
         ),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final line in lines)
-            _MarkdownPreviewLine(line: line, theme: theme),
-        ],
       ),
     );
   }
 }
 
-class _MarkdownPreviewLine extends StatelessWidget {
-  const _MarkdownPreviewLine({required this.line, required this.theme});
+class _MarkdownLinkData {
+  const _MarkdownLinkData({required this.url, required this.label});
 
-  final String line;
-  final ThemeData theme;
-
-  @override
-  Widget build(BuildContext context) {
-    final heading = RegExp(r'^(#{1,3})\s+(.+)$').firstMatch(line);
-    if (heading != null) {
-      final level = heading.group(1)!.length;
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: _MarkdownInlineText(
-          source: heading.group(2)!,
-          style: switch (level) {
-            1 => theme.textTheme.titleLarge,
-            2 => theme.textTheme.titleMedium,
-            _ => theme.textTheme.titleSmall,
-          },
-        ),
-      );
-    }
-
-    final bullet = RegExp(r'^(\s*)-\s+(.+)$').firstMatch(line);
-    if (bullet != null) {
-      final indent = bullet.group(1)!.length ~/ 2;
-      return Padding(
-        padding: EdgeInsets.only(left: indent * 16.0, bottom: 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('• '),
-            Expanded(child: _MarkdownInlineText(source: bullet.group(2)!)),
-          ],
-        ),
-      );
-    }
-
-    if (line.isEmpty) {
-      return const SizedBox(height: 4);
-    }
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: _MarkdownInlineText(source: line),
-    );
-  }
-}
-
-class _MarkdownInlineText extends StatelessWidget {
-  const _MarkdownInlineText({required this.source, this.style});
-
-  final String source;
-  final TextStyle? style;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!source.contains('**')) {
-      return Text(source, style: style);
-    }
-    final spans = <InlineSpan>[];
-    final pattern = RegExp(r'\*\*(.+?)\*\*');
-    var offset = 0;
-    for (final match in pattern.allMatches(source)) {
-      if (match.start > offset) {
-        spans.add(TextSpan(text: source.substring(offset, match.start)));
-      }
-      spans.add(
-        TextSpan(
-          text: match.group(1),
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-      );
-      offset = match.end;
-    }
-    if (offset < source.length) {
-      spans.add(TextSpan(text: source.substring(offset)));
-    }
-    return Text.rich(TextSpan(style: style, children: spans));
-  }
+  final String url;
+  final String label;
 }

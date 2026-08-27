@@ -25,7 +25,7 @@ void main() {
     await tester.pump();
     expect(find.text('取消'), findsOneWidget);
     expect(find.text('保存'), findsOneWidget);
-    await tester.tap(find.byTooltip('添加一级标题'));
+    await tester.tap(find.byTooltip('一级标题'));
     await tester.tap(find.byTooltip('查看总结'));
     await tester.pump();
 
@@ -61,6 +61,121 @@ void main() {
     expect(find.text('概览'), findsOneWidget);
     expect(find.text('重点', findRichText: true), findsOneWidget);
     expect(find.text('正文'), findsOneWidget);
+  });
+
+  testWidgets('shows two formatting rows and saves a valid Markdown link', (
+    tester,
+  ) async {
+    String? saved;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ResearchMarkdownDocumentEditor(
+            source: '',
+            onSave: (value) async => saved = value,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('编辑总结'));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('markdown-format-row-1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('markdown-format-row-2')), findsOneWidget);
+    for (final tooltip in <String>[
+      '一级标题',
+      '二级标题',
+      '加粗',
+      '斜体',
+      '下划线',
+      '无序列表',
+      '有序列表',
+      '待办项',
+      '引用',
+      '分割线',
+      '插入链接',
+    ]) {
+      expect(find.byTooltip(tooltip), findsOneWidget);
+    }
+
+    await tester.tap(find.byTooltip('一级标题'));
+    await tester.tap(find.byTooltip('斜体'));
+    await tester.tap(find.byTooltip('待办项'));
+    await tester.tap(find.byTooltip('引用'));
+    await tester.tap(find.byTooltip('分割线'));
+    await tester.tap(find.byTooltip('插入链接'));
+    await tester.pump();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('markdown-link-url')),
+      'https://example.com',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('markdown-link-label')),
+      '资料',
+    );
+    await tester.tap(find.text('插入'));
+    await tester.pump();
+    await tester.tap(find.text('保存'));
+
+    expect(saved, contains('[资料](https://example.com)'));
+  });
+
+  testWidgets('keeps content unchanged when a link is cancelled or invalid', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ResearchMarkdownDocumentEditor(
+            source: '',
+            onSave: (_) async {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('编辑总结'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('插入链接'));
+    await tester.pump();
+    await tester.tap(
+      find.descendant(of: find.byType(AlertDialog), matching: find.text('取消')),
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(const ValueKey('markdown-summary-input')),
+          )
+          .controller!
+          .text,
+      isEmpty,
+    );
+
+    await tester.tap(find.byTooltip('插入链接'));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const ValueKey('markdown-link-url')),
+      'not-a-url',
+    );
+    await tester.tap(find.text('插入'));
+    await tester.pump();
+    expect(find.text('插入链接'), findsOneWidget);
+    await tester.tap(
+      find.descendant(of: find.byType(AlertDialog), matching: find.text('取消')),
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(const ValueKey('markdown-summary-input')),
+          )
+          .controller!
+          .text,
+      isEmpty,
+    );
   });
 
   test('removes internal fields from legacy AI summary Markdown', () {

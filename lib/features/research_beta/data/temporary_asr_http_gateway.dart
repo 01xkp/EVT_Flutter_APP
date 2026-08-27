@@ -14,9 +14,14 @@ typedef VerifiedNoteMapper =
 class TemporaryAsrHttpGateway implements TemporaryAsrGateway {
   TemporaryAsrHttpGateway({
     String? baseUrl,
-    Set<String> verifiedGenerationPendingStatuses = const <String>{},
-    Set<String> verifiedGenerationCompletionStatuses = const <String>{},
-    Set<String> verifiedGenerationFailureStatuses = const <String>{},
+    Set<String> verifiedGenerationPendingStatuses = const <String>{
+      'queued',
+      'running',
+    },
+    Set<String> verifiedGenerationCompletionStatuses = const <String>{
+      'succeeded',
+    },
+    Set<String> verifiedGenerationFailureStatuses = const <String>{'failed'},
     VerifiedNoteMapper? verifiedNoteMapper,
     Duration requestTimeout = const Duration(seconds: 15),
     Duration uploadRequestTimeout = const Duration(minutes: 3),
@@ -60,13 +65,14 @@ class TemporaryAsrHttpGateway implements TemporaryAsrGateway {
   final HttpClient Function() _clientFactory;
   final SafeAppLogger _logger;
 
+  bool get isConfigured => _baseUri != null;
+
   @override
   Future<AsrOutcome<AsrNoteTask>> createNote({
     required String jobId,
     required AsrTranscript transcript,
   }) async {
-    final response = await _sendJson(
-      method: 'POST',
+    return _createNoteTask(
       path: '/api/meeting-notes',
       body: <String, Object?>{
         'job_id': jobId,
@@ -75,6 +81,39 @@ class TemporaryAsrHttpGateway implements TemporaryAsrGateway {
         'engine': transcript.engine,
       },
     );
+  }
+
+  @override
+  Future<AsrOutcome<AsrNoteTask>> createAggregateNote({
+    required String recordingId,
+    String? title,
+    required List<AsrAggregateSource> sources,
+  }) async {
+    return _createNoteTask(
+      path: '/api/meeting-notes/aggregate',
+      body: <String, Object?>{
+        'recording_id': recordingId,
+        if (title?.trim().isNotEmpty ?? false) 'title': title!.trim(),
+        'sources': sources
+            .map(
+              (source) => <String, Object?>{
+                'segment_index': source.segmentIndex,
+                'job_id': source.jobId,
+                'relative_path': source.transcript.relativePath,
+                'variant': source.transcript.variant,
+                'engine': source.transcript.engine,
+              },
+            )
+            .toList(growable: false),
+      },
+    );
+  }
+
+  Future<AsrOutcome<AsrNoteTask>> _createNoteTask({
+    required String path,
+    required Map<String, Object?> body,
+  }) async {
+    final response = await _sendJson(method: 'POST', path: path, body: body);
     switch (response) {
       case AsrFailure<Map<String, Object?>>(:final kind, :final message):
         return AsrFailure<AsrNoteTask>(kind: kind, message: message);
@@ -326,15 +365,42 @@ class TemporaryAsrHttpGateway implements TemporaryAsrGateway {
     final client = _clientFactory();
     client.connectionTimeout = _requestTimeout;
     try {
+      final boundary = 'aipin-${DateTime.now().microsecondsSinceEpoch}';
+      final fields = <List<int>>[
+        _multipartFieldBytes(boundary, 'engines', 'sensevoice'),
+        _multipartFieldBytes(boundary, 'language', 'zh'),
+        _multipartFieldBytes(boundary, 'semantic_eval', 'false'),
+      ];
+      final audioHeader = _multipartFileHeaderBytes(
+        boundary,
+        field: 'files',
+        filename: _filenameFor(source),
+        contentType: 'audio/mp4',
+      );
+      final audioFooter = utf8.encode('\r\n');
+      final referenceHeader = _multipartFileHeaderBytes(
+        boundary,
+        field: 'reference_files',
+        filename: 'reference.txt',
+        contentType: 'text/plain; charset=utf-8',
+      );
+      final closingBoundary = utf8.encode('\r\n--$boundary--\r\n');
+      final contentLength =
+          fields.fold<int>(0, (total, field) => total + field.length) +
+          audioHeader.length +
+          sourceSizeBytes +
+          audioFooter.length +
+          referenceHeader.length +
+          closingBoundary.length;
       _logger.info(
         'request_started',
         fields: <String, Object?>{
           'stage': 'submit',
           'method': 'POST',
           'bytes': sourceSizeBytes,
+          'content_length': contentLength,
         },
       );
-      final boundary = 'aipin-${DateTime.now().microsecondsSinceEpoch}';
       final request = await _withRequestTimeout(
         client.postUrl(baseUri.resolve('/api/jobs')),
       );
@@ -343,29 +409,18 @@ class TemporaryAsrHttpGateway implements TemporaryAsrGateway {
         'form-data',
         parameters: <String, String>{'boundary': boundary},
       );
-      _writeField(request, boundary, 'engines', 'sensevoice');
-      _writeField(request, boundary, 'language', 'zh');
-      _writeField(request, boundary, 'semantic_eval', 'false');
-      _writeFileHeader(
-        request,
-        boundary,
-        field: 'files',
-        filename: _filenameFor(source),
-        contentType: 'audio/mp4',
-      );
+      request.contentLength = contentLength;
+      for (final field in fields) {
+        request.add(field);
+      }
+      request.add(audioHeader);
       await _withRequestTimeout(
         request.addStream(source.openRead()),
         timeout: _uploadRequestTimeout,
       );
-      request.add(utf8.encode('\r\n'));
-      _writeFileHeader(
-        request,
-        boundary,
-        field: 'reference_files',
-        filename: 'reference.txt',
-        contentType: 'text/plain; charset=utf-8',
-      );
-      request.add(utf8.encode('\r\n--$boundary--\r\n'));
+      request.add(audioFooter);
+      request.add(referenceHeader);
+      request.add(closingBoundary);
       final response = await _withRequestTimeout(
         request.close(),
         timeout: _uploadRequestTimeout,
@@ -567,12 +622,12 @@ class TemporaryAsrHttpGateway implements TemporaryAsrGateway {
     }
     final uri = Uri.tryParse(trimmed);
     final scheme = uri?.scheme.toLowerCase();
-    final isTestLoopbackHttp =
+    final isTestPrivateHttp =
         allowInsecureHttpForTesting &&
         scheme == 'http' &&
-        _isLoopbackHost(uri?.host);
+        _isPrivateTestHost(uri?.host);
     if (uri == null ||
-        (scheme != 'https' && !isTestLoopbackHttp) ||
+        (scheme != 'https' && !isTestPrivateHttp) ||
         uri.host.isEmpty) {
       return null;
     }
@@ -581,6 +636,25 @@ class TemporaryAsrHttpGateway implements TemporaryAsrGateway {
 
   static bool _isLoopbackHost(String? host) =>
       host == '127.0.0.1' || host == 'localhost' || host == '::1';
+
+  static bool _isPrivateTestHost(String? host) {
+    if (_isLoopbackHost(host)) {
+      return true;
+    }
+    final octets = host?.split('.');
+    if (octets == null || octets.length != 4) {
+      return false;
+    }
+    final values = octets.map(int.tryParse).toList(growable: false);
+    if (values.any((value) => value == null || value < 0 || value > 255)) {
+      return false;
+    }
+    final first = values[0]!;
+    final second = values[1]!;
+    return first == 10 ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168);
+  }
 
   static Set<String> _normaliseStatuses(Set<String> values) {
     return values.map(_normaliseStatus).whereType<String>().toSet();
@@ -613,34 +687,28 @@ class TemporaryAsrHttpGateway implements TemporaryAsrGateway {
     return segments.isEmpty ? 'capture.m4a' : segments.last;
   }
 
-  static void _writeField(
-    HttpClientRequest request,
+  static List<int> _multipartFieldBytes(
     String boundary,
     String name,
     String value,
   ) {
-    request.add(
-      utf8.encode(
-        '--$boundary\r\n'
-        'Content-Disposition: form-data; name="$name"\r\n\r\n'
-        '$value\r\n',
-      ),
+    return utf8.encode(
+      '--$boundary\r\n'
+      'Content-Disposition: form-data; name="$name"\r\n\r\n'
+      '$value\r\n',
     );
   }
 
-  static void _writeFileHeader(
-    HttpClientRequest request,
+  static List<int> _multipartFileHeaderBytes(
     String boundary, {
     required String field,
     required String filename,
     required String contentType,
   }) {
-    request.add(
-      utf8.encode(
-        '--$boundary\r\n'
-        'Content-Disposition: form-data; name="$field"; filename="$filename"\r\n'
-        'Content-Type: $contentType\r\n\r\n',
-      ),
+    return utf8.encode(
+      '--$boundary\r\n'
+      'Content-Disposition: form-data; name="$field"; filename="$filename"\r\n'
+      'Content-Type: $contentType\r\n\r\n',
     );
   }
 }

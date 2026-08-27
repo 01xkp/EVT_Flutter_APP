@@ -1,5 +1,14 @@
 enum ResearchCaptureOrigin { directAiVoice, localRecordingUpload }
 
+enum ResearchDocumentType { transcript, summary }
+
+extension ResearchDocumentTypeLabel on ResearchDocumentType {
+  String get defaultTitle => switch (this) {
+    ResearchDocumentType.transcript => '转写',
+    ResearchDocumentType.summary => 'AI 总结',
+  };
+}
+
 enum ResearchProcessingState {
   uploading,
   transcribing,
@@ -61,6 +70,8 @@ class ResearchCapture {
     this.rawTranscript,
     this.correctedTranscript,
     this.title,
+    this.transcriptTitle,
+    this.summaryTitle,
     this.summary,
     this.tags = const [],
     this.actionContext,
@@ -89,6 +100,8 @@ class ResearchCapture {
   final String? rawTranscript;
   final String? correctedTranscript;
   final String? title;
+  final String? transcriptTitle;
+  final String? summaryTitle;
   final String? summary;
   final List<String> tags;
   final String? actionContext;
@@ -267,6 +280,25 @@ class ResearchCapture {
   ResearchCapture withCorrectedTranscript(String value) =>
       copyWith(correctedTranscript: value.trim());
 
+  String documentTitle(ResearchDocumentType type) {
+    final title = switch (type) {
+      ResearchDocumentType.transcript => transcriptTitle,
+      ResearchDocumentType.summary => summaryTitle,
+    };
+    return title == null || title.trim().isEmpty ? type.defaultTitle : title;
+  }
+
+  ResearchCapture withDocumentTitle(ResearchDocumentType type, String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError.value(value, 'value', '文档名称不能为空。');
+    }
+    return switch (type) {
+      ResearchDocumentType.transcript => copyWith(transcriptTitle: normalized),
+      ResearchDocumentType.summary => copyWith(summaryTitle: normalized),
+    };
+  }
+
   ResearchCapture restartSummary() {
     return ResearchCapture(
       id: id,
@@ -283,6 +315,8 @@ class ResearchCapture {
       asrSegments: asrSegments,
       rawTranscript: rawTranscript,
       correctedTranscript: correctedTranscript,
+      transcriptTitle: transcriptTitle,
+      summaryTitle: summaryTitle,
       openedAt: openedAt,
     );
   }
@@ -300,6 +334,8 @@ class ResearchCapture {
       inboxState: ResearchInboxState.processing,
       originalLocalRecordingId: originalLocalRecordingId,
       asrSegments: const [],
+      transcriptTitle: transcriptTitle,
+      summaryTitle: summaryTitle,
       openedAt: openedAt,
     );
   }
@@ -314,6 +350,8 @@ class ResearchCapture {
     String? rawTranscript,
     String? correctedTranscript,
     String? title,
+    String? transcriptTitle,
+    String? summaryTitle,
     String? summary,
     List<String>? tags,
     String? actionContext,
@@ -340,6 +378,8 @@ class ResearchCapture {
       rawTranscript: rawTranscript ?? this.rawTranscript,
       correctedTranscript: correctedTranscript ?? this.correctedTranscript,
       title: title ?? this.title,
+      transcriptTitle: transcriptTitle ?? this.transcriptTitle,
+      summaryTitle: summaryTitle ?? this.summaryTitle,
       summary: summary ?? this.summary,
       tags: tags ?? this.tags,
       actionContext: actionContext ?? this.actionContext,

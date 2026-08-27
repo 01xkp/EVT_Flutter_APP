@@ -165,6 +165,48 @@ void main() {
     expect(requestCount, 4);
   });
 
+  testWidgets('failed transcript uses a transcript-only retry label', (
+    tester,
+  ) async {
+    final capture = ResearchCapture.fromLocalRecording(
+      id: 'capture-1',
+      participantId: 'participant-1',
+      originalLocalRecordingId: 'recording-1',
+      relativePath: 'capture-1.m4a',
+      duration: const Duration(seconds: 12),
+      createdAt: DateTime(2026, 8, 25),
+    ).failed(ResearchProcessingState.transcriptionFailed, '转写服务暂不可用。');
+    await tester.pumpWidget(MaterialApp(home: _detailPage(capture: capture)));
+
+    await tester.tap(find.text('转写'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('重试 AI 转写'), findsOneWidget);
+    expect(find.text('重试 AI 转写和总结'), findsNothing);
+  });
+
+  testWidgets('failed summary uses a summary-only retry label', (tester) async {
+    final capture =
+        ResearchCapture.fromLocalRecording(
+              id: 'capture-1',
+              participantId: 'participant-1',
+              originalLocalRecordingId: 'recording-1',
+              relativePath: 'capture-1.m4a',
+              duration: const Duration(seconds: 12),
+              createdAt: DateTime(2026, 8, 25),
+            )
+            .toTranscribing('job-1')
+            .failed(ResearchProcessingState.summaryFailed, 'AI 总结服务暂不可用。')
+            .copyWith(rawTranscript: '机器转写内容');
+    await tester.pumpWidget(MaterialApp(home: _detailPage(capture: capture)));
+
+    await tester.tap(find.text('总结'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('重试 AI 总结'), findsOneWidget);
+    expect(find.text('重试 AI 转写和总结'), findsNothing);
+  });
+
   testWidgets('detail opens transcript editing from its edit button', (
     tester,
   ) async {
@@ -258,6 +300,49 @@ void main() {
     expect(exporter.requests.last.fileName, '20260825_000000_总结.md');
     expect(exporter.requests.last.content, '# 本次沟通重点\n- 跟进需求');
     expect(exporter.requests.last.mimeType, 'text/markdown');
+  });
+
+  testWidgets('renames documents independently and uses names for exports', (
+    tester,
+  ) async {
+    final exporter = _FakeTextDocumentExporter();
+    final repository = FakeResearchCaptureRepository();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: _detailPage(
+          capture: _completedCapture(),
+          researchRepository: repository,
+          textDocumentExporter: exporter,
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('转写'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('重命名转写'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '客户访谈转写');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('导出转写'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('总结'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('重命名总结'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '客户访谈纪要');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('导出总结'));
+    await tester.pumpAndSettle();
+
+    expect(repository.captures['capture-1']!.transcriptTitle, '客户访谈转写');
+    expect(repository.captures['capture-1']!.summaryTitle, '客户访谈纪要');
+    expect(exporter.requests.map((request) => request.fileName), <String>[
+      '客户访谈转写.txt',
+      '客户访谈纪要.md',
+    ]);
   });
 
   testWidgets(

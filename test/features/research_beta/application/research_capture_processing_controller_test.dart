@@ -43,7 +43,7 @@ void main() {
   });
 
   test(
-    'uploads playable M4A segments and combines their transcripts by segment order',
+    'uses aggregate notes after segmented transcription without resubmitting audio',
     () async {
       audioSegmenter.segments = const <AudioSegment>[
         AudioSegment(index: 0, duration: Duration(minutes: 5)),
@@ -91,20 +91,30 @@ void main() {
       expect(gateway.submittedAudioPaths, <String>[
         '/research/capture-1.segment-0000.m4a',
         '/research/capture-1.segment-0001.m4a',
-        '/research/capture-1.m4a',
       ]);
       expect(result!.asrSegments.map((segment) => segment.jobId), <String?>[
         'job-first',
         'job-second',
       ]);
       expect(result.rawTranscript, '第一段转写\n第二段转写');
-      expect(gateway.noteRequestCount, 1);
+      expect(gateway.noteRequestCount, 0);
+      expect(gateway.aggregateRequests.single.recordingId, 'capture-1');
+      expect(
+        gateway.aggregateRequests.single.sources.map(
+          (source) => source.segmentIndex,
+        ),
+        <int>[0, 1],
+      );
+      expect(
+        gateway.aggregateRequests.single.sources.map((source) => source.jobId),
+        <String>['job-first', 'job-second'],
+      );
       expect(result.processingState, ResearchProcessingState.completed);
     },
   );
 
   test(
-    'uses one original-file task for a long recording summary after segment transcription',
+    'sends completed segment sources to the aggregate summary in segment order',
     () async {
       audioSegmenter.segments = const <AudioSegment>[
         AudioSegment(index: 0, duration: Duration(minutes: 5)),
@@ -116,9 +126,6 @@ void main() {
         ),
         AsrSuccess<AsrJob>(
           AsrJob(id: 'job-second', status: AsrJobStatus.pending),
-        ),
-        AsrSuccess<AsrJob>(
-          AsrJob(id: 'job-summary', status: AsrJobStatus.pending),
         ),
       ]);
       gateway.transcriptOutcomesByJobId
@@ -139,14 +146,6 @@ void main() {
                 engine: 'sensevoice',
               ),
             ),
-            'job-summary': AsrSuccess<AsrTranscript>(
-              AsrTranscript(
-                text: '原始完整录音转写',
-                relativePath: 'capture-1.m4a',
-                variant: 'original',
-                engine: 'sensevoice',
-              ),
-            ),
           });
       await repository.save(
         ResearchCapture.fromDirectAiVoice(
@@ -163,12 +162,63 @@ void main() {
       expect(gateway.submittedAudioPaths, <String>[
         '/research/capture-1.segment-0000.m4a',
         '/research/capture-1.segment-0001.m4a',
-        '/research/capture-1.m4a',
       ]);
-      expect(gateway.createdNoteJobIds, <String>['job-summary']);
-      expect(gateway.createdNoteTranscripts, <String>['原始完整录音转写']);
+      expect(gateway.noteRequestCount, 0);
+      expect(
+        gateway.aggregateRequests.single.sources.map(
+          (source) => source.transcript.relativePath,
+        ),
+        <String>['part-1.m4a', 'part-2.m4a'],
+      );
       expect(result!.rawTranscript, '第一段转写\n第二段转写');
       expect(result.processingState, ResearchProcessingState.completed);
+    },
+  );
+
+  test(
+    'keeps segmented transcription when aggregate summary creation fails',
+    () async {
+      audioSegmenter.segments = const <AudioSegment>[
+        AudioSegment(index: 0, duration: Duration(minutes: 5)),
+        AudioSegment(index: 1, duration: Duration(minutes: 5)),
+      ];
+      gateway.submitOutcomes.addAll(const <AsrOutcome<AsrJob>>[
+        AsrSuccess<AsrJob>(
+          AsrJob(id: 'job-first', status: AsrJobStatus.pending),
+        ),
+        AsrSuccess<AsrJob>(
+          AsrJob(id: 'job-second', status: AsrJobStatus.pending),
+        ),
+      ]);
+      gateway.aggregateNoteOutcome = const AsrFailure<AsrNoteTask>(
+        kind: AsrFailureKind.remote,
+        message: 'AI 整理服务暂不可用。',
+      );
+      await repository.save(
+        ResearchCapture.fromDirectAiVoice(
+          id: 'capture-1',
+          participantId: 'participant-1',
+          relativePath: 'capture-1.m4a',
+          duration: const Duration(minutes: 10),
+          createdAt: DateTime(2026, 8, 24),
+        ),
+      );
+
+      final result = await controller.process('capture-1');
+
+      expect(result!.processingState, ResearchProcessingState.summaryFailed);
+      expect(result.rawTranscript, '机器转写\n机器转写');
+      expect(gateway.pollJobIds, <String>['job-first', 'job-second']);
+      expect(
+        controller.drainUiUpdates().map((update) => update.kind),
+        <ResearchCaptureUiUpdateKind>[
+          ResearchCaptureUiUpdateKind.transcribing,
+          ResearchCaptureUiUpdateKind.transcribing,
+          ResearchCaptureUiUpdateKind.transcriptionCompleted,
+          ResearchCaptureUiUpdateKind.summarizing,
+          ResearchCaptureUiUpdateKind.failed,
+        ],
+      );
     },
   );
 
@@ -216,12 +266,9 @@ void main() {
   );
 
   test(
-    'preserves a rebuilt original-file summary task when a legacy segmented retry fails',
+    'retries a segmented summary with its original sources without reuploading',
     () async {
-      gateway.submitOutcome = const AsrSuccess<AsrJob>(
-        AsrJob(id: 'job-summary', status: AsrJobStatus.pending),
-      );
-      gateway.noteOutcome = const AsrFailure<AsrNoteTask>(
+      gateway.aggregateNoteOutcome = const AsrFailure<AsrNoteTask>(
         kind: AsrFailureKind.remote,
         message: 'AI 整理服务暂不可用。',
       );
@@ -253,7 +300,9 @@ void main() {
       await controller.retry('capture-1');
 
       final saved = await repository.findById('capture-1');
-      expect(saved!.jobId, 'job-summary');
+      expect(saved!.jobId, 'job-first');
+      expect(gateway.submittedAudioPaths, isEmpty);
+      expect(gateway.aggregateRequests.single.recordingId, 'capture-1');
       expect(saved.processingState, ResearchProcessingState.summaryFailed);
     },
   );
@@ -358,6 +407,42 @@ void main() {
       expect(gateway.noteRequestCount, 1);
       expect(gateway.submitCount, 0);
       expect(saved!.processingState, ResearchProcessingState.completed);
+    },
+  );
+
+  test(
+    'regenerating a legacy failed summary reuses segment jobs for aggregation',
+    () async {
+      await repository.save(
+        ResearchCapture.fromDirectAiVoice(
+              id: 'capture-1',
+              participantId: 'participant-1',
+              relativePath: 'capture-1.m4a',
+              duration: const Duration(minutes: 10),
+              createdAt: DateTime(2026, 8, 24),
+            )
+            .withAsrSegments(const <ResearchAsrSegment>[
+              ResearchAsrSegment(
+                index: 0,
+                relativePath: 'capture-1.segment-0000.m4a',
+                jobId: 'job-first',
+              ),
+              ResearchAsrSegment(
+                index: 1,
+                relativePath: 'capture-1.segment-0001.m4a',
+                jobId: 'job-second',
+              ),
+            ])
+            .failed(ResearchProcessingState.uploadFailed, 'AI 语音服务请求失败（524）。'),
+      );
+
+      final result = await controller.regenerateSummary('capture-1');
+
+      expect(result!.processingState, ResearchProcessingState.completed);
+      expect(result.rawTranscript, '机器转写\n机器转写');
+      expect(gateway.submittedAudioPaths, isEmpty);
+      expect(gateway.pollJobIds, <String>['job-first', 'job-second']);
+      expect(gateway.aggregateRequests.single.recordingId, 'capture-1');
     },
   );
 

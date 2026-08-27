@@ -39,20 +39,45 @@ void main() {
     controller.complete(
       taskId: 'capture-1',
       completedAt: DateTime(2026, 8, 25, 10, 56),
+      recordingName: '客户访谈',
       completionLabel: '转写完成',
     );
     controller.complete(
       taskId: 'capture-2',
       completedAt: DateTime(2026, 8, 25, 10, 57),
+      recordingName: '产品复盘',
     );
     await tester.pump();
-    expect(find.text('8-25 10:56 转写完成'), findsOneWidget);
-    expect(find.text('8-25 10:57 完成'), findsNothing);
+    expect(find.text('客户访谈 转写完成'), findsOneWidget);
+    expect(find.text('产品复盘 完成'), findsNothing);
 
     await tester.pump(const Duration(seconds: 2));
     await tester.pump(const Duration(milliseconds: 180));
-    expect(find.text('8-25 10:56 转写完成'), findsNothing);
-    expect(find.text('8-25 10:57 完成'), findsOneWidget);
+    expect(find.text('客户访谈 转写完成'), findsNothing);
+    expect(find.text('产品复盘 完成'), findsOneWidget);
+    controller.dispose();
+  });
+
+  testWidgets('ellipsizes a long recording name in a single line', (
+    tester,
+  ) async {
+    final controller = AiProcessingToastController();
+    const recordingName = '这是一条用于验证顶部处理提示在较窄设备上不会换行或溢出的超长录音名称';
+    await tester.pumpWidget(_host(controller));
+
+    controller.complete(
+      taskId: 'capture-1',
+      completedAt: DateTime(2026, 8, 25, 10, 56),
+      recordingName: recordingName,
+      completionLabel: '转写完成',
+    );
+    await tester.pump();
+
+    final label = tester.widget<Text>(
+      find.text('$recordingName 转写完成'),
+    );
+    expect(label.maxLines, 1);
+    expect(label.overflow, TextOverflow.ellipsis);
     controller.dispose();
   });
 
@@ -100,6 +125,7 @@ void main() {
     controller.complete(
       taskId: 'capture-1',
       completedAt: DateTime(2026, 8, 25, 10, 56),
+      recordingName: 'AI 语音',
     );
     controller.setPresentationEnabled(false);
     await tester.pump();
@@ -107,7 +133,7 @@ void main() {
 
     controller.setPresentationEnabled(true);
     await tester.pump();
-    expect(find.text('8-25 10:56 完成'), findsOneWidget);
+    expect(find.text('AI 语音 完成'), findsOneWidget);
     controller.dispose();
   });
 }

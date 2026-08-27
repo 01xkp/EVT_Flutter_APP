@@ -13,6 +13,7 @@ class ResearchCaptureTranscriptPanel extends StatelessWidget {
     required this.onSaveTranscript,
     required this.onRetry,
     this.onRegenerate,
+    this.onRenameDocument,
     required this.onCopy,
     required this.onExport,
   });
@@ -21,6 +22,7 @@ class ResearchCaptureTranscriptPanel extends StatelessWidget {
   final Future<void> Function(String value) onSaveTranscript;
   final Future<void> Function() onRetry;
   final Future<void> Function()? onRegenerate;
+  final Future<void> Function(ResearchDocumentType type)? onRenameDocument;
   final Future<void> Function(String value) onCopy;
   final Future<void> Function(String value) onExport;
 
@@ -35,7 +37,7 @@ class ResearchCaptureTranscriptPanel extends StatelessWidget {
       return _ResearchPendingPanel(
         label: failed ? capture.failureReason ?? '转写失败' : '正在转写',
         showLoader: !failed,
-        retryLabel: failed ? '重试 AI 转写和总结' : null,
+        retryLabel: failed ? '重试 AI 转写' : null,
         onRetry: failed ? onRetry : null,
       );
     }
@@ -43,9 +45,13 @@ class ResearchCaptureTranscriptPanel extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
       children: [
         ResearchTranscriptEditor(
+          title: capture.documentTitle(ResearchDocumentType.transcript),
           source: transcript,
           onSave: onSaveTranscript,
           onRegenerate: capture.isTerminal ? onRegenerate : null,
+          onRename: onRenameDocument == null
+              ? null
+              : () => onRenameDocument!(ResearchDocumentType.transcript),
           onCopy: onCopy,
           onExport: onExport,
         ),
@@ -60,6 +66,7 @@ class ResearchCaptureSummaryPanel extends StatelessWidget {
     required this.capture,
     required this.onRetry,
     this.onRegenerate,
+    this.onRenameDocument,
     required this.onSaveMarkdownSummary,
     required this.onCopy,
     required this.onExport,
@@ -68,6 +75,7 @@ class ResearchCaptureSummaryPanel extends StatelessWidget {
   final ResearchCapture capture;
   final Future<void> Function() onRetry;
   final Future<void> Function()? onRegenerate;
+  final Future<void> Function(ResearchDocumentType type)? onRenameDocument;
   final Future<void> Function(String value) onSaveMarkdownSummary;
   final Future<void> Function(String value) onCopy;
   final Future<void> Function(String value) onExport;
@@ -84,7 +92,7 @@ class ResearchCaptureSummaryPanel extends StatelessWidget {
       return _ResearchPendingPanel(
         label: failed ? capture.failureReason ?? 'AI 总结失败' : '正在总结',
         showLoader: !failed,
-        retryLabel: failed ? '重试 AI 转写和总结' : null,
+        retryLabel: failed ? '重试 AI 总结' : null,
         onRetry: failed ? onRetry : null,
       );
     }
@@ -92,9 +100,13 @@ class ResearchCaptureSummaryPanel extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
       children: [
         ResearchMarkdownDocumentEditor(
+          title: capture.documentTitle(ResearchDocumentType.summary),
           source: sanitizeLegacyAiSummaryMarkdown(summary),
           onSave: onSaveMarkdownSummary,
           onRegenerate: capture.isTerminal ? onRegenerate : null,
+          onRename: onRenameDocument == null
+              ? null
+              : () => onRenameDocument!(ResearchDocumentType.summary),
           onCopy: onCopy,
           onExport: onExport,
         ),

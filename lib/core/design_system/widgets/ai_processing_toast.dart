@@ -47,12 +47,18 @@ class AiProcessingToastController extends ChangeNotifier {
   void complete({
     required String taskId,
     required DateTime completedAt,
+    required String recordingName,
     String completionLabel = '完成',
+    bool showCompletion = true,
   }) {
     _processing.remove(taskId);
+    if (!showCompletion) {
+      notifyListeners();
+      return;
+    }
     _pendingCompletions.add(
       AiProcessingToastDisplay.completed(
-        completedAt,
+        recordingName.trim().isEmpty ? '录音' : recordingName.trim(),
         completionLabel: completionLabel,
       ),
     );
@@ -118,27 +124,27 @@ class AiProcessingToastController extends ChangeNotifier {
 
 class AiProcessingToastDisplay {
   const AiProcessingToastDisplay.processing(this.stage)
-    : completedAt = null,
+    : recordingName = null,
       completionLabel = null,
       failureLabel = null;
 
   const AiProcessingToastDisplay.completed(
-    this.completedAt, {
+    this.recordingName, {
     this.completionLabel = '完成',
   }) : stage = null,
        failureLabel = null;
 
   const AiProcessingToastDisplay.failed(this.failureLabel)
     : stage = null,
-      completedAt = null,
+      recordingName = null,
       completionLabel = null;
 
   final AiProcessingToastStage? stage;
-  final DateTime? completedAt;
+  final String? recordingName;
   final String? completionLabel;
   final String? failureLabel;
 
-  bool get isCompleted => completedAt != null;
+  bool get isCompleted => recordingName != null;
   bool get isFailed => failureLabel != null;
 }
 
@@ -189,7 +195,7 @@ class _AiProcessingToastView extends StatelessWidget {
     final isFailed = display.isFailed;
     final label = switch ((isCompleted, isFailed)) {
       (true, _) => _completionLabel(
-        display.completedAt!,
+        display.recordingName!,
         display.completionLabel!,
       ),
       (_, true) => display.failureLabel!,
@@ -204,36 +210,48 @@ class _AiProcessingToastView extends StatelessWidget {
         label: label,
         child: Material(
           color: Colors.transparent,
-          child: Container(
-            key: const ValueKey('ai-processing-toast'),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: const BoxDecoration(
-              color: Color.fromRGBO(0, 0, 0, 0.76),
-              borderRadius: BorderRadius.all(EvtTheme.componentRadius),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width - 40,
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (isCompleted)
-                  const Icon(
-                    Icons.check_circle_outline,
-                    color: Colors.white,
-                    size: 18,
-                  )
-                else if (isFailed)
-                  const Icon(Icons.error_outline, color: Colors.white, size: 18)
-                else
-                  const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
+            child: Container(
+              key: const ValueKey('ai-processing-toast'),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: const BoxDecoration(
+                color: Color.fromRGBO(0, 0, 0, 0.76),
+                borderRadius: BorderRadius.all(EvtTheme.componentRadius),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isCompleted)
+                    const Icon(
+                      Icons.check_circle_outline,
                       color: Colors.white,
-                      strokeWidth: 2,
+                      size: 18,
+                    )
+                  else if (isFailed)
+                    const Icon(Icons.error_outline, color: Colors.white, size: 18)
+                  else
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white),
                     ),
                   ),
-                const SizedBox(width: 8),
-                Text(label, style: const TextStyle(color: Colors.white)),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -241,9 +259,6 @@ class _AiProcessingToastView extends StatelessWidget {
     );
   }
 
-  String _completionLabel(DateTime completedAt, String completionLabel) {
-    final hour = completedAt.hour.toString().padLeft(2, '0');
-    final minute = completedAt.minute.toString().padLeft(2, '0');
-    return '${completedAt.month}-${completedAt.day} $hour:$minute $completionLabel';
-  }
+  String _completionLabel(String recordingName, String completionLabel) =>
+      '$recordingName $completionLabel';
 }

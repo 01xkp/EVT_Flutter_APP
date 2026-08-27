@@ -1866,6 +1866,28 @@ class $ResearchCapturesTable extends ResearchCaptures
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _transcriptTitleMeta = const VerificationMeta(
+    'transcriptTitle',
+  );
+  @override
+  late final GeneratedColumn<String> transcriptTitle = GeneratedColumn<String>(
+    'transcript_title',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _summaryTitleMeta = const VerificationMeta(
+    'summaryTitle',
+  );
+  @override
+  late final GeneratedColumn<String> summaryTitle = GeneratedColumn<String>(
+    'summary_title',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _summaryMeta = const VerificationMeta(
     'summary',
   );
@@ -1953,6 +1975,8 @@ class $ResearchCapturesTable extends ResearchCaptures
     rawTranscript,
     correctedTranscript,
     title,
+    transcriptTitle,
+    summaryTitle,
     summary,
     tagsJson,
     actionContext,
@@ -2122,6 +2146,24 @@ class $ResearchCapturesTable extends ResearchCaptures
         title.isAcceptableOrUnknown(data['title']!, _titleMeta),
       );
     }
+    if (data.containsKey('transcript_title')) {
+      context.handle(
+        _transcriptTitleMeta,
+        transcriptTitle.isAcceptableOrUnknown(
+          data['transcript_title']!,
+          _transcriptTitleMeta,
+        ),
+      );
+    }
+    if (data.containsKey('summary_title')) {
+      context.handle(
+        _summaryTitleMeta,
+        summaryTitle.isAcceptableOrUnknown(
+          data['summary_title']!,
+          _summaryTitleMeta,
+        ),
+      );
+    }
     if (data.containsKey('summary')) {
       context.handle(
         _summaryMeta,
@@ -2245,6 +2287,14 @@ class $ResearchCapturesTable extends ResearchCaptures
         DriftSqlType.string,
         data['${effectivePrefix}title'],
       ),
+      transcriptTitle: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}transcript_title'],
+      ),
+      summaryTitle: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}summary_title'],
+      ),
       summary: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}summary'],
@@ -2298,6 +2348,8 @@ class ResearchCaptureRow extends DataClass
   final String? rawTranscript;
   final String? correctedTranscript;
   final String? title;
+  final String? transcriptTitle;
+  final String? summaryTitle;
   final String? summary;
   final String tagsJson;
   final String? actionContext;
@@ -2323,6 +2375,8 @@ class ResearchCaptureRow extends DataClass
     this.rawTranscript,
     this.correctedTranscript,
     this.title,
+    this.transcriptTitle,
+    this.summaryTitle,
     this.summary,
     required this.tagsJson,
     this.actionContext,
@@ -2368,6 +2422,12 @@ class ResearchCaptureRow extends DataClass
     }
     if (!nullToAbsent || title != null) {
       map['title'] = Variable<String>(title);
+    }
+    if (!nullToAbsent || transcriptTitle != null) {
+      map['transcript_title'] = Variable<String>(transcriptTitle);
+    }
+    if (!nullToAbsent || summaryTitle != null) {
+      map['summary_title'] = Variable<String>(summaryTitle);
     }
     if (!nullToAbsent || summary != null) {
       map['summary'] = Variable<String>(summary);
@@ -2424,6 +2484,12 @@ class ResearchCaptureRow extends DataClass
       title: title == null && nullToAbsent
           ? const Value.absent()
           : Value(title),
+      transcriptTitle: transcriptTitle == null && nullToAbsent
+          ? const Value.absent()
+          : Value(transcriptTitle),
+      summaryTitle: summaryTitle == null && nullToAbsent
+          ? const Value.absent()
+          : Value(summaryTitle),
       summary: summary == null && nullToAbsent
           ? const Value.absent()
           : Value(summary),
@@ -2471,6 +2537,8 @@ class ResearchCaptureRow extends DataClass
         json['correctedTranscript'],
       ),
       title: serializer.fromJson<String?>(json['title']),
+      transcriptTitle: serializer.fromJson<String?>(json['transcriptTitle']),
+      summaryTitle: serializer.fromJson<String?>(json['summaryTitle']),
       summary: serializer.fromJson<String?>(json['summary']),
       tagsJson: serializer.fromJson<String>(json['tagsJson']),
       actionContext: serializer.fromJson<String?>(json['actionContext']),
@@ -2503,6 +2571,8 @@ class ResearchCaptureRow extends DataClass
       'rawTranscript': serializer.toJson<String?>(rawTranscript),
       'correctedTranscript': serializer.toJson<String?>(correctedTranscript),
       'title': serializer.toJson<String?>(title),
+      'transcriptTitle': serializer.toJson<String?>(transcriptTitle),
+      'summaryTitle': serializer.toJson<String?>(summaryTitle),
       'summary': serializer.toJson<String?>(summary),
       'tagsJson': serializer.toJson<String>(tagsJson),
       'actionContext': serializer.toJson<String?>(actionContext),
@@ -2531,6 +2601,8 @@ class ResearchCaptureRow extends DataClass
     Value<String?> rawTranscript = const Value.absent(),
     Value<String?> correctedTranscript = const Value.absent(),
     Value<String?> title = const Value.absent(),
+    Value<String?> transcriptTitle = const Value.absent(),
+    Value<String?> summaryTitle = const Value.absent(),
     Value<String?> summary = const Value.absent(),
     String? tagsJson,
     Value<String?> actionContext = const Value.absent(),
@@ -2564,6 +2636,10 @@ class ResearchCaptureRow extends DataClass
         ? correctedTranscript.value
         : this.correctedTranscript,
     title: title.present ? title.value : this.title,
+    transcriptTitle: transcriptTitle.present
+        ? transcriptTitle.value
+        : this.transcriptTitle,
+    summaryTitle: summaryTitle.present ? summaryTitle.value : this.summaryTitle,
     summary: summary.present ? summary.value : this.summary,
     tagsJson: tagsJson ?? this.tagsJson,
     actionContext: actionContext.present
@@ -2619,6 +2695,12 @@ class ResearchCaptureRow extends DataClass
           ? data.correctedTranscript.value
           : this.correctedTranscript,
       title: data.title.present ? data.title.value : this.title,
+      transcriptTitle: data.transcriptTitle.present
+          ? data.transcriptTitle.value
+          : this.transcriptTitle,
+      summaryTitle: data.summaryTitle.present
+          ? data.summaryTitle.value
+          : this.summaryTitle,
       summary: data.summary.present ? data.summary.value : this.summary,
       tagsJson: data.tagsJson.present ? data.tagsJson.value : this.tagsJson,
       actionContext: data.actionContext.present
@@ -2653,6 +2735,8 @@ class ResearchCaptureRow extends DataClass
           ..write('rawTranscript: $rawTranscript, ')
           ..write('correctedTranscript: $correctedTranscript, ')
           ..write('title: $title, ')
+          ..write('transcriptTitle: $transcriptTitle, ')
+          ..write('summaryTitle: $summaryTitle, ')
           ..write('summary: $summary, ')
           ..write('tagsJson: $tagsJson, ')
           ..write('actionContext: $actionContext, ')
@@ -2683,6 +2767,8 @@ class ResearchCaptureRow extends DataClass
     rawTranscript,
     correctedTranscript,
     title,
+    transcriptTitle,
+    summaryTitle,
     summary,
     tagsJson,
     actionContext,
@@ -2712,6 +2798,8 @@ class ResearchCaptureRow extends DataClass
           other.rawTranscript == this.rawTranscript &&
           other.correctedTranscript == this.correctedTranscript &&
           other.title == this.title &&
+          other.transcriptTitle == this.transcriptTitle &&
+          other.summaryTitle == this.summaryTitle &&
           other.summary == this.summary &&
           other.tagsJson == this.tagsJson &&
           other.actionContext == this.actionContext &&
@@ -2739,6 +2827,8 @@ class ResearchCapturesCompanion extends UpdateCompanion<ResearchCaptureRow> {
   final Value<String?> rawTranscript;
   final Value<String?> correctedTranscript;
   final Value<String?> title;
+  final Value<String?> transcriptTitle;
+  final Value<String?> summaryTitle;
   final Value<String?> summary;
   final Value<String> tagsJson;
   final Value<String?> actionContext;
@@ -2765,6 +2855,8 @@ class ResearchCapturesCompanion extends UpdateCompanion<ResearchCaptureRow> {
     this.rawTranscript = const Value.absent(),
     this.correctedTranscript = const Value.absent(),
     this.title = const Value.absent(),
+    this.transcriptTitle = const Value.absent(),
+    this.summaryTitle = const Value.absent(),
     this.summary = const Value.absent(),
     this.tagsJson = const Value.absent(),
     this.actionContext = const Value.absent(),
@@ -2792,6 +2884,8 @@ class ResearchCapturesCompanion extends UpdateCompanion<ResearchCaptureRow> {
     this.rawTranscript = const Value.absent(),
     this.correctedTranscript = const Value.absent(),
     this.title = const Value.absent(),
+    this.transcriptTitle = const Value.absent(),
+    this.summaryTitle = const Value.absent(),
     this.summary = const Value.absent(),
     this.tagsJson = const Value.absent(),
     this.actionContext = const Value.absent(),
@@ -2827,6 +2921,8 @@ class ResearchCapturesCompanion extends UpdateCompanion<ResearchCaptureRow> {
     Expression<String>? rawTranscript,
     Expression<String>? correctedTranscript,
     Expression<String>? title,
+    Expression<String>? transcriptTitle,
+    Expression<String>? summaryTitle,
     Expression<String>? summary,
     Expression<String>? tagsJson,
     Expression<String>? actionContext,
@@ -2856,6 +2952,8 @@ class ResearchCapturesCompanion extends UpdateCompanion<ResearchCaptureRow> {
       if (correctedTranscript != null)
         'corrected_transcript': correctedTranscript,
       if (title != null) 'title': title,
+      if (transcriptTitle != null) 'transcript_title': transcriptTitle,
+      if (summaryTitle != null) 'summary_title': summaryTitle,
       if (summary != null) 'summary': summary,
       if (tagsJson != null) 'tags_json': tagsJson,
       if (actionContext != null) 'action_context': actionContext,
@@ -2885,6 +2983,8 @@ class ResearchCapturesCompanion extends UpdateCompanion<ResearchCaptureRow> {
     Value<String?>? rawTranscript,
     Value<String?>? correctedTranscript,
     Value<String?>? title,
+    Value<String?>? transcriptTitle,
+    Value<String?>? summaryTitle,
     Value<String?>? summary,
     Value<String>? tagsJson,
     Value<String?>? actionContext,
@@ -2913,6 +3013,8 @@ class ResearchCapturesCompanion extends UpdateCompanion<ResearchCaptureRow> {
       rawTranscript: rawTranscript ?? this.rawTranscript,
       correctedTranscript: correctedTranscript ?? this.correctedTranscript,
       title: title ?? this.title,
+      transcriptTitle: transcriptTitle ?? this.transcriptTitle,
+      summaryTitle: summaryTitle ?? this.summaryTitle,
       summary: summary ?? this.summary,
       tagsJson: tagsJson ?? this.tagsJson,
       actionContext: actionContext ?? this.actionContext,
@@ -2982,6 +3084,12 @@ class ResearchCapturesCompanion extends UpdateCompanion<ResearchCaptureRow> {
     if (title.present) {
       map['title'] = Variable<String>(title.value);
     }
+    if (transcriptTitle.present) {
+      map['transcript_title'] = Variable<String>(transcriptTitle.value);
+    }
+    if (summaryTitle.present) {
+      map['summary_title'] = Variable<String>(summaryTitle.value);
+    }
     if (summary.present) {
       map['summary'] = Variable<String>(summary.value);
     }
@@ -3027,6 +3135,8 @@ class ResearchCapturesCompanion extends UpdateCompanion<ResearchCaptureRow> {
           ..write('rawTranscript: $rawTranscript, ')
           ..write('correctedTranscript: $correctedTranscript, ')
           ..write('title: $title, ')
+          ..write('transcriptTitle: $transcriptTitle, ')
+          ..write('summaryTitle: $summaryTitle, ')
           ..write('summary: $summary, ')
           ..write('tagsJson: $tagsJson, ')
           ..write('actionContext: $actionContext, ')
@@ -5295,6 +5405,8 @@ typedef $$ResearchCapturesTableCreateCompanionBuilder =
       Value<String?> rawTranscript,
       Value<String?> correctedTranscript,
       Value<String?> title,
+      Value<String?> transcriptTitle,
+      Value<String?> summaryTitle,
       Value<String?> summary,
       Value<String> tagsJson,
       Value<String?> actionContext,
@@ -5323,6 +5435,8 @@ typedef $$ResearchCapturesTableUpdateCompanionBuilder =
       Value<String?> rawTranscript,
       Value<String?> correctedTranscript,
       Value<String?> title,
+      Value<String?> transcriptTitle,
+      Value<String?> summaryTitle,
       Value<String?> summary,
       Value<String> tagsJson,
       Value<String?> actionContext,
@@ -5428,6 +5542,16 @@ class $$ResearchCapturesTableFilterComposer
 
   ColumnFilters<String> get title => $composableBuilder(
     column: $table.title,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get transcriptTitle => $composableBuilder(
+    column: $table.transcriptTitle,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get summaryTitle => $composableBuilder(
+    column: $table.summaryTitle,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -5561,6 +5685,16 @@ class $$ResearchCapturesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get transcriptTitle => $composableBuilder(
+    column: $table.transcriptTitle,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get summaryTitle => $composableBuilder(
+    column: $table.summaryTitle,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get summary => $composableBuilder(
     column: $table.summary,
     builder: (column) => ColumnOrderings(column),
@@ -5679,6 +5813,16 @@ class $$ResearchCapturesTableAnnotationComposer
   GeneratedColumn<String> get title =>
       $composableBuilder(column: $table.title, builder: (column) => column);
 
+  GeneratedColumn<String> get transcriptTitle => $composableBuilder(
+    column: $table.transcriptTitle,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get summaryTitle => $composableBuilder(
+    column: $table.summaryTitle,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get summary =>
       $composableBuilder(column: $table.summary, builder: (column) => column);
 
@@ -5757,6 +5901,8 @@ class $$ResearchCapturesTableTableManager
                 Value<String?> rawTranscript = const Value.absent(),
                 Value<String?> correctedTranscript = const Value.absent(),
                 Value<String?> title = const Value.absent(),
+                Value<String?> transcriptTitle = const Value.absent(),
+                Value<String?> summaryTitle = const Value.absent(),
                 Value<String?> summary = const Value.absent(),
                 Value<String> tagsJson = const Value.absent(),
                 Value<String?> actionContext = const Value.absent(),
@@ -5783,6 +5929,8 @@ class $$ResearchCapturesTableTableManager
                 rawTranscript: rawTranscript,
                 correctedTranscript: correctedTranscript,
                 title: title,
+                transcriptTitle: transcriptTitle,
+                summaryTitle: summaryTitle,
                 summary: summary,
                 tagsJson: tagsJson,
                 actionContext: actionContext,
@@ -5811,6 +5959,8 @@ class $$ResearchCapturesTableTableManager
                 Value<String?> rawTranscript = const Value.absent(),
                 Value<String?> correctedTranscript = const Value.absent(),
                 Value<String?> title = const Value.absent(),
+                Value<String?> transcriptTitle = const Value.absent(),
+                Value<String?> summaryTitle = const Value.absent(),
                 Value<String?> summary = const Value.absent(),
                 Value<String> tagsJson = const Value.absent(),
                 Value<String?> actionContext = const Value.absent(),
@@ -5837,6 +5987,8 @@ class $$ResearchCapturesTableTableManager
                 rawTranscript: rawTranscript,
                 correctedTranscript: correctedTranscript,
                 title: title,
+                transcriptTitle: transcriptTitle,
+                summaryTitle: summaryTitle,
                 summary: summary,
                 tagsJson: tagsJson,
                 actionContext: actionContext,

@@ -56,6 +56,30 @@ class AsrNoteTask {
   final String generationTaskId;
 }
 
+class AsrAggregateSource {
+  const AsrAggregateSource({
+    required this.segmentIndex,
+    required this.jobId,
+    required this.transcript,
+  }) : assert(segmentIndex >= 0);
+
+  final int segmentIndex;
+  final String jobId;
+  final AsrTranscript transcript;
+}
+
+class AsrAggregateNoteRequest {
+  const AsrAggregateNoteRequest({
+    required this.recordingId,
+    required this.sources,
+    this.title,
+  });
+
+  final String recordingId;
+  final String? title;
+  final List<AsrAggregateSource> sources;
+}
+
 enum AsrGenerationStatus { pending, completed, failed }
 
 class AsrGeneratedNote {
@@ -79,6 +103,11 @@ abstract interface class TemporaryAsrGateway {
   Future<AsrOutcome<AsrNoteTask>> createNote({
     required String jobId,
     required AsrTranscript transcript,
+  });
+  Future<AsrOutcome<AsrNoteTask>> createAggregateNote({
+    required String recordingId,
+    String? title,
+    required List<AsrAggregateSource> sources,
   });
   Future<AsrOutcome<AsrGenerationStatus>> pollGenerationTask({
     required String noteId,

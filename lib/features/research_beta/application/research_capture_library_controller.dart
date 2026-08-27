@@ -4,6 +4,7 @@ import 'package:aipin/features/research_beta/domain/research_analytics.dart';
 import 'package:aipin/features/research_beta/domain/research_capture.dart';
 import 'package:aipin/features/research_beta/domain/research_capture_repository.dart';
 import 'package:aipin/features/research_beta/domain/research_trial.dart';
+import 'package:aipin/core/documents/document_file_name.dart';
 import 'package:uuid/uuid.dart';
 
 class ResearchCaptureLibraryController {
@@ -92,6 +93,24 @@ class ResearchCaptureLibraryController {
     }
     await markHandled(
       capture.copyWith(summary: normalized),
+      ResearchCardAction.edited,
+    );
+  }
+
+  Future<void> renameDocument(
+    ResearchCapture capture,
+    ResearchDocumentType type,
+    String requestedTitle,
+  ) async {
+    final normalized = DocumentFileName.normalizeCustomBaseName(requestedTitle);
+    if (normalized == null) {
+      throw ArgumentError.value(requestedTitle, 'requestedTitle', '文档名称不能为空。');
+    }
+    if (normalized == capture.documentTitle(type)) {
+      return;
+    }
+    await markHandled(
+      capture.withDocumentTitle(type, normalized),
       ResearchCardAction.edited,
     );
   }

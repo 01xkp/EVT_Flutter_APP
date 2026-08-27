@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
+import 'package:aipin/core/documents/document_file_name.dart';
 import 'package:aipin/core/documents/text_document_exporter.dart';
 import 'package:aipin/features/local_recording/domain/audio_player_port.dart';
 import 'package:aipin/features/local_recording/domain/local_recording.dart';
@@ -12,6 +13,7 @@ import 'package:aipin/features/research_beta/application/research_capture_proces
 import 'package:aipin/features/research_beta/domain/research_capture.dart';
 import 'package:aipin/features/research_beta/domain/research_capture_repository.dart';
 import 'package:aipin/features/research_beta/presentation/research_capture_content.dart';
+import 'package:aipin/features/research_beta/presentation/research_document_rename_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -153,12 +155,13 @@ class _LocalRecordingDetailPageState extends State<LocalRecordingDetailPage> {
       capture: capture,
       onSaveTranscript: (value) =>
           widget.researchLibrary.saveTranscript(capture, value),
-      onRetry: () => _retry(capture),
+      onRetry: () => _retryTranscript(capture),
       onRegenerate: () => _regenerateTranscript(capture),
+      onRenameDocument: (type) => _renameDocument(capture, type),
       onCopy: _copyText,
       onExport: (value) => _exportDocument(
         content: value,
-        fileName: _documentFileName(suffix: '转写', extension: 'txt'),
+        fileName: _documentFileName(capture, ResearchDocumentType.transcript),
         mimeType: 'text/plain',
       ),
     );
@@ -175,14 +178,15 @@ class _LocalRecordingDetailPageState extends State<LocalRecordingDetailPage> {
     }
     return ResearchCaptureSummaryPanel(
       capture: capture,
-      onRetry: () => _retry(capture),
+      onRetry: () => _retrySummary(capture),
       onRegenerate: () => _regenerateSummary(capture),
+      onRenameDocument: (type) => _renameDocument(capture, type),
       onSaveMarkdownSummary: (value) =>
           widget.researchLibrary.saveMarkdownSummary(capture, value),
       onCopy: _copyText,
       onExport: (value) => _exportDocument(
         content: value,
-        fileName: _documentFileName(suffix: '总结', extension: 'md'),
+        fileName: _documentFileName(capture, ResearchDocumentType.summary),
         mimeType: 'text/markdown',
       ),
     );
@@ -204,8 +208,12 @@ class _LocalRecordingDetailPageState extends State<LocalRecordingDetailPage> {
     }
   }
 
-  Future<void> _retry(ResearchCapture capture) async {
+  Future<void> _retryTranscript(ResearchCapture capture) async {
     await widget.researchProcessing.retry(capture.id);
+  }
+
+  Future<void> _retrySummary(ResearchCapture capture) async {
+    await widget.researchProcessing.regenerateSummary(capture.id);
   }
 
   Future<void> _regenerateTranscript(ResearchCapture capture) async {
@@ -229,6 +237,27 @@ class _LocalRecordingDetailPageState extends State<LocalRecordingDetailPage> {
     );
     if (confirmed) {
       await widget.researchProcessing.regenerateSummary(capture.id);
+    }
+  }
+
+  Future<void> _renameDocument(
+    ResearchCapture capture,
+    ResearchDocumentType type,
+  ) async {
+    final value = await ResearchDocumentRenameSheet.show(
+      context,
+      documentLabel: type.defaultTitle,
+      initialTitle: capture.documentTitle(type),
+    );
+    if (value == null) {
+      return;
+    }
+    try {
+      await widget.researchLibrary.renameDocument(capture, type, value);
+    } on ArgumentError {
+      if (mounted) {
+        AppToast.show(context, message: '请输入有效名称');
+      }
     }
   }
 
@@ -273,24 +302,16 @@ class _LocalRecordingDetailPageState extends State<LocalRecordingDetailPage> {
     }
   }
 
-  String _documentFileName({
-    required String suffix,
-    required String extension,
-  }) {
-    final createdAt = widget.recording.createdAt;
-    final date = <String>[
-      createdAt.year.toString().padLeft(4, '0'),
-      createdAt.month.toString().padLeft(2, '0'),
-      createdAt.day.toString().padLeft(2, '0'),
-    ].join();
-    final time = <String>[
-      createdAt.hour.toString().padLeft(2, '0'),
-      createdAt.minute.toString().padLeft(2, '0'),
-      createdAt.second.toString().padLeft(2, '0'),
-    ].join();
-    return '$date'
-        '_$time'
-        '_$suffix.$extension';
+  String _documentFileName(ResearchCapture capture, ResearchDocumentType type) {
+    final isTranscript = type == ResearchDocumentType.transcript;
+    return DocumentFileName.build(
+      customBaseName: isTranscript
+          ? capture.transcriptTitle
+          : capture.summaryTitle,
+      fallbackTime: widget.recording.createdAt,
+      fallbackSuffix: isTranscript ? '转写' : '总结',
+      extension: isTranscript ? 'txt' : 'md',
+    );
   }
 
   bool get _canRequestAiProcessing {

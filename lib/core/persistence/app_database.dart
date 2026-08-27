@@ -26,7 +26,7 @@ class AppDatabase extends _$AppDatabase {
     : super(executor ?? NativeDatabase.memory());
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -39,11 +39,23 @@ class AppDatabase extends _$AppDatabase {
         await migrator.createTable(researchCaptures);
         await migrator.createTable(researchEvents);
         await migrator.createTable(researchAggregates);
-      } else if (from < 4) {
-        await migrator.addColumn(
-          researchCaptures,
-          researchCaptures.asrSegmentsJson,
-        );
+      } else {
+        if (from < 4) {
+          await migrator.addColumn(
+            researchCaptures,
+            researchCaptures.asrSegmentsJson,
+          );
+        }
+        if (from < 5) {
+          await migrator.addColumn(
+            researchCaptures,
+            researchCaptures.transcriptTitle,
+          );
+          await migrator.addColumn(
+            researchCaptures,
+            researchCaptures.summaryTitle,
+          );
+        }
       }
     },
   );
