@@ -63,6 +63,7 @@ class SnapshotTable extends StatelessWidget {
     DeviceState.unbound => '未绑定',
     DeviceState.standby => '待机',
     DeviceState.recording => '录音中',
+    DeviceState.paused => '已暂停',
     DeviceState.privacy => '隐私',
     DeviceState.ota => '升级中',
     DeviceState.safeOff => '安全关机',

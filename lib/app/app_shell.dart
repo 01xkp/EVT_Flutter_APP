@@ -9,15 +9,28 @@ import 'package:aipin/core/design_system/evt_theme.dart';
 import 'package:aipin/core/design_system/widgets/app_navigation_bar.dart';
 import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/core/design_system/widgets/ai_processing_toast.dart';
+import 'package:aipin/features/device_session/application/realtime_audio_controller.dart';
+import 'package:aipin/features/device_session/application/wqota_update_controller.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
+import 'package:aipin/core/protocol/wqota_client.dart';
+import 'package:aipin/core/protocol/wqota_codec.dart';
 import 'package:aipin/features/device_discovery/application/discovery_controller.dart';
 import 'package:aipin/features/device_discovery/domain/advertisement_filter.dart';
 import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:aipin/features/device_discovery/presentation/discovery_page.dart';
 import 'package:aipin/features/device_session/application/session_controller.dart';
+import 'package:aipin/features/device_session/application/device_auth_controller.dart';
 import 'package:aipin/features/device_session/application/session_state.dart';
+import 'package:aipin/features/device_session/domain/device_auth_state.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/device_session/domain/realtime_audio_capture.dart';
+import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:aipin/features/device_session/presentation/device_detail_page.dart';
+import 'package:aipin/features/device_session/presentation/device_file_browser_page.dart';
+import 'package:aipin/features/device_session/presentation/firmware_update_page.dart';
+import 'package:aipin/features/device_session/data/device_file_import_service.dart';
+import 'package:aipin/features/device_session/data/wqota_ble_update_gateway.dart';
+import 'package:aipin/features/device_logs/presentation/device_log_page.dart';
 import 'package:aipin/features/evidence/application/evidence_history_controller.dart';
 import 'package:aipin/features/evidence/presentation/record_observation_sheet.dart';
 import 'package:aipin/features/home/presentation/home_page.dart';
@@ -58,6 +71,7 @@ class _AppShellState extends ConsumerState<AppShell>
   late final DiscoveryController _discoveryController;
   late final OnboardingController _onboardingController;
   SessionController? _sessionController;
+  DeviceAuthController? _deviceAuthController;
   EvidenceHistoryController? _evidenceHistoryController;
   RecordingController? _recordingController;
   RecordingLibraryController? _recordingLibraryController;
@@ -103,6 +117,7 @@ class _AppShellState extends ConsumerState<AppShell>
     _onboardingController.dispose();
     _sessionController?.removeListener(_syncDiscoveryExclusions);
     _sessionController?.dispose();
+    _deviceAuthController?.dispose();
     _evidenceHistoryController?.dispose();
     _recordingController?.removeListener(_syncRecordingLibrary);
     _researchProcessing?.removeListener(_onResearchProcessingChanged);
@@ -396,6 +411,7 @@ class _AppShellState extends ConsumerState<AppShell>
       if (session!.isObservable) {
         final recordingLabel = switch (session.latestSnapshot?.state) {
           DeviceState.recording => '正在录音',
+          DeviceState.paused => '已暂停',
           DeviceState.standby => '未在录音',
           _ => '暂时无法获取',
         };
@@ -433,21 +449,164 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   void _openSessionDashboard(SessionController session) {
+    final auth = _deviceAuthController;
+    final realtimeAudio = RealtimeAudioController(
+      gateway: session,
+      codec: EvtProtocolCodec(),
+    );
     unawaited(
-      Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (context) => AnimatedBuilder(
-            animation: session,
-            builder: (context, _) => DeviceDetailPage(
-              state: session.state,
-              onDisconnect: () => unawaited(_disconnectSession(session)),
-              onRetry: () => _retrySession(session),
-              onOpenChecking: () => _openObservation(session.state),
+      Navigator.of(context)
+          .push<void>(
+            MaterialPageRoute(
+              builder: (context) => AnimatedBuilder(
+                animation: Listenable.merge([session, realtimeAudio, ?auth]),
+                builder: (context, _) => DeviceDetailPage(
+                  state: session.state,
+                  onDisconnect: () => unawaited(_disconnectSession(session)),
+                  onRetry: () => _retrySession(session),
+                  onOpenChecking: () => _openObservation(session.state),
+                  onOpenLogs: _openDeviceLogs,
+                  onOpenFiles: () => unawaited(_openDeviceFiles(session)),
+                  onRecordAction: (action) =>
+                      unawaited(_setHardwareRecordAction(session, action)),
+                  onRefreshDeviceDetails: () =>
+                      unawaited(_refreshDeviceDetails(session)),
+                  onRecordConsentChanged: (granted) =>
+                      unawaited(_setDeviceRecordConsent(session, granted)),
+                  onPrivacyDurationChanged: (durationCode) =>
+                      unawaited(_setPrivacyDuration(session, durationCode)),
+                  authState: auth?.state ?? DeviceAuthState.unknown,
+                  onAuthenticate: auth == null
+                      ? null
+                      : () => unawaited(_authenticateDevice(session, auth)),
+                  clearPreparation: auth?.pendingClear,
+                  onPrepareClear: auth == null
+                      ? null
+                      : () => _prepareDeviceClear(session, auth),
+                  onConfirmClear: auth == null
+                      ? null
+                      : () => _confirmDeviceClear(session, auth),
+                  canOpenFiles: auth?.allows(DevicePermission.files) ?? false,
+                  canControlRecording:
+                      auth?.allows(DevicePermission.configuration) ?? false,
+                  canConfigureDevice:
+                      auth?.allows(DevicePermission.configuration) ?? false,
+                  onOpenFirmwareUpdate: () =>
+                      unawaited(_openFirmwareUpdate(session)),
+                  canUpdateFirmware:
+                      auth?.allows(DevicePermission.ota) ?? false,
+                  realtimeAudioController: realtimeAudio,
+                  canCaptureRealtimeAudio:
+                      auth?.allows(DevicePermission.realtimeAudio) ?? false,
+                  onExportRealtimeAudio: _exportRealtimeAudio,
+                ),
+              ),
             ),
-          ),
+          )
+          .whenComplete(realtimeAudio.dispose),
+    );
+  }
+
+  Future<void> _exportRealtimeAudio(RealtimeAudioCapture capture) async {
+    try {
+      await ref
+          .read(binaryDocumentExporterProvider)
+          .export(
+            fileName: capture.exportFileName,
+            bytes: capture.bytes,
+            mimeType: 'application/octet-stream',
+          );
+      if (mounted) {
+        AppToast.show(context, message: '实时音频原始数据已导出');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppToast.show(context, message: '原始数据导出失败，请重试');
+      }
+    }
+  }
+
+  Future<void> _openFirmwareUpdate(SessionController session) async {
+    final candidate = session.state.session?.candidate;
+    if (candidate == null ||
+        _deviceAuthController?.allows(DevicePermission.ota) != true) {
+      return;
+    }
+    WqotaClient? updateClient;
+
+    Future<void> closeUpdateChannel() async {
+      final client = updateClient;
+      updateClient = null;
+      if (client != null) {
+        await session.closeWqotaClient(client);
+      }
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => FirmwareUpdatePage(
+          deviceId: candidate.id,
+          deviceName: candidate.name,
+          loadPackage: () => ref
+              .read(firmwarePackageGatewayProvider)
+              .loadForDevice(candidate.id),
+          createUpdateController: (package) {
+            final client = session.openWqotaClient(
+              WqotaCodec(
+                wireFormat: WqotaWireFormat(
+                  requestPrefixFlags: package.wqotaRequestPrefixFlags,
+                  responsePrefixFlags: package.wqotaResponsePrefixFlags,
+                ),
+              ),
+            );
+            updateClient = client;
+            return WqotaUpdateController(
+              checkpoints: ref.read(firmwareUpdateCheckpointRepositoryProvider),
+              gateway: WqotaBleUpdateGateway(
+                client: client,
+                verifyBusinessVersionCallback: (expectedBusinessVersion) async {
+                  final actual = session.state.deviceInfo?.softwareVersion;
+                  return actual?.trim() == expectedBusinessVersion.trim();
+                },
+              ),
+            );
+          },
+          reconnectAndVerify: (controller) async {
+            if (!session.state.isObservable) {
+              await session.connect(candidate);
+              await _waitForObservableSession(session);
+            }
+            await controller.verifyAfterReconnect();
+          },
+          closeUpdateChannel: closeUpdateChannel,
         ),
       ),
     );
+  }
+
+  Future<void> _waitForObservableSession(SessionController session) async {
+    if (session.state.isObservable) {
+      return;
+    }
+    final ready = Completer<void>();
+    void listener() {
+      if (session.state.isObservable && !ready.isCompleted) {
+        ready.complete();
+      } else if (session.state.phase == SessionPhase.interrupted &&
+          !ready.isCompleted) {
+        ready.completeError(
+          StateError(session.state.failure?.message ?? '设备重连失败。'),
+        );
+      }
+    }
+
+    session.addListener(listener);
+    listener();
+    try {
+      await ready.future.timeout(const Duration(seconds: 20));
+    } finally {
+      session.removeListener(listener);
+    }
   }
 
   Future<void> _openSession(DeviceCandidate candidate) async {
@@ -459,14 +618,23 @@ class _AppShellState extends ConsumerState<AppShell>
       }
       _sessionController?.removeListener(_syncDiscoveryExclusions);
       _sessionController?.dispose();
+      _deviceAuthController?.dispose();
       final controller = SessionController(
         ref.read(bleTransportProvider),
         profile,
         EvtProtocolCodec(),
+        logger: ref.read(scopedAppLoggerProvider('SESSION')),
+      );
+      final authController = DeviceAuthController(
+        ticketGateway: ref.read(ticketGatewayProvider),
+        onClearCompleted: (deviceId) => ref
+            .read(deviceFileDownloadCheckpointRepositoryProvider)
+            .removeAllForDevice(deviceId),
       );
       controller.addListener(_syncDiscoveryExclusions);
       setState(() {
         _sessionController = controller;
+        _deviceAuthController = authController;
         _profile = profile;
         _destination = AppDestination.home;
       });
@@ -475,8 +643,12 @@ class _AppShellState extends ConsumerState<AppShell>
     } catch (_) {
       _sessionController?.removeListener(_syncDiscoveryExclusions);
       _sessionController?.dispose();
+      _deviceAuthController?.dispose();
       if (mounted) {
-        setState(() => _sessionController = null);
+        setState(() {
+          _sessionController = null;
+          _deviceAuthController = null;
+        });
       }
       _syncDiscoveryExclusions();
     }
@@ -546,6 +718,181 @@ class _AppShellState extends ConsumerState<AppShell>
     _discoveryController.setExcludedDeviceIds(const []);
     if (mounted) {
       setState(() {});
+    }
+  }
+
+  Future<void> _openDeviceLogs() async {
+    final store = ref.read(appLogStoreProvider);
+    await store.initialize();
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => DeviceLogPage(store: store)),
+    );
+  }
+
+  Future<void> _setHardwareRecordAction(
+    SessionController session,
+    int action,
+  ) async {
+    if (_deviceAuthController?.allows(DevicePermission.configuration) != true) {
+      if (mounted) {
+        AppToast.show(context, message: '当前认证未授予设备录音控制权限');
+      }
+      return;
+    }
+    try {
+      await session.setRecordAction(action);
+    } catch (error) {
+      if (mounted) {
+        AppToast.show(context, message: '设备录音操作失败，请重试');
+      }
+    }
+  }
+
+  Future<void> _refreshDeviceDetails(SessionController session) async {
+    try {
+      await session.refreshDeviceDetails();
+    } catch (_) {
+      if (mounted) {
+        AppToast.show(context, message: '设备状态刷新失败，请重试');
+      }
+    }
+  }
+
+  Future<void> _setDeviceRecordConsent(
+    SessionController session,
+    bool granted,
+  ) async {
+    if (_deviceAuthController?.allows(DevicePermission.configuration) != true) {
+      if (mounted) {
+        AppToast.show(context, message: '当前认证未授予设备配置权限');
+      }
+      return;
+    }
+    try {
+      await session.setRecordConsent(granted);
+    } catch (_) {
+      if (mounted) {
+        AppToast.show(context, message: '设备录音授权更新失败，请重试');
+      }
+    }
+  }
+
+  Future<void> _setPrivacyDuration(
+    SessionController session,
+    int durationCode,
+  ) async {
+    if (_deviceAuthController?.allows(DevicePermission.configuration) != true) {
+      if (mounted) {
+        AppToast.show(context, message: '当前认证未授予设备配置权限');
+      }
+      return;
+    }
+    try {
+      await session.setPrivacyDuration(durationCode);
+    } catch (_) {
+      if (mounted) {
+        AppToast.show(context, message: '默认隐私时长更新失败，请重试');
+      }
+    }
+  }
+
+  Future<void> _authenticateDevice(
+    SessionController session,
+    DeviceAuthController auth,
+  ) async {
+    final repository = session.protocolRepository;
+    final deviceId = session.state.session?.candidate.id;
+    if (repository == null || deviceId == null) {
+      return;
+    }
+    try {
+      await auth.authenticate(repository, deviceId: deviceId);
+      if (mounted) {
+        AppToast.show(context, message: '设备认证完成');
+      }
+    } catch (error) {
+      if (mounted) {
+        AppToast.show(context, message: '$error');
+      }
+    }
+  }
+
+  Future<void> _prepareDeviceClear(
+    SessionController session,
+    DeviceAuthController auth,
+  ) async {
+    final repository = session.protocolRepository;
+    final deviceId = session.state.session?.candidate.id;
+    if (repository == null || deviceId == null) {
+      return;
+    }
+    try {
+      await auth.prepareClear(repository, deviceId: deviceId);
+      if (mounted) {
+        AppToast.show(context, message: '请确认设备清除范围');
+      }
+    } catch (error) {
+      if (mounted) {
+        AppToast.show(context, message: '$error');
+      }
+    }
+  }
+
+  Future<void> _confirmDeviceClear(
+    SessionController session,
+    DeviceAuthController auth,
+  ) async {
+    final repository = session.protocolRepository;
+    final deviceId = session.state.session?.candidate.id;
+    if (repository == null || deviceId == null) {
+      return;
+    }
+    try {
+      await auth.confirmClear(repository, deviceId: deviceId);
+      await session.disconnect();
+      if (mounted) {
+        AppToast.show(context, message: '设备已解除绑定并完成数据清除');
+      }
+    } catch (error) {
+      if (mounted) {
+        AppToast.show(context, message: '$error');
+      }
+    }
+  }
+
+  Future<void> _openDeviceFiles(SessionController session) async {
+    if (_deviceAuthController?.allows(DevicePermission.files) != true) {
+      if (mounted) {
+        AppToast.show(context, message: '当前认证未授予设备文件权限');
+      }
+      return;
+    }
+    final gateway = session.protocolRepository;
+    if (gateway == null || !session.state.isObservable || !mounted) {
+      return;
+    }
+    final importer = DeviceFileImportService(
+      deviceId: gateway.deviceId,
+      gateway: gateway,
+      archive: ref.read(archiveGatewayProvider),
+      files: ref.read(recordingFileStoreProvider),
+      checkpoints: ref.read(deviceFileDownloadCheckpointRepositoryProvider),
+      recordings: ref.read(localRecordingRepositoryProvider),
+    );
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => DeviceFileBrowserPage(
+          onListFiles: ({required offset, required pageSize}) =>
+              session.listFiles(offset: offset, pageSize: pageSize),
+          onImport: importer.import,
+        ),
+      ),
+    );
+    if (mounted) {
+      await _recordingLibraryController?.load();
     }
   }
 

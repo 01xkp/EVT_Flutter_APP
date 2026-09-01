@@ -4514,6 +4514,554 @@ class ResearchAggregatesCompanion
   }
 }
 
+class $DeviceFileDownloadCheckpointsTable extends DeviceFileDownloadCheckpoints
+    with
+        TableInfo<
+          $DeviceFileDownloadCheckpointsTable,
+          DeviceFileDownloadCheckpointRow
+        > {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $DeviceFileDownloadCheckpointsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deviceIdMeta = const VerificationMeta(
+    'deviceId',
+  );
+  @override
+  late final GeneratedColumn<String> deviceId = GeneratedColumn<String>(
+    'device_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nameSlotBase64Meta = const VerificationMeta(
+    'nameSlotBase64',
+  );
+  @override
+  late final GeneratedColumn<String> nameSlotBase64 = GeneratedColumn<String>(
+    'name_slot_base64',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _recordingIdMeta = const VerificationMeta(
+    'recordingId',
+  );
+  @override
+  late final GeneratedColumn<String> recordingId = GeneratedColumn<String>(
+    'recording_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _expectedLengthMeta = const VerificationMeta(
+    'expectedLength',
+  );
+  @override
+  late final GeneratedColumn<String> expectedLength = GeneratedColumn<String>(
+    'expected_length',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _expectedCrc32Meta = const VerificationMeta(
+    'expectedCrc32',
+  );
+  @override
+  late final GeneratedColumn<String> expectedCrc32 = GeneratedColumn<String>(
+    'expected_crc32',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _receivedBytesMeta = const VerificationMeta(
+    'receivedBytes',
+  );
+  @override
+  late final GeneratedColumn<int> receivedBytes = GeneratedColumn<int>(
+    'received_bytes',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    deviceId,
+    nameSlotBase64,
+    recordingId,
+    expectedLength,
+    expectedCrc32,
+    receivedBytes,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'device_file_download_checkpoints';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<DeviceFileDownloadCheckpointRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('device_id')) {
+      context.handle(
+        _deviceIdMeta,
+        deviceId.isAcceptableOrUnknown(data['device_id']!, _deviceIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_deviceIdMeta);
+    }
+    if (data.containsKey('name_slot_base64')) {
+      context.handle(
+        _nameSlotBase64Meta,
+        nameSlotBase64.isAcceptableOrUnknown(
+          data['name_slot_base64']!,
+          _nameSlotBase64Meta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_nameSlotBase64Meta);
+    }
+    if (data.containsKey('recording_id')) {
+      context.handle(
+        _recordingIdMeta,
+        recordingId.isAcceptableOrUnknown(
+          data['recording_id']!,
+          _recordingIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_recordingIdMeta);
+    }
+    if (data.containsKey('expected_length')) {
+      context.handle(
+        _expectedLengthMeta,
+        expectedLength.isAcceptableOrUnknown(
+          data['expected_length']!,
+          _expectedLengthMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_expectedLengthMeta);
+    }
+    if (data.containsKey('expected_crc32')) {
+      context.handle(
+        _expectedCrc32Meta,
+        expectedCrc32.isAcceptableOrUnknown(
+          data['expected_crc32']!,
+          _expectedCrc32Meta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_expectedCrc32Meta);
+    }
+    if (data.containsKey('received_bytes')) {
+      context.handle(
+        _receivedBytesMeta,
+        receivedBytes.isAcceptableOrUnknown(
+          data['received_bytes']!,
+          _receivedBytesMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_receivedBytesMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  DeviceFileDownloadCheckpointRow map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return DeviceFileDownloadCheckpointRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      deviceId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}device_id'],
+      )!,
+      nameSlotBase64: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name_slot_base64'],
+      )!,
+      recordingId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recording_id'],
+      )!,
+      expectedLength: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}expected_length'],
+      )!,
+      expectedCrc32: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}expected_crc32'],
+      )!,
+      receivedBytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}received_bytes'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $DeviceFileDownloadCheckpointsTable createAlias(String alias) {
+    return $DeviceFileDownloadCheckpointsTable(attachedDatabase, alias);
+  }
+}
+
+class DeviceFileDownloadCheckpointRow extends DataClass
+    implements Insertable<DeviceFileDownloadCheckpointRow> {
+  final String id;
+  final String deviceId;
+  final String nameSlotBase64;
+  final String recordingId;
+  final String expectedLength;
+  final String expectedCrc32;
+  final int receivedBytes;
+  final DateTime updatedAt;
+  const DeviceFileDownloadCheckpointRow({
+    required this.id,
+    required this.deviceId,
+    required this.nameSlotBase64,
+    required this.recordingId,
+    required this.expectedLength,
+    required this.expectedCrc32,
+    required this.receivedBytes,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['device_id'] = Variable<String>(deviceId);
+    map['name_slot_base64'] = Variable<String>(nameSlotBase64);
+    map['recording_id'] = Variable<String>(recordingId);
+    map['expected_length'] = Variable<String>(expectedLength);
+    map['expected_crc32'] = Variable<String>(expectedCrc32);
+    map['received_bytes'] = Variable<int>(receivedBytes);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  DeviceFileDownloadCheckpointsCompanion toCompanion(bool nullToAbsent) {
+    return DeviceFileDownloadCheckpointsCompanion(
+      id: Value(id),
+      deviceId: Value(deviceId),
+      nameSlotBase64: Value(nameSlotBase64),
+      recordingId: Value(recordingId),
+      expectedLength: Value(expectedLength),
+      expectedCrc32: Value(expectedCrc32),
+      receivedBytes: Value(receivedBytes),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory DeviceFileDownloadCheckpointRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return DeviceFileDownloadCheckpointRow(
+      id: serializer.fromJson<String>(json['id']),
+      deviceId: serializer.fromJson<String>(json['deviceId']),
+      nameSlotBase64: serializer.fromJson<String>(json['nameSlotBase64']),
+      recordingId: serializer.fromJson<String>(json['recordingId']),
+      expectedLength: serializer.fromJson<String>(json['expectedLength']),
+      expectedCrc32: serializer.fromJson<String>(json['expectedCrc32']),
+      receivedBytes: serializer.fromJson<int>(json['receivedBytes']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'deviceId': serializer.toJson<String>(deviceId),
+      'nameSlotBase64': serializer.toJson<String>(nameSlotBase64),
+      'recordingId': serializer.toJson<String>(recordingId),
+      'expectedLength': serializer.toJson<String>(expectedLength),
+      'expectedCrc32': serializer.toJson<String>(expectedCrc32),
+      'receivedBytes': serializer.toJson<int>(receivedBytes),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  DeviceFileDownloadCheckpointRow copyWith({
+    String? id,
+    String? deviceId,
+    String? nameSlotBase64,
+    String? recordingId,
+    String? expectedLength,
+    String? expectedCrc32,
+    int? receivedBytes,
+    DateTime? updatedAt,
+  }) => DeviceFileDownloadCheckpointRow(
+    id: id ?? this.id,
+    deviceId: deviceId ?? this.deviceId,
+    nameSlotBase64: nameSlotBase64 ?? this.nameSlotBase64,
+    recordingId: recordingId ?? this.recordingId,
+    expectedLength: expectedLength ?? this.expectedLength,
+    expectedCrc32: expectedCrc32 ?? this.expectedCrc32,
+    receivedBytes: receivedBytes ?? this.receivedBytes,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  DeviceFileDownloadCheckpointRow copyWithCompanion(
+    DeviceFileDownloadCheckpointsCompanion data,
+  ) {
+    return DeviceFileDownloadCheckpointRow(
+      id: data.id.present ? data.id.value : this.id,
+      deviceId: data.deviceId.present ? data.deviceId.value : this.deviceId,
+      nameSlotBase64: data.nameSlotBase64.present
+          ? data.nameSlotBase64.value
+          : this.nameSlotBase64,
+      recordingId: data.recordingId.present
+          ? data.recordingId.value
+          : this.recordingId,
+      expectedLength: data.expectedLength.present
+          ? data.expectedLength.value
+          : this.expectedLength,
+      expectedCrc32: data.expectedCrc32.present
+          ? data.expectedCrc32.value
+          : this.expectedCrc32,
+      receivedBytes: data.receivedBytes.present
+          ? data.receivedBytes.value
+          : this.receivedBytes,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DeviceFileDownloadCheckpointRow(')
+          ..write('id: $id, ')
+          ..write('deviceId: $deviceId, ')
+          ..write('nameSlotBase64: $nameSlotBase64, ')
+          ..write('recordingId: $recordingId, ')
+          ..write('expectedLength: $expectedLength, ')
+          ..write('expectedCrc32: $expectedCrc32, ')
+          ..write('receivedBytes: $receivedBytes, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    deviceId,
+    nameSlotBase64,
+    recordingId,
+    expectedLength,
+    expectedCrc32,
+    receivedBytes,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is DeviceFileDownloadCheckpointRow &&
+          other.id == this.id &&
+          other.deviceId == this.deviceId &&
+          other.nameSlotBase64 == this.nameSlotBase64 &&
+          other.recordingId == this.recordingId &&
+          other.expectedLength == this.expectedLength &&
+          other.expectedCrc32 == this.expectedCrc32 &&
+          other.receivedBytes == this.receivedBytes &&
+          other.updatedAt == this.updatedAt);
+}
+
+class DeviceFileDownloadCheckpointsCompanion
+    extends UpdateCompanion<DeviceFileDownloadCheckpointRow> {
+  final Value<String> id;
+  final Value<String> deviceId;
+  final Value<String> nameSlotBase64;
+  final Value<String> recordingId;
+  final Value<String> expectedLength;
+  final Value<String> expectedCrc32;
+  final Value<int> receivedBytes;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const DeviceFileDownloadCheckpointsCompanion({
+    this.id = const Value.absent(),
+    this.deviceId = const Value.absent(),
+    this.nameSlotBase64 = const Value.absent(),
+    this.recordingId = const Value.absent(),
+    this.expectedLength = const Value.absent(),
+    this.expectedCrc32 = const Value.absent(),
+    this.receivedBytes = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  DeviceFileDownloadCheckpointsCompanion.insert({
+    required String id,
+    required String deviceId,
+    required String nameSlotBase64,
+    required String recordingId,
+    required String expectedLength,
+    required String expectedCrc32,
+    required int receivedBytes,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       deviceId = Value(deviceId),
+       nameSlotBase64 = Value(nameSlotBase64),
+       recordingId = Value(recordingId),
+       expectedLength = Value(expectedLength),
+       expectedCrc32 = Value(expectedCrc32),
+       receivedBytes = Value(receivedBytes),
+       updatedAt = Value(updatedAt);
+  static Insertable<DeviceFileDownloadCheckpointRow> custom({
+    Expression<String>? id,
+    Expression<String>? deviceId,
+    Expression<String>? nameSlotBase64,
+    Expression<String>? recordingId,
+    Expression<String>? expectedLength,
+    Expression<String>? expectedCrc32,
+    Expression<int>? receivedBytes,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (deviceId != null) 'device_id': deviceId,
+      if (nameSlotBase64 != null) 'name_slot_base64': nameSlotBase64,
+      if (recordingId != null) 'recording_id': recordingId,
+      if (expectedLength != null) 'expected_length': expectedLength,
+      if (expectedCrc32 != null) 'expected_crc32': expectedCrc32,
+      if (receivedBytes != null) 'received_bytes': receivedBytes,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  DeviceFileDownloadCheckpointsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? deviceId,
+    Value<String>? nameSlotBase64,
+    Value<String>? recordingId,
+    Value<String>? expectedLength,
+    Value<String>? expectedCrc32,
+    Value<int>? receivedBytes,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return DeviceFileDownloadCheckpointsCompanion(
+      id: id ?? this.id,
+      deviceId: deviceId ?? this.deviceId,
+      nameSlotBase64: nameSlotBase64 ?? this.nameSlotBase64,
+      recordingId: recordingId ?? this.recordingId,
+      expectedLength: expectedLength ?? this.expectedLength,
+      expectedCrc32: expectedCrc32 ?? this.expectedCrc32,
+      receivedBytes: receivedBytes ?? this.receivedBytes,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (deviceId.present) {
+      map['device_id'] = Variable<String>(deviceId.value);
+    }
+    if (nameSlotBase64.present) {
+      map['name_slot_base64'] = Variable<String>(nameSlotBase64.value);
+    }
+    if (recordingId.present) {
+      map['recording_id'] = Variable<String>(recordingId.value);
+    }
+    if (expectedLength.present) {
+      map['expected_length'] = Variable<String>(expectedLength.value);
+    }
+    if (expectedCrc32.present) {
+      map['expected_crc32'] = Variable<String>(expectedCrc32.value);
+    }
+    if (receivedBytes.present) {
+      map['received_bytes'] = Variable<int>(receivedBytes.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DeviceFileDownloadCheckpointsCompanion(')
+          ..write('id: $id, ')
+          ..write('deviceId: $deviceId, ')
+          ..write('nameSlotBase64: $nameSlotBase64, ')
+          ..write('recordingId: $recordingId, ')
+          ..write('expectedLength: $expectedLength, ')
+          ..write('expectedCrc32: $expectedCrc32, ')
+          ..write('receivedBytes: $receivedBytes, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -4530,6 +5078,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $ResearchEventsTable researchEvents = $ResearchEventsTable(this);
   late final $ResearchAggregatesTable researchAggregates =
       $ResearchAggregatesTable(this);
+  late final $DeviceFileDownloadCheckpointsTable deviceFileDownloadCheckpoints =
+      $DeviceFileDownloadCheckpointsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -4541,6 +5091,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     researchCaptures,
     researchEvents,
     researchAggregates,
+    deviceFileDownloadCheckpoints,
   ];
 }
 
@@ -6684,6 +7235,292 @@ typedef $$ResearchAggregatesTableProcessedTableManager =
       ResearchAggregateRow,
       PrefetchHooks Function()
     >;
+typedef $$DeviceFileDownloadCheckpointsTableCreateCompanionBuilder =
+    DeviceFileDownloadCheckpointsCompanion Function({
+      required String id,
+      required String deviceId,
+      required String nameSlotBase64,
+      required String recordingId,
+      required String expectedLength,
+      required String expectedCrc32,
+      required int receivedBytes,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$DeviceFileDownloadCheckpointsTableUpdateCompanionBuilder =
+    DeviceFileDownloadCheckpointsCompanion Function({
+      Value<String> id,
+      Value<String> deviceId,
+      Value<String> nameSlotBase64,
+      Value<String> recordingId,
+      Value<String> expectedLength,
+      Value<String> expectedCrc32,
+      Value<int> receivedBytes,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$DeviceFileDownloadCheckpointsTableFilterComposer
+    extends Composer<_$AppDatabase, $DeviceFileDownloadCheckpointsTable> {
+  $$DeviceFileDownloadCheckpointsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get deviceId => $composableBuilder(
+    column: $table.deviceId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get nameSlotBase64 => $composableBuilder(
+    column: $table.nameSlotBase64,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recordingId => $composableBuilder(
+    column: $table.recordingId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get expectedLength => $composableBuilder(
+    column: $table.expectedLength,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get expectedCrc32 => $composableBuilder(
+    column: $table.expectedCrc32,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get receivedBytes => $composableBuilder(
+    column: $table.receivedBytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$DeviceFileDownloadCheckpointsTableOrderingComposer
+    extends Composer<_$AppDatabase, $DeviceFileDownloadCheckpointsTable> {
+  $$DeviceFileDownloadCheckpointsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get deviceId => $composableBuilder(
+    column: $table.deviceId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get nameSlotBase64 => $composableBuilder(
+    column: $table.nameSlotBase64,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get recordingId => $composableBuilder(
+    column: $table.recordingId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get expectedLength => $composableBuilder(
+    column: $table.expectedLength,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get expectedCrc32 => $composableBuilder(
+    column: $table.expectedCrc32,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get receivedBytes => $composableBuilder(
+    column: $table.receivedBytes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$DeviceFileDownloadCheckpointsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $DeviceFileDownloadCheckpointsTable> {
+  $$DeviceFileDownloadCheckpointsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get deviceId =>
+      $composableBuilder(column: $table.deviceId, builder: (column) => column);
+
+  GeneratedColumn<String> get nameSlotBase64 => $composableBuilder(
+    column: $table.nameSlotBase64,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get recordingId => $composableBuilder(
+    column: $table.recordingId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get expectedLength => $composableBuilder(
+    column: $table.expectedLength,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get expectedCrc32 => $composableBuilder(
+    column: $table.expectedCrc32,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get receivedBytes => $composableBuilder(
+    column: $table.receivedBytes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$DeviceFileDownloadCheckpointsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $DeviceFileDownloadCheckpointsTable,
+          DeviceFileDownloadCheckpointRow,
+          $$DeviceFileDownloadCheckpointsTableFilterComposer,
+          $$DeviceFileDownloadCheckpointsTableOrderingComposer,
+          $$DeviceFileDownloadCheckpointsTableAnnotationComposer,
+          $$DeviceFileDownloadCheckpointsTableCreateCompanionBuilder,
+          $$DeviceFileDownloadCheckpointsTableUpdateCompanionBuilder,
+          (
+            DeviceFileDownloadCheckpointRow,
+            BaseReferences<
+              _$AppDatabase,
+              $DeviceFileDownloadCheckpointsTable,
+              DeviceFileDownloadCheckpointRow
+            >,
+          ),
+          DeviceFileDownloadCheckpointRow,
+          PrefetchHooks Function()
+        > {
+  $$DeviceFileDownloadCheckpointsTableTableManager(
+    _$AppDatabase db,
+    $DeviceFileDownloadCheckpointsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$DeviceFileDownloadCheckpointsTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$DeviceFileDownloadCheckpointsTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$DeviceFileDownloadCheckpointsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> deviceId = const Value.absent(),
+                Value<String> nameSlotBase64 = const Value.absent(),
+                Value<String> recordingId = const Value.absent(),
+                Value<String> expectedLength = const Value.absent(),
+                Value<String> expectedCrc32 = const Value.absent(),
+                Value<int> receivedBytes = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => DeviceFileDownloadCheckpointsCompanion(
+                id: id,
+                deviceId: deviceId,
+                nameSlotBase64: nameSlotBase64,
+                recordingId: recordingId,
+                expectedLength: expectedLength,
+                expectedCrc32: expectedCrc32,
+                receivedBytes: receivedBytes,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String deviceId,
+                required String nameSlotBase64,
+                required String recordingId,
+                required String expectedLength,
+                required String expectedCrc32,
+                required int receivedBytes,
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => DeviceFileDownloadCheckpointsCompanion.insert(
+                id: id,
+                deviceId: deviceId,
+                nameSlotBase64: nameSlotBase64,
+                recordingId: recordingId,
+                expectedLength: expectedLength,
+                expectedCrc32: expectedCrc32,
+                receivedBytes: receivedBytes,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$DeviceFileDownloadCheckpointsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $DeviceFileDownloadCheckpointsTable,
+      DeviceFileDownloadCheckpointRow,
+      $$DeviceFileDownloadCheckpointsTableFilterComposer,
+      $$DeviceFileDownloadCheckpointsTableOrderingComposer,
+      $$DeviceFileDownloadCheckpointsTableAnnotationComposer,
+      $$DeviceFileDownloadCheckpointsTableCreateCompanionBuilder,
+      $$DeviceFileDownloadCheckpointsTableUpdateCompanionBuilder,
+      (
+        DeviceFileDownloadCheckpointRow,
+        BaseReferences<
+          _$AppDatabase,
+          $DeviceFileDownloadCheckpointsTable,
+          DeviceFileDownloadCheckpointRow
+        >,
+      ),
+      DeviceFileDownloadCheckpointRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -6700,4 +7537,10 @@ class $AppDatabaseManager {
       $$ResearchEventsTableTableManager(_db, _db.researchEvents);
   $$ResearchAggregatesTableTableManager get researchAggregates =>
       $$ResearchAggregatesTableTableManager(_db, _db.researchAggregates);
+  $$DeviceFileDownloadCheckpointsTableTableManager
+  get deviceFileDownloadCheckpoints =>
+      $$DeviceFileDownloadCheckpointsTableTableManager(
+        _db,
+        _db.deviceFileDownloadCheckpoints,
+      );
 }

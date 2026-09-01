@@ -34,3 +34,24 @@ class DeviceStatus {
   final int syncState;
 }
 
+class DeviceBattery {
+  const DeviceBattery({
+    required this.percent,
+    required this.isCharging,
+    required this.chargingMode,
+  });
+
+  final int percent;
+  final bool isCharging;
+  final int chargingMode;
+}
+
+class DeviceStorage {
+  const DeviceStorage({
+    required this.totalMegabytes,
+    required this.freeMegabytes,
+  });
+
+  final int totalMegabytes;
+  final int freeMegabytes;
+}

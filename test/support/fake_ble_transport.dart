@@ -12,8 +12,14 @@ class FakeBleTransport implements BleTransport {
     List<BleService>? services,
     this.deferRead = false,
     this.readError,
+    Map<String, List<int>> readValuesByCharacteristicUuid = const {},
   }) : profile = profile ?? DeviceProfile.empty(),
-       services = services ?? const [];
+       services = services ?? const [],
+       _readValuesByCharacteristicUuid = Map.unmodifiable(
+         readValuesByCharacteristicUuid.map(
+           (uuid, value) => MapEntry(uuid, Uint8List.fromList(value)),
+         ),
+       );
 
   factory FakeBleTransport.withGattReadyProfile() {
     const profile = DeviceProfile(
@@ -27,6 +33,13 @@ class FakeBleTransport implements BleTransport {
       notifyCharacteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
       writeServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
       writeCharacteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
+      endpoints: {
+        BleLogicalEndpoint.fa10Fa11: BleEndpoint(
+          serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FA11-1212-EFDE-1523-785FEABCD123',
+          operations: const {BleOperation.write, BleOperation.indicate},
+        ),
+      },
     );
     return FakeBleTransport(
       profile: profile,
@@ -34,7 +47,10 @@ class FakeBleTransport implements BleTransport {
       services: const [
         BleService(
           uuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
-          characteristicUuids: ['0000FA16-1212-EFDE-1523-785FEABCD123'],
+          characteristicUuids: [
+            '0000FA11-1212-EFDE-1523-785FEABCD123',
+            '0000FA16-1212-EFDE-1523-785FEABCD123',
+          ],
         ),
         BleService(
           uuid: '0000FB10-1212-EFDE-1523-785FEABCD123',
@@ -73,9 +89,11 @@ class FakeBleTransport implements BleTransport {
   final _subscriptionController = StreamController<Uint8List>.broadcast();
   final disconnectedDeviceIds = <String>[];
   final List<String> discoveryRequests = [];
+  final List<BleCharacteristic> subscribedCharacteristics = [];
   var scanCallCount = 0;
   final bool deferRead;
   final Object? readError;
+  final Map<String, Uint8List> _readValuesByCharacteristicUuid;
   final Completer<Uint8List> _deferredRead = Completer<Uint8List>();
   final List<BleService> services;
   Uint8List readValue = Uint8List(0);
@@ -119,13 +137,20 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
-  Stream<Uint8List> subscribe(BleCharacteristic characteristic) =>
-      _subscriptionController.stream;
+  Stream<Uint8List> subscribe(BleCharacteristic characteristic) {
+    subscribedCharacteristics.add(characteristic);
+    return _subscriptionController.stream;
+  }
 
   @override
   Future<Uint8List> read(BleCharacteristic characteristic) async {
     if (readError != null) {
       throw readError!;
+    }
+    final configuredValue =
+        _readValuesByCharacteristicUuid[characteristic.characteristicUuid];
+    if (configuredValue != null) {
+      return Uint8List.fromList(configuredValue);
     }
     return deferRead ? _deferredRead.future : readValue;
   }

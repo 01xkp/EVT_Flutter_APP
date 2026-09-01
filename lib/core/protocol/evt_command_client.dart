@@ -6,6 +6,8 @@ import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 
+typedef EvtResponseMatcher = bool Function(EvtFrame frame);
+
 class EvtCommandRequest {
   const EvtCommandRequest({
     required this.command,
@@ -15,6 +17,7 @@ class EvtCommandRequest {
     this.expectedSubCommand,
     this.expectedSequence,
     this.sequenceOffset,
+    this.responseMatcher,
     this.timeout = const Duration(seconds: 2),
     this.maxRetries = 1,
   });
@@ -26,6 +29,7 @@ class EvtCommandRequest {
   final int? expectedSubCommand;
   final int? expectedSequence;
   final int? sequenceOffset;
+  final EvtResponseMatcher? responseMatcher;
   final Duration timeout;
   final int maxRetries;
 }
@@ -75,15 +79,10 @@ class EvtCommandClient {
 
   Future<EvtCommandResponse> execute(EvtCommandRequest request) {
     if (_closed) {
-      return Future<EvtCommandResponse>.error(
-        StateError('命令客户端已关闭。'),
-      );
+      return Future<EvtCommandResponse>.error(StateError('命令客户端已关闭。'));
     }
     final result = _queue.then((_) => _run(request));
-    _queue = result.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace __) {},
-    );
+    _queue = result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
     return result;
   }
 
@@ -102,6 +101,7 @@ class EvtCommandClient {
         subCommand: request.expectedSubCommand,
         sequence: request.expectedSequence,
         sequenceOffset: request.sequenceOffset,
+        responseMatcher: request.responseMatcher,
       );
       _pending = pending;
       try {
@@ -121,7 +121,8 @@ class EvtCommandClient {
         throw _transportError!;
       }
     }
-    throw lastError ?? EvtCommandTimeoutException(request.command, attempts + 1);
+    throw lastError ??
+        EvtCommandTimeoutException(request.command, attempts + 1);
   }
 
   void _onBytes(Uint8List bytes) {
@@ -160,12 +161,14 @@ class _PendingCommand {
     required this.subCommand,
     required this.sequence,
     required this.sequenceOffset,
+    required this.responseMatcher,
   });
 
   final int command;
   final int? subCommand;
   final int? sequence;
   final int? sequenceOffset;
+  final EvtResponseMatcher? responseMatcher;
   final Completer<EvtFrame> _completer = Completer<EvtFrame>();
 
   Future<EvtFrame> get future => _completer.future;
@@ -183,6 +186,9 @@ class _PendingCommand {
             sequenceOffset! < 0 ||
             sequenceOffset! >= frame.content.length ||
             frame.content[sequenceOffset!] != sequence)) {
+      return false;
+    }
+    if (responseMatcher != null && !responseMatcher!(frame)) {
       return false;
     }
     return true;

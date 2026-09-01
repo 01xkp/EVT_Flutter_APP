@@ -75,24 +75,80 @@ void main() {
       'serviceUuid': 'AF30',
       'endpoints': {
         'fa10': {
-          'fa11': {'uuid': 'FA11', 'operations': ['read', 'notify']},
-          'fa15': {'uuid': 'FA15', 'operations': ['write']},
+          'fa11': {
+            'uuid': 'FA11',
+            'operations': ['read', 'notify'],
+          },
+          'fa15': {
+            'uuid': 'FA15',
+            'operations': ['write'],
+          },
         },
         'wqota': {
-          '2001': {'uuid': '2001', 'operations': ['writeWithoutResponse']},
+          '2001': {
+            'uuid': '2001',
+            'operations': ['writeWithoutResponse'],
+          },
         },
       },
     });
 
     expect(profile.serviceUuid, '0000AF30-0000-1000-8000-00805F9B34FB');
-    expect(profile.endpoints[BleLogicalEndpoint.fa10Fa11]!.operations,
-        contains(BleOperation.notify));
-    expect(profile.endpoints[BleLogicalEndpoint.fa10Fa15]!.operations,
-        contains(BleOperation.write));
-    expect(profile.endpoints[BleLogicalEndpoint.wqota2001]!.operations,
-        contains(BleOperation.writeWithoutResponse));
-    expect(profile.endpoint(BleLogicalEndpoint.fa10Fa11).characteristicUuid,
-        '0000FA11-0000-1000-8000-00805F9B34FB');
+    expect(
+      profile.endpoints[BleLogicalEndpoint.fa10Fa11]!.operations,
+      contains(BleOperation.notify),
+    );
+    expect(
+      profile.endpoints[BleLogicalEndpoint.fa10Fa15]!.operations,
+      contains(BleOperation.write),
+    );
+    expect(
+      profile.endpoints[BleLogicalEndpoint.wqota2001]!.operations,
+      contains(BleOperation.writeWithoutResponse),
+    );
+    expect(
+      profile.endpoint(BleLogicalEndpoint.fa10Fa11).characteristicUuid,
+      '0000FA11-0000-1000-8000-00805F9B34FB',
+    );
+  });
+
+  test('optional protocol endpoints do not block basic GATT readiness', () {
+    final profile = DeviceProfile.fromJson(const {
+      'namePrefix': 'AIPIN',
+      'manufacturerPrefixHex': 'A389',
+      'serviceUuid': 'AF30',
+      'gattServiceUuid': '0000FA10-1212-EFDE-1523-785FEABCD123',
+      'readServiceUuid': '0000FB10-1212-EFDE-1523-785FEABCD123',
+      'readCharacteristicUuid': 'FB11',
+      'notifyServiceUuid': '0000FA10-1212-EFDE-1523-785FEABCD123',
+      'notifyCharacteristicUuid': 'FA16',
+      'writeServiceUuid': '0000FA10-1212-EFDE-1523-785FEABCD123',
+      'writeCharacteristicUuid': 'FA16',
+      'endpoints': {
+        'fa10': {
+          'fa11': {
+            'uuid': '',
+            'operations': ['read', 'indicate'],
+          },
+          'fa16': {
+            'uuid': 'FA16',
+            'operations': ['notify', 'write'],
+          },
+        },
+        'wqota': {
+          '2001': {
+            'uuid': '',
+            'operations': ['writeWithoutResponse'],
+          },
+        },
+      },
+    });
+
+    expect(profile.isGattReady, isTrue);
+    expect(
+      profile.endpoint(BleLogicalEndpoint.fa10Fa16).serviceUuid,
+      '0000FA10-1212-EFDE-1523-785FEABCD123',
+    );
   });
 
   test('profile rejects operations not declared by an endpoint', () {
@@ -113,7 +169,9 @@ void main() {
       },
     );
 
-    expect(profile.canOperate(BleLogicalEndpoint.fa10Fa15, BleOperation.write),
-        isFalse);
+    expect(
+      profile.canOperate(BleLogicalEndpoint.fa10Fa15, BleOperation.write),
+      isFalse,
+    );
   });
 }

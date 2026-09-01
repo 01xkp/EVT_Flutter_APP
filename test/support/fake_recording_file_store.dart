@@ -16,11 +16,41 @@ class FakeRecordingFileStore implements RecordingFileStore {
   }
 
   @override
-  Future<PendingRecordingFile> createPending({required String id}) async {
+  Future<PendingRecordingFile> createPending({
+    required String id,
+    String extension = '.m4a',
+  }) async {
     return PendingRecordingFile(
       id: id,
-      temporaryPath: '/recordings/$id.part.m4a',
-      relativePath: '$id.m4a',
+      temporaryPath: '/recordings/$id.part$extension',
+      relativePath: '$id$extension',
+    );
+  }
+
+  @override
+  Future<void> append(PendingRecordingFile pending, List<int> bytes) async {}
+
+  @override
+  Future<int> pendingLength(PendingRecordingFile pending) async => 0;
+
+  @override
+  Stream<List<int>> readPending(PendingRecordingFile pending) =>
+      const Stream<List<int>>.empty();
+
+  @override
+  Future<CompletedRecordingFile> importBytes({
+    required String id,
+    String extension = '.m4a',
+    required Stream<List<int>> chunks,
+  }) async {
+    var size = 0;
+    await for (final chunk in chunks) {
+      size += chunk.length;
+    }
+    return CompletedRecordingFile(
+      relativePath: '$id$extension',
+      absolutePath: '/recordings/$id$extension',
+      sizeBytes: size,
     );
   }
 

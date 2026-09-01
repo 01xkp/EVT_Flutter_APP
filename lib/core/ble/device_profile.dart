@@ -40,10 +40,18 @@ class DeviceProfile {
           if (key == null || characteristicEntry.value is! Map) continue;
           final value = characteristicEntry.value as Map;
           endpoints[key] = BleEndpoint(
-            serviceUuid: normalizeBleUuid(value['serviceUuid'] as String? ?? service),
-            characteristicUuid: normalizeBleUuid(value['uuid'] as String? ?? ''),
+            serviceUuid: _endpointServiceUuid(
+              service,
+              value['serviceUuid'] as String?,
+              gattServiceUuid: uuidValue('gattServiceUuid'),
+              readServiceUuid: uuidValue('readServiceUuid'),
+            ),
+            characteristicUuid: normalizeBleUuid(
+              value['uuid'] as String? ?? '',
+            ),
             operations: {
-              for (final operation in (value['operations'] as List? ?? const []))
+              for (final operation
+                  in (value['operations'] as List? ?? const []))
                 ..._parseOperation(operation.toString()),
             },
           );
@@ -78,7 +86,8 @@ class DeviceProfile {
   final String? writeServiceUuid;
   final Map<BleLogicalEndpoint, BleEndpoint> endpoints;
 
-  BleEndpoint endpoint(BleLogicalEndpoint key) => endpoints[key] ??
+  BleEndpoint endpoint(BleLogicalEndpoint key) =>
+      endpoints[key] ??
       (throw StateError('BLE endpoint is not configured: $key'));
 
   bool canOperate(BleLogicalEndpoint key, BleOperation operation) =>
@@ -111,18 +120,31 @@ class DeviceProfile {
     ];
   }
 
-  bool get isGattReady => [
-    gattServiceUuid,
-    _endpointService(readServiceUuid),
-    _endpointService(notifyServiceUuid),
-    _endpointService(writeServiceUuid),
-    readCharacteristicUuid,
-    notifyCharacteristicUuid,
-    writeCharacteristicUuid,
-  ].every(_isUuid) && endpoints.values.every(
-    (endpoint) => _isUuid(endpoint.serviceUuid) &&
-        _isUuid(endpoint.characteristicUuid) && endpoint.operations.isNotEmpty,
-  );
+  bool get isGattReady {
+    final coreReady = [
+      gattServiceUuid,
+      _endpointService(readServiceUuid),
+      _endpointService(notifyServiceUuid),
+      _endpointService(writeServiceUuid),
+      readCharacteristicUuid,
+      notifyCharacteristicUuid,
+      writeCharacteristicUuid,
+    ].every(_isUuid);
+    if (!coreReady) {
+      return false;
+    }
+    // The profile can describe optional file/OTA endpoints before firmware
+    // exposes them. Empty declarations are capabilities, not a connection
+    // prerequisite; configured declarations still receive strict validation.
+    return endpoints.values
+        .where((endpoint) => endpoint.characteristicUuid.isNotEmpty)
+        .every(
+          (endpoint) =>
+              _isUuid(endpoint.serviceUuid) &&
+              _isUuid(endpoint.characteristicUuid) &&
+              endpoint.operations.isNotEmpty,
+        );
+  }
 
   EvtFailure? get validationFailure => isGattReady
       ? null
@@ -135,6 +157,31 @@ class DeviceProfile {
     return RegExp(
       r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
     ).hasMatch(value);
+  }
+
+  static String _endpointServiceUuid(
+    String service,
+    String? configured, {
+    required String gattServiceUuid,
+    required String readServiceUuid,
+  }) {
+    if (configured != null && configured.trim().isNotEmpty) {
+      return normalizeBleUuid(configured);
+    }
+    switch (service) {
+      case 'fa10':
+        return gattServiceUuid.isNotEmpty
+            ? gattServiceUuid
+            : normalizeBleUuid(service);
+      case 'fb10':
+        return readServiceUuid.isNotEmpty
+            ? readServiceUuid
+            : normalizeBleUuid(service);
+      case 'ff10':
+        return '0000FF10-1212-EFDE-1523-785FEABCD123';
+      default:
+        return normalizeBleUuid(service);
+    }
   }
 
   String _endpointService(String? value) {

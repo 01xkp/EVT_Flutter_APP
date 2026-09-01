@@ -1,7 +1,16 @@
+import 'dart:async';
+
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
 import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
 import 'package:aipin/features/device_session/application/session_state.dart';
+import 'package:aipin/features/device_session/application/realtime_audio_controller.dart';
+import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/device_session/domain/device_auth_state.dart';
+import 'package:aipin/features/device_session/domain/device_clear.dart';
+import 'package:aipin/features/device_session/domain/device_configuration.dart';
+import 'package:aipin/features/device_session/domain/realtime_audio_capture.dart';
+import 'package:aipin/features/device_session/presentation/realtime_audio_panel.dart';
 import 'package:aipin/features/device_session/presentation/device_status_view_model.dart';
 import 'package:aipin/features/device_session/presentation/session_failure_panel.dart';
 import 'package:flutter/material.dart';
@@ -13,19 +22,67 @@ class DeviceDetailPage extends StatelessWidget {
     this.onDisconnect,
     this.onRetry,
     this.onOpenChecking,
+    this.onOpenLogs,
+    this.onOpenFiles,
+    this.onRecordAction,
+    this.onRefreshDeviceDetails,
+    this.onRecordConsentChanged,
+    this.onPrivacyDurationChanged,
+    this.authState = DeviceAuthState.unknown,
+    this.onAuthenticate,
+    this.clearPreparation,
+    this.onPrepareClear,
+    this.onConfirmClear,
+    this.canOpenFiles = false,
+    this.canControlRecording = false,
+    this.canConfigureDevice = false,
+    this.onOpenFirmwareUpdate,
+    this.canUpdateFirmware = false,
+    this.realtimeAudioController,
+    this.canCaptureRealtimeAudio = false,
+    this.onExportRealtimeAudio,
   });
 
   final SessionState state;
   final VoidCallback? onDisconnect;
   final VoidCallback? onRetry;
   final VoidCallback? onOpenChecking;
+  final VoidCallback? onOpenLogs;
+  final VoidCallback? onOpenFiles;
+  final ValueChanged<int>? onRecordAction;
+  final VoidCallback? onRefreshDeviceDetails;
+  final ValueChanged<bool>? onRecordConsentChanged;
+  final ValueChanged<int>? onPrivacyDurationChanged;
+  final DeviceAuthState authState;
+  final VoidCallback? onAuthenticate;
+  final DeviceClearPreparation? clearPreparation;
+  final Future<void> Function()? onPrepareClear;
+  final Future<void> Function()? onConfirmClear;
+  final bool canOpenFiles;
+  final bool canControlRecording;
+  final bool canConfigureDevice;
+  final VoidCallback? onOpenFirmwareUpdate;
+  final bool canUpdateFirmware;
+  final RealtimeAudioController? realtimeAudioController;
+  final bool canCaptureRealtimeAudio;
+  final Future<void> Function(RealtimeAudioCapture capture)?
+  onExportRealtimeAudio;
 
   @override
   Widget build(BuildContext context) {
     final status = DeviceStatusViewModel.from(state);
     final deviceName = state.session?.candidate.name ?? '我的设备';
     return Scaffold(
-      appBar: AppBar(title: const Text('设备详情')),
+      appBar: AppBar(
+        title: const Text('设备详情'),
+        actions: [
+          IconButton(
+            tooltip: '实时日志',
+            onPressed: onOpenLogs,
+            icon: const Icon(Icons.receipt_long_outlined),
+          ),
+        ],
+      ),
       body: SafeArea(
         top: false,
         child: LayoutBuilder(
@@ -71,6 +128,28 @@ class DeviceDetailPage extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (state.deviceInfo case final info?) ...[
+                    const SizedBox(height: 16),
+                    AppSurfaceCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _DetailRow(label: '设备编号', value: info.deviceCode),
+                          const Divider(height: 24),
+                          _DetailRow(
+                            label: '固件版本',
+                            value: info.softwareVersion,
+                          ),
+                          const Divider(height: 24),
+                          _DetailRow(
+                            label: '存储空间',
+                            value:
+                                '${info.remainDiskSpaceMb}/${info.totalDiskSpaceMb} MB',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   if (state.failure case final failure?) ...[
                     const SizedBox(height: 16),
                     SessionFailurePanel(
@@ -79,12 +158,50 @@ class DeviceDetailPage extends StatelessWidget {
                       onRetry: onRetry,
                     ),
                   ],
+                  if (state.isObservable) ...[
+                    const SizedBox(height: 16),
+                    _DeviceStatusPanel(
+                      state: state,
+                      canConfigure: canConfigureDevice,
+                      onRefresh: onRefreshDeviceDetails,
+                      onRecordConsentChanged: onRecordConsentChanged,
+                      onPrivacyDurationChanged: onPrivacyDurationChanged,
+                    ),
+                    const SizedBox(height: 16),
+                    _AuthenticationPanel(
+                      state: authState,
+                      onAuthenticate: onAuthenticate,
+                      clearPreparation: clearPreparation,
+                      onPrepareClear: onPrepareClear,
+                      onConfirmClear: onConfirmClear,
+                    ),
+                    const SizedBox(height: 16),
+                    _RecordingControls(
+                      state: state,
+                      onAction: onRecordAction,
+                      onOpenFiles: onOpenFiles,
+                      canOpenFiles: canOpenFiles,
+                      canControlRecording: canControlRecording,
+                    ),
+                    if (canCaptureRealtimeAudio &&
+                        realtimeAudioController != null &&
+                        onExportRealtimeAudio != null) ...[
+                      const SizedBox(height: 16),
+                      RealtimeAudioPanel(
+                        controller: realtimeAudioController!,
+                        onExport: onExportRealtimeAudio!,
+                      ),
+                    ],
+                    if (canUpdateFirmware && onOpenFirmwareUpdate != null) ...[
+                      const SizedBox(height: 16),
+                      AppButton.secondary(
+                        label: '固件升级',
+                        icon: Icons.system_update_alt_outlined,
+                        onPressed: onOpenFirmwareUpdate,
+                      ),
+                    ],
+                  ],
                   const SizedBox(height: 24),
-                  TextButton.icon(
-                    onPressed: () => _showConnectionHelp(context),
-                    icon: const Icon(Icons.help_outline),
-                    label: const Text('连接帮助'),
-                  ),
                   if (state.isObservable) ...[
                     const SizedBox(height: 8),
                     AppButton.secondary(
@@ -128,34 +245,315 @@ class DeviceDetailPage extends StatelessWidget {
       onDisconnect?.call();
     }
   }
+}
 
-  void _showConnectionHelp(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (context) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+class _DeviceStatusPanel extends StatelessWidget {
+  const _DeviceStatusPanel({
+    required this.state,
+    required this.canConfigure,
+    this.onRefresh,
+    this.onRecordConsentChanged,
+    this.onPrivacyDurationChanged,
+  });
+
+  final SessionState state;
+  final bool canConfigure;
+  final VoidCallback? onRefresh;
+  final ValueChanged<bool>? onRecordConsentChanged;
+  final ValueChanged<int>? onPrivacyDurationChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final battery = state.deviceBattery;
+    final storage = state.deviceStorage;
+    final status = state.deviceStatus;
+    final privacyDuration = state.privacyDurationCode;
+    final canEditConsent = canConfigure && status != null;
+    final canEditPrivacy =
+        canConfigure &&
+        privacyDuration != null &&
+        onPrivacyDurationChanged != null;
+    return AppSurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
             children: [
-              Text('连接帮助', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              const Text('请确认设备已开机并靠近手机，再重新连接。'),
-              const SizedBox(height: 16),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('知道了'),
+              Expanded(
+                child: Text(
+                  '设备状态',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
+              ),
+              IconButton(
+                tooltip: '刷新设备状态',
+                onPressed: onRefresh,
+                icon: const Icon(Icons.refresh_outlined),
               ),
             ],
           ),
-        ),
+          _DetailRow(
+            label: '电量',
+            value: battery == null
+                ? '暂未读取'
+                : battery.isCharging
+                ? '${battery.percent}%（充电中）'
+                : '${battery.percent}%',
+          ),
+          const Divider(height: 24),
+          _DetailRow(
+            label: '存储空间',
+            value: storage == null
+                ? '暂未读取'
+                : '剩余 ${storage.freeMegabytes} / ${storage.totalMegabytes} MB',
+          ),
+          const Divider(height: 24),
+          _DetailRow(
+            label: '设备文件',
+            value: state.fileCount == null ? '暂未读取' : '${state.fileCount} 个文件',
+          ),
+          const Divider(height: 24),
+          _DetailRow(label: '隐私状态', value: _privacyLabel(status)),
+          const Divider(height: 24),
+          _DetailRow(label: '同步状态', value: _syncLabel(status)),
+          const Divider(height: 24),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('允许设备录音'),
+            value: status?.recordConsent ?? false,
+            onChanged: canEditConsent && onRecordConsentChanged != null
+                ? onRecordConsentChanged
+                : null,
+          ),
+          const Divider(height: 24),
+          PopupMenuButton<int>(
+            tooltip: '默认隐私时长',
+            enabled: canEditPrivacy,
+            initialValue: privacyDuration,
+            onSelected: onPrivacyDurationChanged,
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 0, child: Text('手动退出')),
+              PopupMenuItem(value: 1, child: Text('10 分钟')),
+              PopupMenuItem(value: 2, child: Text('30 分钟')),
+              PopupMenuItem(value: 3, child: Text('60 分钟')),
+            ],
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('默认隐私时长'),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_privacyDurationLabel(privacyDuration)),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.expand_more_outlined),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  static String _privacyLabel(DeviceStatus? status) {
+    if (status == null) {
+      return '暂未读取';
+    }
+    if (!status.privacy) {
+      return '隐私模式已关闭';
+    }
+    if (status.privacyRemainingMinutes == 0xFFFF) {
+      return '隐私模式，手动退出';
+    }
+    return '隐私模式，剩余 ${status.privacyRemainingMinutes} 分钟';
+  }
+
+  static String _syncLabel(DeviceStatus? status) => switch (status?.syncState) {
+    0 => '空闲',
+    1 => '同步中',
+    2 => '录音暂停同步',
+    3 => '同步失败',
+    _ => '暂未读取',
+  };
+
+  static String _privacyDurationLabel(int? value) => switch (value) {
+    0 => '手动退出',
+    1 => '10 分钟',
+    2 => '30 分钟',
+    3 => '60 分钟',
+    _ => '暂未读取',
+  };
+}
+
+class _RecordingControls extends StatelessWidget {
+  const _RecordingControls({
+    required this.state,
+    this.onAction,
+    this.onOpenFiles,
+    required this.canOpenFiles,
+    required this.canControlRecording,
+  });
+
+  final SessionState state;
+  final ValueChanged<int>? onAction;
+  final VoidCallback? onOpenFiles;
+  final bool canOpenFiles;
+  final bool canControlRecording;
+
+  @override
+  Widget build(BuildContext context) {
+    final snapshot = state.latestSnapshot;
+    final action = switch (snapshot?.state) {
+      DeviceState.recording => (2, '暂停录音', Icons.pause_outlined),
+      DeviceState.paused => (3, '继续录音', Icons.play_arrow_outlined),
+      _ => (1, '开始录音', Icons.fiber_manual_record_outlined),
+    };
+    return AppSurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('设备录音', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: AppButton.primary(
+                  label: action.$2,
+                  icon: action.$3,
+                  onPressed:
+                      state.isRecordActionInFlight ||
+                          !canControlRecording ||
+                          onAction == null
+                      ? null
+                      : () => onAction!(action.$1),
+                ),
+              ),
+              if (snapshot?.state == DeviceState.recording ||
+                  snapshot?.state == DeviceState.paused) ...[
+                const SizedBox(width: 12),
+                Expanded(
+                  child: AppButton.secondary(
+                    label: '结束录音',
+                    icon: Icons.stop_outlined,
+                    onPressed:
+                        state.isRecordActionInFlight ||
+                            !canControlRecording ||
+                            onAction == null
+                        ? null
+                        : () => onAction!(0),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          AppButton.secondary(
+            label: '设备录音文件',
+            icon: Icons.folder_open_outlined,
+            onPressed: canOpenFiles ? onOpenFiles : null,
+          ),
+          if (state.isRecordActionInFlight) ...[
+            const SizedBox(height: 8),
+            const LinearProgressIndicator(minHeight: 2),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AuthenticationPanel extends StatelessWidget {
+  const _AuthenticationPanel({
+    required this.state,
+    this.onAuthenticate,
+    this.clearPreparation,
+    this.onPrepareClear,
+    this.onConfirmClear,
+  });
+
+  final DeviceAuthState state;
+  final VoidCallback? onAuthenticate;
+  final DeviceClearPreparation? clearPreparation;
+  final Future<void> Function()? onPrepareClear;
+  final Future<void> Function()? onConfirmClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final authenticated = state == DeviceAuthState.authenticated;
+    final confirmingClear = state == DeviceAuthState.clearConfirmationRequired;
+    final inFlight =
+        state == DeviceAuthState.authenticating ||
+        state == DeviceAuthState.clearPreparing ||
+        state == DeviceAuthState.clearing;
+    final label = switch (state) {
+      DeviceAuthState.authenticated => '已认证',
+      DeviceAuthState.authenticating => '正在认证',
+      DeviceAuthState.clearPreparing => '正在检查设备数据',
+      DeviceAuthState.clearConfirmationRequired => '待确认清除',
+      DeviceAuthState.clearing => '正在清除设备数据',
+      _ => '未认证',
+    };
+    return AppSurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('设备认证', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(label, style: Theme.of(context).textTheme.bodyMedium),
+          if (!authenticated) ...[
+            const SizedBox(height: 12),
+            AppButton.secondary(
+              label: inFlight ? '正在认证' : '认证设备',
+              icon: Icons.verified_user_outlined,
+              onPressed: inFlight ? null : onAuthenticate,
+            ),
+          ],
+          if (authenticated) ...[
+            const SizedBox(height: 12),
+            AppButton.destructive(
+              label: '解除绑定',
+              icon: Icons.link_off_outlined,
+              onPressed: onPrepareClear == null
+                  ? null
+                  : () => unawaited(onPrepareClear!()),
+            ),
+          ],
+          if (confirmingClear && clearPreparation != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              '${clearPreparation!.pendingFiles} 个文件尚未归档',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '将永久清除设备中的录音、索引、密钥和绑定信息。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            AppButton.destructive(
+              label: '确认清除设备',
+              icon: Icons.delete_forever_outlined,
+              onPressed: onConfirmClear == null
+                  ? null
+                  : () => unawaited(_confirmClear(context)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmClear(BuildContext context) async {
+    final confirmed = await AppConfirmationSheet.show(
+      context,
+      title: '确认解除绑定？',
+      message: '设备数据将被永久清除，且不能恢复。',
+      confirmLabel: '确认清除',
+      variant: AppConfirmationVariant.destructive,
+    );
+    if (confirmed) {
+      await onConfirmClear?.call();
+    }
   }
 }
 

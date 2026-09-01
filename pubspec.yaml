@@ -46,6 +46,7 @@ dependencies:
   uuid: 4.6.0
   flutter_foreground_task: 11.0.1
   share_plus: ^13.3.0
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:

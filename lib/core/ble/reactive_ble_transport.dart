@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:aipin/core/ble/android_ble_scan_permission_policy.dart';
+import 'package:aipin/core/ble/android_sdk_int_provider.dart';
 import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/diagnostics/evt_failure.dart';
@@ -14,12 +16,16 @@ class ReactiveBleTransport implements BleTransport {
   ReactiveBleTransport({
     reactive.FlutterReactiveBle? ble,
     SafeAppLogger? logger,
+    AndroidSdkIntProvider? androidSdkIntProvider,
   }) : _client = ble,
-       _logger = logger ?? const DebugSafeAppLogger(scope: 'BLE');
+       _logger = logger ?? const DebugSafeAppLogger(scope: 'BLE'),
+       _androidSdkIntProvider =
+           androidSdkIntProvider ?? const PlatformAndroidSdkIntProvider();
 
   reactive.FlutterReactiveBle? _client;
   final Map<String, _ActiveConnection> _connections = {};
   final SafeAppLogger _logger;
+  final AndroidSdkIntProvider _androidSdkIntProvider;
 
   reactive.FlutterReactiveBle get _ble =>
       _client ??= reactive.FlutterReactiveBle();
@@ -295,26 +301,35 @@ class ReactiveBleTransport implements BleTransport {
   }) async {
     final operation = withoutResponse ? 'write_without_response' : 'write';
     try {
-      _logger.info('${operation}_start', fields: {
-        'device': _redactDeviceId(characteristic.deviceId),
-        'characteristic': characteristic.characteristicUuid,
-        'bytes': bytes.length,
-      });
+      _logger.info(
+        '${operation}_start',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'characteristic': characteristic.characteristicUuid,
+          'bytes': bytes.length,
+        },
+      );
       final qualified = _qualifiedCharacteristic(characteristic);
       final future = withoutResponse
           ? _ble.writeCharacteristicWithoutResponse(qualified, value: bytes)
           : _ble.writeCharacteristicWithResponse(qualified, value: bytes);
       await future.timeout(const Duration(seconds: 12));
-      _logger.info('${operation}_success', fields: {
-        'device': _redactDeviceId(characteristic.deviceId),
-        'bytes': bytes.length,
-      });
+      _logger.info(
+        '${operation}_success',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'bytes': bytes.length,
+        },
+      );
     } catch (error, stackTrace) {
-      _logger.info('${operation}_failure', fields: {
-        'device': _redactDeviceId(characteristic.deviceId),
-        'characteristic': characteristic.characteristicUuid,
-        'error': '$error',
-      });
+      _logger.info(
+        '${operation}_failure',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'characteristic': characteristic.characteristicUuid,
+          'error': '$error',
+        },
+      );
       Error.throwWithStackTrace(
         BleTransportException(
           EvtFailure.transport(message: '蓝牙写入失败。', detail: '$error'),
@@ -374,13 +389,15 @@ class ReactiveBleTransport implements BleTransport {
 
   Future<void> _ensureScanPermission() async {
     if (Platform.isAndroid) {
-      final statuses = await [
-        Permission.bluetoothScan,
-        Permission.bluetoothConnect,
-      ].request();
+      final sdkInt = await _androidSdkIntProvider.sdkInt;
+      final permissions =
+          AndroidBleScanPermissionPolicy.platformPermissionsForSdkInt(sdkInt);
+      final statuses = await permissions.request();
       if (statuses.values.any((status) => !status.isGranted)) {
         throw BleTransportException(
-          EvtFailure.environment(message: '需要蓝牙扫描和连接权限才能开始联调。'),
+          EvtFailure.environment(
+            message: sdkInt >= 31 ? '需要附近设备权限才能开始扫描。' : '需要定位权限才能开始扫描。',
+          ),
         );
       }
       return;

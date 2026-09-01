@@ -11,9 +11,13 @@ import 'package:aipin/core/protocol/protocol_writer.dart';
 import 'package:aipin/features/device_session/domain/device_configuration.dart';
 import 'package:aipin/features/device_session/domain/device_capabilities.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
+import 'package:aipin/features/device_session/domain/device_file_gateway.dart';
 import 'package:aipin/features/device_session/domain/device_info.dart';
+import 'package:aipin/features/device_session/domain/device_security_gateway.dart';
+import 'package:aipin/features/device_session/domain/ticket_gateway.dart';
 
-class DeviceProtocolRepository {
+class DeviceProtocolRepository
+    implements DeviceFileGateway, DeviceSecurityGateway {
   DeviceProtocolRepository({
     required this.deviceId,
     required this.profile,
@@ -65,27 +69,47 @@ class DeviceProtocolRepository {
   }
 
   Future<DeviceStatus> readStatus() async {
-    final response = await commands.execute(
-      EvtCommandRequest(
-        command: 0x06,
-        content: const [0x01],
-        writeCharacteristic: _characteristic(BleLogicalEndpoint.fa10Fa16),
-        expectedResponseCommand: 0x86,
-        expectedSubCommand: 0x01,
-      ),
-    );
+    final response = await _executeStatusCommand(0x01);
     return decodeStatus(response.frame);
   }
 
-  Future<Uint8List> readBatteryFrame() => _readFrame(
-    BleLogicalEndpoint.fb10Fb11,
-    expectedCommand: 0x91,
-  );
+  Future<void> setRecordConsent(bool granted) async {
+    final response = await _executeStatusCommand(0x02, [granted ? 1 : 0]);
+    _readStatusData(response.frame, subCommand: 0x02);
+  }
 
-  Future<Uint8List> readStorageFrame() => _readFrame(
-    BleLogicalEndpoint.fa10Fa15,
-    expectedCommand: 0x85,
-  );
+  Future<int> readPrivacyDuration() async {
+    final response = await _executeStatusCommand(0x03);
+    return _readStatusData(response.frame, subCommand: 0x03).single;
+  }
+
+  Future<void> setPrivacyDuration(int durationCode) async {
+    if (durationCode < 0 || durationCode > 3) {
+      throw RangeError.range(durationCode, 0, 3);
+    }
+    final response = await _executeStatusCommand(0x04, [durationCode]);
+    _readStatusData(response.frame, subCommand: 0x04);
+  }
+
+  Future<Uint8List> readBatteryFrame() =>
+      _readFrame(BleLogicalEndpoint.fb10Fb11, expectedCommand: 0x91);
+
+  Future<Uint8List> readStorageFrame() =>
+      _readFrame(BleLogicalEndpoint.fa10Fa15, expectedCommand: 0x85);
+
+  Future<DeviceBattery> readBattery() async =>
+      decodeBattery(_decodeFrame(await readBatteryFrame()));
+
+  Future<DeviceStorage> readStorage() async =>
+      decodeStorage(_decodeFrame(await readStorageFrame()));
+
+  Future<int> readFileCount() async {
+    final bytes = await _readFrame(
+      BleLogicalEndpoint.ff10Ff11,
+      expectedCommand: 0xA1,
+    );
+    return decodeFileCount(_decodeFrame(bytes));
+  }
 
   Future<EvtFrame> setRecordAction(int action) async {
     if (action < 0 || action > 3) {
@@ -103,7 +127,47 @@ class DeviceProtocolRepository {
     return response.frame;
   }
 
-  Future<List<DeviceFile>> listFiles({int offset = 0, int pageSize = 10}) async {
+  @override
+  Future<DeviceSecurityResponse> execute(DeviceSecurityRequest request) async {
+    final action = request.action;
+    final transactionId = request.transactionId;
+    final data = request.data;
+    if (transactionId < 0 || transactionId > 0xFFFFFFFF) {
+      throw RangeError.range(transactionId, 0, 0xFFFFFFFF);
+    }
+    if (data.length > 0xFFFF) {
+      throw RangeError.range(data.length, 0, 0xFFFF, 'data');
+    }
+    final writer = ProtocolWriter()
+      ..u8(0xF2)
+      ..u8(action.wireValue)
+      ..u32Le(transactionId)
+      ..u16Le(data.length)
+      ..addAll(data);
+    final response = await commands.execute(
+      EvtCommandRequest(
+        command: 0x09,
+        content: writer.bytes,
+        writeCharacteristic: _characteristic(BleLogicalEndpoint.fa10Fa19),
+        expectedResponseCommand: 0x89,
+        responseMatcher: (frame) => _matchesAuthenticationResponse(
+          frame,
+          action: action,
+          transactionId: transactionId,
+        ),
+      ),
+    );
+    return decodeSecurityResponse(
+      response.frame,
+      expectedAction: action,
+      expectedTransactionId: transactionId,
+    );
+  }
+
+  Future<List<DeviceFile>> listFiles({
+    int offset = 0,
+    int pageSize = 10,
+  }) async {
     if (offset < 0 || offset > 0xFFFF) {
       throw RangeError.range(offset, 0, 0xFFFF);
     }
@@ -124,6 +188,7 @@ class DeviceProtocolRepository {
     return decodeFileList(response.frame);
   }
 
+  @override
   Future<DeviceFileMetadata> readFileMetadata(List<int> nameSlot) async {
     _validateNameSlot(nameSlot);
     final content = [0x01, 0x11, ...nameSlot];
@@ -139,6 +204,43 @@ class DeviceProtocolRepository {
     return decodeFileMetadata(response.frame);
   }
 
+  Future<int> confirmArchive({
+    required List<int> nameSlot,
+    required int fileSize,
+    required int crc32,
+  }) async {
+    _validateNameSlot(nameSlot);
+    if (fileSize < 0 || fileSize > 0xFFFFFFFF) {
+      throw RangeError.range(fileSize, 0, 0xFFFFFFFF);
+    }
+    if (crc32 < 0 || crc32 > 0xFFFFFFFF) {
+      throw RangeError.range(crc32, 0, 0xFFFFFFFF);
+    }
+    final writer = ProtocolWriter()
+      ..addAll(nameSlot)
+      ..u32Le(fileSize)
+      ..u32Le(crc32)
+      ..u8(1);
+    final response = await commands.execute(
+      EvtCommandRequest(
+        command: 0x26,
+        content: [0x02, writer.bytes.length, ...writer.bytes],
+        writeCharacteristic: _characteristic(BleLogicalEndpoint.ff10Ff16),
+        expectedResponseCommand: 0xA6,
+        expectedSubCommand: 0x02,
+      ),
+    );
+    final content = response.frame.content;
+    if (content.length != 4 || content[0] != 0x02 || content[1] != 0) {
+      throw const FormatException('设备归档确认响应无效。');
+    }
+    if (content[2] != 1) {
+      throw const FormatException('设备归档确认数据长度无效。');
+    }
+    return content[3];
+  }
+
+  @override
   Future<Uint8List> readFileChunk({
     required List<int> nameSlot,
     int startOffset = 0,
@@ -193,11 +295,15 @@ class DeviceProtocolRepository {
       throw const FormatException('设备信息缺少录音状态。');
     }
     final recordStatus = reader.u8(recordOffset);
-    final tail = recordStatus == 0 ? recordOffset + 1 + 6 : recordOffset + 8 + 6;
+    final tail = recordStatus == 0
+        ? recordOffset + 1 + 6
+        : recordOffset + 8 + 6;
     if (frame.content.length < tail) {
       throw const FormatException('设备信息缺少电量或录音参数。');
     }
-    final batteryOffset = recordStatus == 0 ? recordOffset + 1 : recordOffset + 8;
+    final batteryOffset = recordStatus == 0
+        ? recordOffset + 1
+        : recordOffset + 8;
     return DeviceInfo(
       capabilities: DeviceCapabilities(protocolVersion: protocolVersion),
       deviceCode: deviceCode,
@@ -213,9 +319,20 @@ class DeviceProtocolRepository {
     );
   }
 
-  static DeviceStatus decodeStatus(EvtFrame frame) {
+  static DeviceStatus decodeStatus(EvtFrame frame) =>
+      _decodeStatus(frame, expectedSubCommand: 0x01);
+
+  static DeviceStatus decodeStatusEvent(EvtFrame frame) =>
+      _decodeStatus(frame, expectedSubCommand: 0x80);
+
+  static DeviceStatus _decodeStatus(
+    EvtFrame frame, {
+    required int expectedSubCommand,
+  }) {
     _expectCommand(frame, 0x86);
-    if (frame.content.length < 8 || frame.content[0] != 0x01 || frame.content[1] != 0) {
+    if (frame.content.length < 8 ||
+        frame.content[0] != expectedSubCommand ||
+        frame.content[1] != 0) {
       throw const FormatException('设备状态响应无效。');
     }
     final reader = ProtocolReader(frame.content);
@@ -231,6 +348,38 @@ class DeviceProtocolRepository {
     );
   }
 
+  static DeviceBattery decodeBattery(EvtFrame frame) {
+    _expectCommand(frame, 0x91);
+    if (frame.content.length != 3 || frame.content[0] > 100) {
+      throw const FormatException('设备电池状态无效。');
+    }
+    return DeviceBattery(
+      percent: frame.content[0],
+      isCharging: frame.content[1] != 0,
+      chargingMode: frame.content[2],
+    );
+  }
+
+  static DeviceStorage decodeStorage(EvtFrame frame) {
+    _expectCommand(frame, 0x85);
+    if (frame.content.length != 8) {
+      throw const FormatException('设备存储状态长度无效。');
+    }
+    final reader = ProtocolReader(frame.content);
+    return DeviceStorage(
+      totalMegabytes: reader.u32Le(0),
+      freeMegabytes: reader.u32Le(4),
+    );
+  }
+
+  static int decodeFileCount(EvtFrame frame) {
+    _expectCommand(frame, 0xA1);
+    if (frame.content.length != 2) {
+      throw const FormatException('设备文件数量长度无效。');
+    }
+    return ProtocolReader(frame.content).u16Le(0);
+  }
+
   static List<DeviceFile> decodeFileList(EvtFrame frame) {
     _expectCommand(frame, 0xA2);
     final reader = ProtocolReader(frame.content);
@@ -239,14 +388,15 @@ class DeviceProtocolRepository {
       throw const FormatException('文件列表长度无效。');
     }
     return [
-      for (var index = 0; index < count; index += 1)
-        _decodeFile(reader, index),
+      for (var index = 0; index < count; index += 1) _decodeFile(reader, index),
     ];
   }
 
   static DeviceFileMetadata decodeFileMetadata(EvtFrame frame) {
     _expectCommand(frame, 0xA6);
-    if (frame.content.length < 4 || frame.content[0] != 0x01 || frame.content[1] != 0) {
+    if (frame.content.length < 4 ||
+        frame.content[0] != 0x01 ||
+        frame.content[1] != 0) {
       throw const FormatException('文件元数据响应无效。');
     }
     final dataLength = frame.content[2];
@@ -257,7 +407,10 @@ class DeviceProtocolRepository {
     return DeviceFileMetadata(
       name: data.asciiSlot17(0),
       nameSlot: List.unmodifiable(data.bytes.sublist(0, 17)),
-      startUtc: DateTime.fromMillisecondsSinceEpoch(data.u32Le(17) * 1000, isUtc: true),
+      startUtc: DateTime.fromMillisecondsSinceEpoch(
+        data.u32Le(17) * 1000,
+        isUtc: true,
+      ),
       durationSeconds: data.u32Le(21),
       recordingSessionId: data.u32Le(25),
       segmentIndex: data.u16Le(29),
@@ -269,6 +422,32 @@ class DeviceProtocolRepository {
     );
   }
 
+  static DeviceSecurityResponse decodeSecurityResponse(
+    EvtFrame frame, {
+    required DeviceAuthAction expectedAction,
+    required int expectedTransactionId,
+  }) {
+    _expectCommand(frame, 0x89);
+    final reader = ProtocolReader(frame.content);
+    if (frame.content.length < 9 ||
+        reader.u8(0) != 0xF2 ||
+        reader.u8(1) != expectedAction.wireValue ||
+        reader.u32Le(2) != expectedTransactionId) {
+      throw const FormatException('认证响应与当前事务不匹配。');
+    }
+    final result = reader.u8(6);
+    final length = reader.u16Le(7);
+    if (frame.content.length != 9 + length || (result != 0 && length != 0)) {
+      throw const FormatException('认证响应长度无效。');
+    }
+    return DeviceSecurityResponse(
+      action: expectedAction,
+      transactionId: expectedTransactionId,
+      result: result,
+      data: frame.content.sublist(9),
+    );
+  }
+
   Future<Uint8List> _readFrame(
     BleLogicalEndpoint endpoint, {
     required int expectedCommand,
@@ -276,9 +455,48 @@ class DeviceProtocolRepository {
     final bytes = await transport.read(_characteristic(endpoint));
     final result = codec.decode(bytes);
     if (!result.isSuccess || result.value!.command != expectedCommand) {
-      throw FormatException('设备读取响应 CMD 不匹配：0x${expectedCommand.toRadixString(16)}');
+      throw FormatException(
+        '设备读取响应 CMD 不匹配：0x${expectedCommand.toRadixString(16)}',
+      );
     }
     return Uint8List.fromList(bytes);
+  }
+
+  EvtFrame _decodeFrame(Uint8List bytes) {
+    final result = codec.decode(bytes);
+    if (!result.isSuccess || result.value == null) {
+      throw const FormatException('设备读取帧无效。');
+    }
+    return result.value!;
+  }
+
+  Future<EvtCommandResponse> _executeStatusCommand(
+    int subCommand, [
+    List<int> data = const [],
+  ]) {
+    return commands.execute(
+      EvtCommandRequest(
+        command: 0x06,
+        content: [subCommand, ...data],
+        writeCharacteristic: _characteristic(BleLogicalEndpoint.fa10Fa16),
+        expectedResponseCommand: 0x86,
+        expectedSubCommand: subCommand,
+      ),
+    );
+  }
+
+  static List<int> _readStatusData(EvtFrame frame, {required int subCommand}) {
+    _expectCommand(frame, 0x86);
+    if (frame.content.length < 3 ||
+        frame.content[0] != subCommand ||
+        frame.content[1] != 0) {
+      throw const FormatException('设备状态配置响应无效。');
+    }
+    final length = frame.content[2];
+    if (frame.content.length != 3 + length) {
+      throw const FormatException('设备状态配置响应长度无效。');
+    }
+    return frame.content.sublist(3);
   }
 
   BleCharacteristic _characteristic(BleLogicalEndpoint endpoint) {
@@ -322,8 +540,24 @@ class DeviceProtocolRepository {
   }
 
   static void _expectContentLength(EvtFrame frame, int length, {int? or}) {
-    if (frame.content.length != length && (or == null || frame.content.length != or)) {
+    if (frame.content.length != length &&
+        (or == null || frame.content.length != or)) {
       throw const FormatException('设备响应长度无效。');
     }
+  }
+
+  static bool _matchesAuthenticationResponse(
+    EvtFrame frame, {
+    required DeviceAuthAction action,
+    required int transactionId,
+  }) {
+    if (frame.command != 0x89 || frame.content.length < 9) {
+      return false;
+    }
+    final reader = ProtocolReader(frame.content);
+    return reader.u8(0) == 0xF2 &&
+        reader.u8(1) == action.wireValue &&
+        reader.u32Le(2) == transactionId &&
+        frame.content.length == 9 + reader.u16Le(7);
   }
 }

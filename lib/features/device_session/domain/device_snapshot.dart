@@ -4,6 +4,7 @@ enum DeviceState {
   unbound,
   standby,
   recording,
+  paused,
   privacy,
   ota,
   safeOff,

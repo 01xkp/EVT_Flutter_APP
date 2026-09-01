@@ -1,6 +1,3 @@
-import 'dart:async';
-import 'dart:typed_data';
-
 import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/protocol/evt_command_client.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
@@ -85,39 +82,79 @@ void main() {
     await client.close();
   });
 
-  test('serializes requests so the second write waits for the first response',
-      () async {
-    final transport = FakeBleTransport();
-    final codec = EvtProtocolCodec();
-    final client = EvtCommandClient(
-      transport: transport,
-      codec: codec,
-      responses: transport.subscriptionStream,
-    );
+  test(
+    'serializes requests so the second write waits for the first response',
+    () async {
+      final transport = FakeBleTransport();
+      final codec = EvtProtocolCodec();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
 
-    final first = client.execute(
-      const EvtCommandRequest(
-        command: 0x06,
-        writeCharacteristic: characteristic,
-        timeout: Duration(milliseconds: 100),
-      ),
-    );
-    final second = client.execute(
-      const EvtCommandRequest(
-        command: 0x07,
-        writeCharacteristic: characteristic,
-        timeout: Duration(milliseconds: 100),
-      ),
-    );
-    await Future<void>.delayed(Duration.zero);
-    expect(transport.writes, hasLength(1));
-    transport.emitSubscriptionBytes(codec.encodeRequest(0x86, const []));
-    await first;
-    await Future<void>.delayed(Duration.zero);
-    expect(transport.writes, hasLength(2));
-    transport.emitSubscriptionBytes(codec.encodeRequest(0x87, const []));
-    await second;
-    await client.close();
-  });
+      final first = client.execute(
+        const EvtCommandRequest(
+          command: 0x06,
+          writeCharacteristic: characteristic,
+          timeout: Duration(milliseconds: 100),
+        ),
+      );
+      final second = client.execute(
+        const EvtCommandRequest(
+          command: 0x07,
+          writeCharacteristic: characteristic,
+          timeout: Duration(milliseconds: 100),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes, hasLength(1));
+      transport.emitSubscriptionBytes(codec.encodeRequest(0x86, const []));
+      await first;
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes, hasLength(2));
+      transport.emitSubscriptionBytes(codec.encodeRequest(0x87, const []));
+      await second;
+      await client.close();
+    },
+  );
+
+  test(
+    'keeps a response pending until its transaction matcher accepts it',
+    () async {
+      final transport = FakeBleTransport();
+      final codec = EvtProtocolCodec();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
+      final unsolicited = <int>[];
+      final subscription = client.events.listen(
+        (frame) => unsolicited.add(frame.content[2]),
+      );
+
+      final operation = client.execute(
+        EvtCommandRequest(
+          command: 0x09,
+          writeCharacteristic: characteristic,
+          responseMatcher: (frame) =>
+              frame.content.length >= 6 && frame.content[2] == 7,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x89, const [0xF2, 0x20, 8, 0, 0, 0, 0, 0]),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(unsolicited, [8]);
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x89, const [0xF2, 0x20, 7, 0, 0, 0, 0, 0]),
+      );
+
+      await expectLater(operation, completes);
+      await subscription.cancel();
+      await client.close();
+    },
+  );
 }
-

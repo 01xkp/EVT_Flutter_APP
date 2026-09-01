@@ -17,6 +17,7 @@ final class DeviceStatusViewModel {
       connectionLabel: connected ? '已连接' : '已断开',
       recordingLabel: switch (snapshot?.state) {
         DeviceState.recording => '正在录音',
+        DeviceState.paused => '已暂停',
         DeviceState.standby => '未在录音',
         _ => '暂时无法获取',
       },

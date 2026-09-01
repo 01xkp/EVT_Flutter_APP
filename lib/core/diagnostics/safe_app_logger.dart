@@ -5,7 +5,9 @@ abstract interface class SafeAppLogger {
 }
 
 class DebugSafeAppLogger implements SafeAppLogger {
-  const DebugSafeAppLogger();
+  const DebugSafeAppLogger({this.scope = 'APP'});
+
+  final String scope;
 
   @override
   void info(String event, {Map<String, Object?> fields = const {}}) {
@@ -15,6 +17,9 @@ class DebugSafeAppLogger implements SafeAppLogger {
     final details = fields.entries
         .map((entry) => '${entry.key}=${entry.value}')
         .join(' ');
-    debugPrint('[AIPIN][AI] $event${details.isEmpty ? '' : ' $details'}');
+    debugPrint(
+      '[AIPIN][$scope] ${DateTime.now().toIso8601String()} $event'
+      '${details.isEmpty ? '' : ' $details'}',
+    );
   }
 }

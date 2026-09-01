@@ -30,10 +30,10 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, bluetoothChannel)
             .setMethodCallHandler { call, result ->
-                if (call.method == "requestEnable") {
-                    requestBluetoothEnable(result)
-                } else {
-                    result.notImplemented()
+                when (call.method) {
+                    "requestEnable" -> requestBluetoothEnable(result)
+                    "androidSdkInt" -> result.success(Build.VERSION.SDK_INT)
+                    else -> result.notImplemented()
                 }
             }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, audioSegmentationChannel)

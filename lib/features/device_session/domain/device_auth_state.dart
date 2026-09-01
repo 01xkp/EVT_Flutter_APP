@@ -1,2 +1,10 @@
-enum DeviceAuthState { unknown, unbound, authenticating, authenticated, failed }
-
+enum DeviceAuthState {
+  unknown,
+  unbound,
+  authenticating,
+  authenticated,
+  clearPreparing,
+  clearConfirmationRequired,
+  clearing,
+  failed,
+}

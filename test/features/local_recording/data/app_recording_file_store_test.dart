@@ -90,4 +90,38 @@ void main() {
       throwsA(isA<RecordingFileException>()),
     );
   });
+
+  test('imports a device OGG file without changing its extension', () async {
+    final imported = await store.importBytes(
+      id: 'device-1',
+      extension: '.ogg',
+      chunks: Stream<List<int>>.fromIterable(const [
+        [1, 2],
+        [3],
+      ]),
+    );
+
+    expect(imported.relativePath, 'device-1.ogg');
+    expect(imported.sizeBytes, 3);
+    expect(await File(imported.absolutePath).readAsBytes(), [1, 2, 3]);
+  });
+
+  test(
+    'keeps a device download temporary file available for a later resume',
+    () async {
+      final pending = await store.createPending(
+        id: 'device-2',
+        extension: '.ogg',
+      );
+
+      await store.append(pending, const [1, 2]);
+
+      expect(await store.pendingLength(pending), 2);
+      expect(
+        await store.readPending(pending).expand((bytes) => bytes).toList(),
+        [1, 2],
+      );
+      expect(File(pending.temporaryPath).exists(), completion(isTrue));
+    },
+  );
 }

@@ -9,8 +9,10 @@ class AppRecordingFileStore implements RecordingFileStore {
   AppRecordingFileStore.forTesting({required Directory root})
     : _rootDirectory = (() async => root);
 
-  static final _validRelativePath = RegExp(r'^[A-Za-z0-9-]+\.m4a$');
-  static final _validTemporaryFileName = RegExp(r'^[A-Za-z0-9-]+\.part\.m4a$');
+  static final _validRelativePath = RegExp(r'^[A-Za-z0-9-]+\.(m4a|ogg)$');
+  static final _validTemporaryFileName = RegExp(
+    r'^[A-Za-z0-9-]+\.part\.(m4a|ogg)$',
+  );
 
   final Future<Directory> Function() _rootDirectory;
 
@@ -22,15 +24,46 @@ class AppRecordingFileStore implements RecordingFileStore {
   }
 
   @override
-  Future<PendingRecordingFile> createPending({required String id}) async {
-    final relativePath = '$id.m4a';
+  Future<PendingRecordingFile> createPending({
+    required String id,
+    String extension = '.m4a',
+  }) async {
+    return _createPending(id: id, extension: _validateExtension(extension));
+  }
+
+  Future<PendingRecordingFile> _createPending({
+    required String id,
+    required String extension,
+  }) async {
+    final relativePath = '$id$extension';
     _validateRelativePath(relativePath);
     final directory = await _recordingsDirectory();
     return PendingRecordingFile(
       id: id,
-      temporaryPath: '${directory.path}${Platform.pathSeparator}$id.part.m4a',
+      temporaryPath:
+          '${directory.path}${Platform.pathSeparator}$id.part$extension',
       relativePath: relativePath,
     );
+  }
+
+  @override
+  Future<CompletedRecordingFile> importBytes({
+    required String id,
+    String extension = '.m4a',
+    required Stream<List<int>> chunks,
+  }) async {
+    final pending = await createPending(id: id, extension: extension);
+    try {
+      await for (final chunk in chunks) {
+        if (chunk.isNotEmpty) {
+          await append(pending, chunk);
+        }
+      }
+      return finalize(pending);
+    } catch (_) {
+      await discard(pending);
+      rethrow;
+    }
   }
 
   @override
@@ -50,6 +83,44 @@ class AppRecordingFileStore implements RecordingFileStore {
     } on FileSystemException catch (error) {
       throw RecordingFileException('无法删除录音临时文件：${error.message}');
     }
+  }
+
+  @override
+  Future<void> append(PendingRecordingFile pending, List<int> bytes) async {
+    if (bytes.isEmpty) return;
+    final path = await _validatedTemporaryPath(pending);
+    final output = File(path);
+    try {
+      await output.parent.create(recursive: true);
+      final sink = output.openWrite(mode: FileMode.append);
+      try {
+        sink.add(bytes);
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+    } on FileSystemException catch (error) {
+      throw RecordingFileException('无法写入录音临时文件：${error.message}');
+    }
+  }
+
+  @override
+  Future<int> pendingLength(PendingRecordingFile pending) async {
+    final file = File(await _validatedTemporaryPath(pending));
+    try {
+      return await file.exists() ? await file.length() : 0;
+    } on FileSystemException catch (error) {
+      throw RecordingFileException('无法读取录音临时文件：${error.message}');
+    }
+  }
+
+  @override
+  Stream<List<int>> readPending(PendingRecordingFile pending) async* {
+    final file = File(await _validatedTemporaryPath(pending));
+    if (!await file.exists()) {
+      return;
+    }
+    yield* file.openRead().map(List<int>.from);
   }
 
   @override
@@ -164,7 +235,29 @@ class AppRecordingFileStore implements RecordingFileStore {
   }
 
   String _temporaryPathFor(String finalPath) {
-    return finalPath.replaceFirst(RegExp(r'\.m4a$'), '.part.m4a');
+    final match = RegExp(r'\.(m4a|ogg)$').firstMatch(finalPath);
+    if (match == null) {
+      throw const RecordingFileException('录音文件路径无效。');
+    }
+    return '${finalPath.substring(0, match.start)}.part${match.group(0)}';
+  }
+
+  Future<String> _validatedTemporaryPath(PendingRecordingFile pending) async {
+    _validateRelativePath(pending.relativePath);
+    final expected = _temporaryPathFor(
+      await absolutePathFor(pending.relativePath),
+    );
+    if (pending.temporaryPath != expected) {
+      throw const RecordingFileException('录音临时文件路径无效。');
+    }
+    return expected;
+  }
+
+  String _validateExtension(String value) {
+    if (value == '.m4a' || value == '.ogg') {
+      return value;
+    }
+    throw const RecordingFileException('录音文件格式不支持。');
   }
 
   void _validateRelativePath(String relativePath) {

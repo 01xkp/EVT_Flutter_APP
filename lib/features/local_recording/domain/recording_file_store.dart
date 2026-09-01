@@ -32,7 +32,18 @@ class RecordingFileException implements Exception {
 }
 
 abstract interface class RecordingFileStore {
-  Future<PendingRecordingFile> createPending({required String id});
+  Future<PendingRecordingFile> createPending({
+    required String id,
+    String extension = '.m4a',
+  });
+  Future<void> append(PendingRecordingFile pending, List<int> bytes);
+  Future<int> pendingLength(PendingRecordingFile pending);
+  Stream<List<int>> readPending(PendingRecordingFile pending);
+  Future<CompletedRecordingFile> importBytes({
+    required String id,
+    String extension = '.m4a',
+    required Stream<List<int>> chunks,
+  });
   Future<void> discard(PendingRecordingFile pending);
   Future<CompletedRecordingFile> finalize(PendingRecordingFile pending);
   Future<CompletedRecordingFile?> recoverPartial(String relativePath);

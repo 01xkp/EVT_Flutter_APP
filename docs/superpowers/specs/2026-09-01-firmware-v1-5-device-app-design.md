@@ -93,10 +93,11 @@ an exportable capture, not falsely labeled playable audio.
 ## OTA
 
 `FirmwarePackageGateway` returns a package whose manifest contains target
-device identifiers, version, payload length, CRC-32, the captured WQOTA
-four-byte prefix/flags, and the payload bytes or verified local path. The App
-rejects a package with invalid length, CRC32, target identifiers, or missing
-prefix before writing to `2001`.
+device identifiers, WQOTA image version, expected post-update business
+software version, payload length, CRC-32, and captured WQOTA request and
+response four-byte prefix/flag vectors, plus the payload bytes or verified
+local path. The App rejects a package with invalid length, CRC32, target
+identifiers, version mapping, or either prefix before writing to `2001`.
 
 `WqotaUpdateController` runs the documented sequence: subscribe `2002`, read
 capability (`0x02`), query position (`E1`), admission (`E2`), enter (`E3`),
