@@ -8,5 +8,27 @@
   "notifyServiceUuid": "0000FA10-1212-EFDE-1523-785FEABCD123",
   "notifyCharacteristicUuid": "0000FA16-1212-EFDE-1523-785FEABCD123",
   "writeServiceUuid": "0000FA10-1212-EFDE-1523-785FEABCD123",
-  "writeCharacteristicUuid": "0000FA16-1212-EFDE-1523-785FEABCD123"
+  "writeCharacteristicUuid": "0000FA16-1212-EFDE-1523-785FEABCD123",
+  "endpoints": {
+    "fa10": {
+      "fa11": {"uuid": "", "operations": ["read", "indicate"]},
+      "fa12": {"uuid": "", "operations": ["read", "indicate"]},
+      "fa15": {"uuid": "", "operations": ["write"]},
+      "fa16": {"uuid": "0000FA16-1212-EFDE-1523-785FEABCD123", "operations": ["notify", "write"]},
+      "fa17": {"uuid": "", "operations": ["read", "indicate"]},
+      "fa18": {"uuid": "", "operations": ["read", "indicate"]},
+      "fa19": {"uuid": "", "operations": ["read", "indicate"]}
+    },
+    "fb10": {"fb11": {"uuid": "0000FB11-1212-EFDE-1523-785FEABCD123", "operations": ["read"]}},
+    "ff10": {
+      "ff11": {"uuid": "", "operations": ["read", "notify"]},
+      "ff12": {"uuid": "", "operations": ["write"]},
+      "ff13": {"uuid": "", "operations": ["read"]},
+      "ff16": {"uuid": "", "operations": ["notify"]}
+    },
+    "wqota": {
+      "2001": {"uuid": "", "serviceUuid": "7033", "operations": ["writeWithoutResponse"]},
+      "2002": {"uuid": "", "serviceUuid": "7033", "operations": ["notify"]}
+    }
+  }
 }

@@ -11,6 +11,7 @@ class FakeBleTransport implements BleTransport {
     DeviceProfile? profile,
     List<BleService>? services,
     this.deferRead = false,
+    this.readError,
   }) : profile = profile ?? DeviceProfile.empty(),
        services = services ?? const [];
 
@@ -74,9 +75,12 @@ class FakeBleTransport implements BleTransport {
   final List<String> discoveryRequests = [];
   var scanCallCount = 0;
   final bool deferRead;
+  final Object? readError;
   final Completer<Uint8List> _deferredRead = Completer<Uint8List>();
   final List<BleService> services;
   Uint8List readValue = Uint8List(0);
+  final writes = <Uint8List>[];
+  final writesWithoutResponse = <Uint8List>[];
 
   void emitCandidate(DeviceCandidate candidate) =>
       _scanController.add(candidate);
@@ -90,6 +94,10 @@ class FakeBleTransport implements BleTransport {
     _subscriptionController.add(Uint8List.fromList(bytes));
   }
 
+  void emitSubscriptionError(Object error) {
+    _subscriptionController.addError(error, StackTrace.current);
+  }
+
   @override
   Stream<DeviceCandidate> scan() {
     scanCallCount += 1;
@@ -97,8 +105,10 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
-  Stream<BleConnectionState> connect(String deviceId) =>
-      Stream.value(BleConnectionState.connected);
+  Stream<BleConnectionState> connect(String deviceId) async* {
+    yield BleConnectionState.connected;
+    yield* _connectionController.stream;
+  }
 
   @override
   Future<List<BleService>> discoverServices(String deviceId) async {
@@ -112,7 +122,23 @@ class FakeBleTransport implements BleTransport {
 
   @override
   Future<Uint8List> read(BleCharacteristic characteristic) async {
+    if (readError != null) {
+      throw readError!;
+    }
     return deferRead ? _deferredRead.future : readValue;
+  }
+
+  @override
+  Future<void> write(BleCharacteristic characteristic, Uint8List bytes) async {
+    writes.add(Uint8List.fromList(bytes));
+  }
+
+  @override
+  Future<void> writeWithoutResponse(
+    BleCharacteristic characteristic,
+    Uint8List bytes,
+  ) async {
+    writesWithoutResponse.add(Uint8List.fromList(bytes));
   }
 
   void completeRead(List<int> bytes) {

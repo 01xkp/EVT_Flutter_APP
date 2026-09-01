@@ -5,15 +5,21 @@ import 'dart:typed_data';
 import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart' as reactive;
 import 'package:permission_handler/permission_handler.dart';
 
 class ReactiveBleTransport implements BleTransport {
-  ReactiveBleTransport({reactive.FlutterReactiveBle? ble}) : _client = ble;
+  ReactiveBleTransport({
+    reactive.FlutterReactiveBle? ble,
+    SafeAppLogger? logger,
+  }) : _client = ble,
+       _logger = logger ?? const DebugSafeAppLogger(scope: 'BLE');
 
   reactive.FlutterReactiveBle? _client;
   final Map<String, _ActiveConnection> _connections = {};
+  final SafeAppLogger _logger;
 
   reactive.FlutterReactiveBle get _ble =>
       _client ??= reactive.FlutterReactiveBle();
@@ -21,10 +27,12 @@ class ReactiveBleTransport implements BleTransport {
   @override
   Stream<DeviceCandidate> scan() async* {
     try {
+      _logger.info('scan_start');
       await _ensureScanPermission();
       final status = await _ble.statusStream.firstWhere(
         (status) => status != reactive.BleStatus.unknown,
       );
+      _logger.info('bluetooth_status', fields: {'status': status.name});
       if (status == reactive.BleStatus.poweredOff) {
         throw BleTransportException(
           EvtFailure.environment(message: '蓝牙未开启。'),
@@ -36,6 +44,14 @@ class ReactiveBleTransport implements BleTransport {
         scanMode: reactive.ScanMode.lowLatency,
         requireLocationServicesEnabled: false,
       )) {
+        _logger.info(
+          'scan_result',
+          fields: {
+            'device': _redactDeviceId(device.id),
+            'hasName': device.name.trim().isNotEmpty,
+            'rssi': device.rssi,
+          },
+        );
         yield DeviceCandidate(
           id: device.id,
           name: device.name,
@@ -47,9 +63,18 @@ class ReactiveBleTransport implements BleTransport {
           discoveredAt: DateTime.now(),
         );
       }
-    } on BleTransportException {
+    } on BleTransportException catch (error) {
+      _logger.info(
+        'scan_failure',
+        fields: {
+          'issue': error.issue?.name ?? 'none',
+          'message': error.failure.message,
+          'detail': error.failure.detail ?? 'none',
+        },
+      );
       rethrow;
     } catch (error, stackTrace) {
+      _logger.info('scan_failure', fields: {'error': '$error'});
       Error.throwWithStackTrace(
         BleTransportException(
           EvtFailure.environment(message: '蓝牙扫描不可用。', detail: '$error'),
@@ -61,8 +86,16 @@ class ReactiveBleTransport implements BleTransport {
 
   @override
   Stream<BleConnectionState> connect(String deviceId) {
+    _logger.info(
+      'connect_request',
+      fields: {'device': _redactDeviceId(deviceId)},
+    );
     final existing = _connections[deviceId];
     if (existing != null) {
+      _logger.info(
+        'connect_reuse',
+        fields: {'device': _redactDeviceId(deviceId)},
+      );
       return existing.controller.stream;
     }
 
@@ -75,6 +108,14 @@ class ReactiveBleTransport implements BleTransport {
         )
         .listen(
           (update) {
+            _logger.info(
+              'connection_update',
+              fields: {
+                'device': _redactDeviceId(deviceId),
+                'state': update.connectionState.name,
+                'failure': update.failure?.toString() ?? 'none',
+              },
+            );
             if (update.failure != null) {
               controller.addError(
                 BleTransportException(
@@ -88,6 +129,10 @@ class ReactiveBleTransport implements BleTransport {
             controller.add(_mapConnectionState(update.connectionState));
           },
           onError: (Object error, StackTrace stackTrace) {
+            _logger.info(
+              'connection_error',
+              fields: {'device': _redactDeviceId(deviceId), 'error': '$error'},
+            );
             controller.addError(
               BleTransportException(
                 EvtFailure.transport(message: '蓝牙连接异常。', detail: '$error'),
@@ -96,6 +141,10 @@ class ReactiveBleTransport implements BleTransport {
             );
           },
           onDone: () {
+            _logger.info(
+              'connection_stream_done',
+              fields: {'device': _redactDeviceId(deviceId)},
+            );
             _finishConnection(deviceId, controller);
           },
         );
@@ -106,21 +155,43 @@ class ReactiveBleTransport implements BleTransport {
   @override
   Future<List<BleService>> discoverServices(String deviceId) async {
     try {
+      _logger.info(
+        'service_discovery_start',
+        fields: {'device': _redactDeviceId(deviceId)},
+      );
       await _ble.discoverAllServices(deviceId);
       final services = await _ble.getDiscoveredServices(deviceId);
-      return List.unmodifiable(
-        services.map(
-          (service) => BleService(
-            uuid: service.id.toString(),
-            characteristicUuids: List.unmodifiable(
-              service.characteristics.map(
-                (characteristic) => characteristic.id.toString(),
+      final discoveredServices = services
+          .map(
+            (service) => BleService(
+              uuid: service.id.toString(),
+              characteristicUuids: List.unmodifiable(
+                service.characteristics.map(
+                  (characteristic) => characteristic.id.toString(),
+                ),
               ),
             ),
-          ),
-        ),
+          )
+          .toList(growable: false);
+      _logger.info(
+        'service_discovery_success',
+        fields: {
+          'device': _redactDeviceId(deviceId),
+          'serviceCount': discoveredServices.length,
+          'services': discoveredServices
+              .map(
+                (service) =>
+                    '${service.uuid}[${service.characteristicUuids.join(',')}]',
+              )
+              .join(';'),
+        },
       );
+      return List.unmodifiable(discoveredServices);
     } catch (error, stackTrace) {
+      _logger.info(
+        'service_discovery_failure',
+        fields: {'device': _redactDeviceId(deviceId), 'error': '$error'},
+      );
       Error.throwWithStackTrace(
         BleTransportException(
           EvtFailure.transport(message: '服务发现失败。', detail: '$error'),
@@ -133,12 +204,33 @@ class ReactiveBleTransport implements BleTransport {
   @override
   Stream<Uint8List> subscribe(BleCharacteristic characteristic) async* {
     try {
+      _logger.info(
+        'notification_subscribe_start',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'characteristic': characteristic.characteristicUuid,
+        },
+      );
       await for (final bytes in _ble.subscribeToCharacteristic(
         _qualifiedCharacteristic(characteristic),
       )) {
+        _logger.info(
+          'notification_received',
+          fields: {
+            'device': _redactDeviceId(characteristic.deviceId),
+            'bytes': bytes.length,
+          },
+        );
         yield Uint8List.fromList(bytes);
       }
     } catch (error, stackTrace) {
+      _logger.info(
+        'notification_subscribe_failure',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'error': '$error',
+        },
+      );
       Error.throwWithStackTrace(
         BleTransportException(
           EvtFailure.transport(message: '状态订阅失败。', detail: '$error'),
@@ -151,10 +243,32 @@ class ReactiveBleTransport implements BleTransport {
   @override
   Future<Uint8List> read(BleCharacteristic characteristic) async {
     try {
-      return Uint8List.fromList(
+      _logger.info(
+        'read_start',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'characteristic': characteristic.characteristicUuid,
+        },
+      );
+      final bytes = Uint8List.fromList(
         await _ble.readCharacteristic(_qualifiedCharacteristic(characteristic)),
       );
+      _logger.info(
+        'read_success',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'bytes': bytes.length,
+        },
+      );
+      return bytes;
     } catch (error, stackTrace) {
+      _logger.info(
+        'read_failure',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'error': '$error',
+        },
+      );
       Error.throwWithStackTrace(
         BleTransportException(
           EvtFailure.transport(message: '状态读取失败。', detail: '$error'),
@@ -165,9 +279,63 @@ class ReactiveBleTransport implements BleTransport {
   }
 
   @override
+  Future<void> write(BleCharacteristic characteristic, Uint8List bytes) =>
+      _write(characteristic, bytes, withoutResponse: false);
+
+  @override
+  Future<void> writeWithoutResponse(
+    BleCharacteristic characteristic,
+    Uint8List bytes,
+  ) => _write(characteristic, bytes, withoutResponse: true);
+
+  Future<void> _write(
+    BleCharacteristic characteristic,
+    Uint8List bytes, {
+    required bool withoutResponse,
+  }) async {
+    final operation = withoutResponse ? 'write_without_response' : 'write';
+    try {
+      _logger.info('${operation}_start', fields: {
+        'device': _redactDeviceId(characteristic.deviceId),
+        'characteristic': characteristic.characteristicUuid,
+        'bytes': bytes.length,
+      });
+      final qualified = _qualifiedCharacteristic(characteristic);
+      final future = withoutResponse
+          ? _ble.writeCharacteristicWithoutResponse(qualified, value: bytes)
+          : _ble.writeCharacteristicWithResponse(qualified, value: bytes);
+      await future.timeout(const Duration(seconds: 12));
+      _logger.info('${operation}_success', fields: {
+        'device': _redactDeviceId(characteristic.deviceId),
+        'bytes': bytes.length,
+      });
+    } catch (error, stackTrace) {
+      _logger.info('${operation}_failure', fields: {
+        'device': _redactDeviceId(characteristic.deviceId),
+        'characteristic': characteristic.characteristicUuid,
+        'error': '$error',
+      });
+      Error.throwWithStackTrace(
+        BleTransportException(
+          EvtFailure.transport(message: '蓝牙写入失败。', detail: '$error'),
+        ),
+        stackTrace,
+      );
+    }
+  }
+
+  @override
   Future<void> disconnect(String deviceId) async {
+    _logger.info(
+      'disconnect_request',
+      fields: {'device': _redactDeviceId(deviceId)},
+    );
     final active = _connections.remove(deviceId);
     if (active == null) {
+      _logger.info(
+        'disconnect_noop',
+        fields: {'device': _redactDeviceId(deviceId)},
+      );
       return;
     }
     await active.subscription.cancel();
@@ -195,6 +363,13 @@ class ReactiveBleTransport implements BleTransport {
     if (!controller.isClosed) {
       unawaited(controller.close());
     }
+  }
+
+  static String _redactDeviceId(String deviceId) {
+    if (deviceId.length <= 4) {
+      return deviceId;
+    }
+    return '...${deviceId.substring(deviceId.length - 4)}';
   }
 
   Future<void> _ensureScanPermission() async {
