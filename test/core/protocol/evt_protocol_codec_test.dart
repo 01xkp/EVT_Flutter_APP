@@ -4,6 +4,19 @@ import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('encodes a request with little-endian length and CRC16', () {
+    final codec = EvtProtocolCodec();
+
+    final bytes = codec.encodeRequest(0x01, const [0xAA, 0xBB]);
+
+    expect(bytes.first, 0xED);
+    expect(bytes[1], 0x05);
+    expect(bytes[2], 0x00);
+    expect(bytes[3], 0x01);
+    expect(bytes.sublist(4, 6), [0xAA, 0xBB]);
+    expect(codec.decode(bytes).isSuccess, isTrue);
+  });
+
   test('uses the documented CRC-16/CCITT-FALSE test vector', () {
     expect(
       Crc16CcittFalse.calculate(const [

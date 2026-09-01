@@ -3,12 +3,34 @@ import 'dart:typed_data';
 import 'package:aipin/core/diagnostics/evt_failure.dart';
 import 'package:aipin/core/protocol/crc16.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
+import 'package:aipin/core/protocol/protocol_writer.dart';
 
 class EvtProtocolCodec {
   static const _head = 0xED;
   static const _minimumLengthField = 3;
   static const _prefixLength = 3;
   static const _minimumFrameLength = 6;
+
+  Uint8List encodeRequest(int command, Iterable<int> content) {
+    if (command < 0 || command > 0xFF) {
+      throw RangeError.range(command, 0, 0xFF);
+    }
+    final writer = ProtocolWriter()..u8(command);
+    writer.addAll(content);
+    final crc = Crc16CcittFalse.calculate(writer.bytes);
+    final length = writer.bytes.length + 2;
+    if (length > 0xFFFF) {
+      throw StateError('业务帧长度超出协议上限。');
+    }
+    return Uint8List.fromList([
+      _head,
+      length & 0xFF,
+      (length >> 8) & 0xFF,
+      ...writer.bytes,
+      crc & 0xFF,
+      (crc >> 8) & 0xFF,
+    ]);
+  }
 
   ProtocolDecodeResult decode(List<int> bytes) {
     if (bytes.length < _minimumFrameLength) {
