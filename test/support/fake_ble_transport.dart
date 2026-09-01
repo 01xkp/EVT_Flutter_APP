@@ -79,6 +79,8 @@ class FakeBleTransport implements BleTransport {
   final Completer<Uint8List> _deferredRead = Completer<Uint8List>();
   final List<BleService> services;
   Uint8List readValue = Uint8List(0);
+
+  Stream<Uint8List> get subscriptionStream => _subscriptionController.stream;
   final writes = <Uint8List>[];
   final writesWithoutResponse = <Uint8List>[];
 
