@@ -87,4 +87,28 @@ void main() {
       store.dispose();
     },
   );
+
+  test(
+    'does not persist when a non-debug build forces logging enabled',
+    () async {
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        isDebugBuild: () => false,
+      );
+
+      store.info('connected');
+      await store.initialize();
+      await store.flush();
+
+      expect(store.entries, isEmpty);
+      expect(store.isPersistent, isFalse);
+      expect(
+        Directory('${root.path}${Platform.pathSeparator}logs').exists(),
+        completion(isFalse),
+      );
+      await store.close();
+      store.dispose();
+    },
+  );
 }

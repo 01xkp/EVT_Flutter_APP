@@ -151,4 +151,65 @@ void main() {
       }
     },
   );
+
+  test('event metadata slots never render untrusted source values', () {
+    const scope = 'scope-token-source-literal';
+    const traceId = 'trace-ticket-source-literal';
+    const operation = 'operation-proof-source-literal';
+    const stage = 'https://example.invalid/stage?query=source-literal';
+    const event = 'event-nonce-source-literal';
+    const result = 'AA:BB:CC:DD:EE:FF';
+    final diagnostic = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 4),
+      level: DiagnosticLevel.error,
+      scope: scope,
+      trace: DiagnosticTrace.start(
+        operation: operation,
+        origin: 'UI',
+        traceId: traceId,
+      ),
+      stage: stage,
+      event: event,
+      result: result,
+    );
+    final line = diagnostic.formatLine();
+
+    expect(
+      line,
+      contains(' | ERROR | APP | - | - | - | unknown_event | - | -'),
+    );
+    expect(diagnostic.trace?.traceId, '-');
+    expect(diagnostic.trace?.operation, '-');
+    expect(diagnostic.trace?.deviceReference, isNull);
+    for (final value in <String>[
+      scope,
+      traceId,
+      operation,
+      stage,
+      event,
+      result,
+    ]) {
+      expect(line, isNot(contains(value)));
+    }
+  });
+
+  test('recursively drops unknown nested keys and device identity values', () {
+    final fields = const DiagnosticSanitizer().sanitize(
+      scope: 'AUTH',
+      fields: <String, Object?>{
+        'nested': <String, Object?>{
+          'serial': 'serial-source-literal',
+          'device_name': 'device-name-source-literal',
+          'identifier': '550e8400-e29b-41d4-a716-446655440000',
+          'safe': <String, Object?>{'length': 3},
+        },
+      },
+    );
+
+    expect(fields, <String, Object?>{
+      'nested': <String, Object?>{
+        'safe': <String, Object?>{'length': 3},
+      },
+    });
+  });
 }

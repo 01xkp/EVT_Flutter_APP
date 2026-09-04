@@ -24,7 +24,7 @@ void main() {
         operation: 'device_connect',
         origin: 'UI',
         deviceReference: 'safe-device',
-        traceId: 'trace12',
+        traceId: '8fa2c1',
       ),
       stage: 'connect',
       result: 'retrying',
@@ -33,7 +33,7 @@ void main() {
     );
 
     expect(messages, hasLength(1));
-    expect(messages.single, contains(' | WARNING | BLE | trace12 | '));
+    expect(messages.single, contains(' | WARNING | BLE | 8fa2c1 | '));
     expect(messages.single, contains('connection_update'));
     expect(messages.single, contains('state=disconnected'));
     expect(messages.single, isNot(contains('must-not-leak')));

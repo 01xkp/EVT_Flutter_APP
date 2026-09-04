@@ -10,31 +10,48 @@ class DiagnosticEvent {
   DiagnosticEvent({
     required this.timestamp,
     required this.level,
-    required this.scope,
-    required this.event,
-    this.trace,
-    this.operation,
-    this.stage,
-    this.result,
+    required String scope,
+    required String event,
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
     this.elapsed,
     Map<String, Object?> fields = const {},
     DiagnosticSanitizer sanitizer = const DiagnosticSanitizer(),
-  }) : fields = sanitizer.sanitize(scope: scope, fields: fields);
+  }) : scope = sanitizer.normalizeScope(scope),
+       traceId = sanitizer.normalizeTraceId(trace?.traceId),
+       trace = trace == null
+           ? null
+           : DiagnosticTrace.sanitized(
+               source: trace,
+               traceId: sanitizer.normalizeTraceId(trace.traceId),
+               operation: sanitizer.normalizeOperation(
+                 operation ?? trace.operation,
+               ),
+             ),
+       operation = sanitizer.normalizeOperation(operation ?? trace?.operation),
+       stage = sanitizer.normalizeStage(stage),
+       event = sanitizer.normalizeEvent(event),
+       result = sanitizer.normalizeResult(result),
+       fields = sanitizer.sanitize(
+         scope: sanitizer.normalizeScope(scope),
+         fields: fields,
+       );
 
   final DateTime timestamp;
   final DiagnosticLevel level;
   final String scope;
   final DiagnosticTrace? trace;
-  final String? operation;
-  final String? stage;
+  final String traceId;
+  final String operation;
+  final String stage;
   final String event;
-  final String? result;
+  final String result;
   final Duration? elapsed;
   final Map<String, Object?> fields;
 
-  String get traceId => trace?.traceId ?? '-';
-
-  String get effectiveOperation => operation ?? trace?.operation ?? '-';
+  String get effectiveOperation => operation;
 
   DiagnosticEvent copyWith({Map<String, Object?>? fields}) {
     return DiagnosticEvent(
@@ -61,9 +78,9 @@ class DiagnosticEvent {
       scope,
       traceId,
       effectiveOperation,
-      stage ?? '-',
+      stage,
       event,
-      result ?? '-',
+      result,
       elapsed?.inMilliseconds.toString() ?? '-',
     ];
     if (normalizedFields.isNotEmpty) {

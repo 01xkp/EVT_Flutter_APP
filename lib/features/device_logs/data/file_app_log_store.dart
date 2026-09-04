@@ -17,9 +17,10 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     this.maxFileBytes = 5 * 1024 * 1024,
     this.keepFiles = 7,
     bool? enabled,
+    bool Function()? isDebugBuild,
   }) : _supportDirectoryProvider = supportDirectoryProvider,
        _clock = clock ?? DateTime.now,
-       _enabled = enabled ?? kDebugMode;
+       _enabled = (enabled ?? true) && (isDebugBuild ?? _isDebugBuild)();
 
   final Future<Directory> Function()? _supportDirectoryProvider;
   final DateTime Function() _clock;
@@ -35,6 +36,8 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   File? _currentFile;
   var _disposed = false;
   var _closedStream = false;
+
+  static bool _isDebugBuild() => kDebugMode;
 
   @override
   List<AppLogEntry> get entries => List.unmodifiable(_entries);

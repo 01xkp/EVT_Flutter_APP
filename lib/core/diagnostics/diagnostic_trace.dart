@@ -45,6 +45,19 @@ class DiagnosticTrace {
     );
   }
 
+  factory DiagnosticTrace.sanitized({
+    required DiagnosticTrace source,
+    required String traceId,
+    required String operation,
+  }) {
+    return DiagnosticTrace._(
+      traceId: traceId,
+      operation: operation,
+      origin: 'diagnostic',
+      startedAt: source.startedAt,
+    );
+  }
+
   Duration elapsedAt(DateTime timestamp) => timestamp.difference(startedAt);
 
   static String _newTraceId() {

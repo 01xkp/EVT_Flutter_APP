@@ -4,6 +4,131 @@ import 'dart:collection';
 class DiagnosticSanitizer {
   const DiagnosticSanitizer();
 
+  static const _safeScopes = <String>{
+    'AI',
+    'APP',
+    'AUDIO',
+    'AUTH',
+    'BLE',
+    'CMD',
+    'DEVICE_API',
+    'EXPORT',
+    'FILE',
+    'OTA',
+    'SESSION',
+    'STORAGE',
+    'UI',
+  };
+
+  static const _safeOperations = <String>{
+    'ai_summary',
+    'ai_transcription',
+    'device_authenticate',
+    'device_bind',
+    'device_connect',
+    'device_file_import',
+    'device_ota',
+    'device_realtime_audio',
+    'device_scan',
+    'local_recording',
+  };
+
+  static const _safeStages = <String>{
+    'archive',
+    'challenge',
+    'connect',
+    'download',
+    'export',
+    'fa19_write',
+    'import',
+    'initialization',
+    'read',
+    'request',
+    'response',
+    'sync',
+    'ticket_request',
+    'upload',
+    'validation',
+    'write',
+  };
+
+  static const _safeResults = <String>{
+    'accepted',
+    'cancelled',
+    'completed',
+    'failed',
+    'pending',
+    'retrying',
+    'succeeded',
+    'success',
+    'unconfigured',
+  };
+
+  static const _safeEvents = <String>{
+    'archive_upload_started',
+    'archive_upload_succeeded',
+    'att_mtu_ready',
+    'bluetooth_status',
+    'clear_resume_failed',
+    'command_write_started',
+    'configuration_template_updated',
+    'connect_request',
+    'connect_reuse',
+    'connect_start',
+    'connected',
+    'connection_error',
+    'connection_state',
+    'connection_stream_done',
+    'connection_stream_error',
+    'connection_update',
+    'device_battery_loaded',
+    'device_configuration_time_loaded',
+    'device_file_count_loaded',
+    'device_privacy_duration_loaded',
+    'device_status_loaded',
+    'device_storage_loaded',
+    'disconnect_noop',
+    'disconnect_request',
+    'early_event',
+    'firmware_manifest_started',
+    'firmware_manifest_succeeded',
+    'gateway_initialized',
+    'live_event',
+    'mtu_negotiated',
+    'mtu_negotiation_failure',
+    'notification_decode_failure',
+    'notification_event',
+    'notification_received',
+    'notification_subscribe_failure',
+    'notification_subscribe_start',
+    'notification_subscribed',
+    'notification_subscription_settling',
+    'phase_changed',
+    'read_failure',
+    'read_start',
+    'read_success',
+    'realtime_audio_subscribed',
+    'request_failed',
+    'request_skipped',
+    'request_started',
+    'response_received',
+    'scan_failure',
+    'scan_result',
+    'scan_start',
+    'second',
+    'session_authentication_ready',
+    'session_failure',
+    'session_interrupted',
+    'status_event_decode_failed',
+    'third',
+    'ticket_issue_started',
+    'ticket_issue_succeeded',
+    'transcript_accepted',
+    'transport_closed',
+    'wqota_mtu_ready',
+    'wqota_subscribed',
+  };
+
   static const _blockedFragments = <String>{
     'ticket',
     'proof',
@@ -60,6 +185,7 @@ class DiagnosticSanitizer {
     'failure_kind',
     'last_valid_snapshot_at',
     'last_valid_snapshot_source',
+    'nested',
     'occurred_at',
   };
 
@@ -80,7 +206,7 @@ class DiagnosticSanitizer {
   }) {
     try {
       return Map<String, Object?>.unmodifiable(
-        _sanitizeMap(scope.toUpperCase(), fields, isRoot: true),
+        _sanitizeMap(scope.toUpperCase(), fields),
       );
     } on Object {
       return const <String, Object?>{};
@@ -89,13 +215,12 @@ class DiagnosticSanitizer {
 
   Map<String, Object?> _sanitizeMap(
     String scope,
-    Map<dynamic, dynamic> source, {
-    required bool isRoot,
-  }) {
+    Map<dynamic, dynamic> source,
+  ) {
     final output = SplayTreeMap<String, Object?>();
     for (final entry in source.entries) {
       final key = entry.key.toString();
-      if (_isBlockedKey(key) || (isRoot && !_isAllowed(scope, key))) {
+      if (_isBlockedKey(key) || !_isAllowed(scope, key)) {
         continue;
       }
       final value = _sanitizeValue(scope, key, entry.value);
@@ -117,7 +242,7 @@ class DiagnosticSanitizer {
       return _dropped;
     }
     if (value is Map) {
-      final sanitized = _sanitizeMap(scope, value, isRoot: false);
+      final sanitized = _sanitizeMap(scope, value);
       return sanitized.isEmpty
           ? _dropped
           : Map<String, Object?>.unmodifiable(sanitized);
@@ -139,6 +264,35 @@ class DiagnosticSanitizer {
     return _commonAllowed.contains(key) ||
         _scopeAllowed[scope]?.contains(key) == true ||
         key == 'nested';
+  }
+
+  String normalizeScope(String value) {
+    final normalized = value.toUpperCase();
+    return _safeScopes.contains(normalized) ? normalized : 'APP';
+  }
+
+  String normalizeTraceId(String? value) {
+    if (value == null ||
+        !RegExp(r'^[a-f0-9]{6,32}$', caseSensitive: false).hasMatch(value)) {
+      return '-';
+    }
+    return value.toLowerCase();
+  }
+
+  String normalizeOperation(String? value) {
+    return value != null && _safeOperations.contains(value) ? value : '-';
+  }
+
+  String normalizeStage(String? value) {
+    return value != null && _safeStages.contains(value) ? value : '-';
+  }
+
+  String normalizeEvent(String value) {
+    return _safeEvents.contains(value) ? value : 'unknown_event';
+  }
+
+  String normalizeResult(String? value) {
+    return value != null && _safeResults.contains(value) ? value : '-';
   }
 
   bool _isBlockedKey(String key) {
