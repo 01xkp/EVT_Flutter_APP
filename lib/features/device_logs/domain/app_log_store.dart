@@ -9,6 +9,7 @@ abstract interface class AppLogStore implements Listenable {
   Stream<AppLogEntry> get stream;
   String? get currentFilePath;
   bool get isPersistent;
+  void record(AppLogEntry entry);
   void info(String event, {String scope = 'APP', Map<String, Object?> fields = const {}});
   Future<void> initialize();
   Future<void> flush();

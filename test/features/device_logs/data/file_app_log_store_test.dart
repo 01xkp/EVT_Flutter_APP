@@ -41,9 +41,10 @@ void main() {
     final path = await store.exportPath();
     expect(path, endsWith('logs${Platform.pathSeparator}aipin-2026-09-01.log'));
     final content = await File(path!).readAsString();
-    expect(content, contains('device=...C:DD'));
-    expect(content, contains('ticket=[redacted]'));
-    expect(content, contains('audioData=bytes=3'));
+    expect(content, contains(' | INFO | BLE | - | - | - | connected | - | -'));
+    expect(content, isNot(contains('AA:BB:CC:DD')));
+    expect(content, isNot(contains('secret')));
+    expect(content, isNot(contains('[1, 2, 3]')));
     await store.close();
     store.dispose();
   });

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:aipin/core/diagnostics/diagnostic_trace.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/research_beta/data/ai_voice_service_configuration.dart';
 import 'package:aipin/features/research_beta/data/temporary_asr_http_gateway.dart';
@@ -477,8 +478,42 @@ class _CapturingLogger implements SafeAppLogger {
   final List<_LoggedEvent> events = <_LoggedEvent>[];
 
   @override
-  void info(String event, {Map<String, Object?> fields = const {}}) {
+  void info(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) {
     events.add(_LoggedEvent(event, Map<String, Object?>.from(fields)));
+  }
+
+  @override
+  void warning(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) {
+    info(event, fields: fields);
+  }
+
+  @override
+  void error(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) {
+    info(event, fields: fields);
   }
 }
 

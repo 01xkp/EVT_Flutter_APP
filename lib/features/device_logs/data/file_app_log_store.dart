@@ -2,9 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' hide DiagnosticLevel;
 import 'package:path_provider/path_provider.dart';
 
+import 'package:aipin/core/diagnostics/diagnostic_event.dart';
 import '../domain/app_log_entry.dart';
 import '../domain/app_log_store.dart';
 
@@ -69,22 +70,43 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     String scope = 'APP',
     Map<String, Object?> fields = const {},
   }) {
+    record(
+      AppLogEntry(
+        timestamp: _clock(),
+        level: DiagnosticLevel.info,
+        scope: scope,
+        event: event,
+        fields: fields,
+      ),
+    );
+  }
+
+  @override
+  void record(AppLogEntry entry) {
     if (!_enabled || _disposed) {
       return;
     }
-    final entry = AppLogEntry(
-      timestamp: _clock(),
-      scope: scope,
-      event: event,
-      fields: _sanitize(fields),
+    final sanitizedEntry = AppLogEntry.fromEvent(
+      DiagnosticEvent(
+        timestamp: entry.timestamp,
+        level: entry.level,
+        scope: entry.scope,
+        trace: entry.trace,
+        operation: entry.operation,
+        stage: entry.stage,
+        event: entry.event,
+        result: entry.result,
+        elapsed: entry.elapsed,
+        fields: entry.fields,
+      ),
     );
     if (_entries.length >= maxEntries) {
       _entries.removeAt(0);
     }
-    _entries.add(entry);
-    _stream.add(entry);
+    _entries.add(sanitizedEntry);
+    _stream.add(sanitizedEntry);
     notifyListeners();
-    final line = '${entry.formatLine()}\n';
+    final line = '${sanitizedEntry.formatLine()}\n';
     _writeQueue = _writeQueue.then((_) async {
       try {
         await initialize();
@@ -157,33 +179,6 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     for (final file in files.skip(keepFiles)) {
       await file.delete();
     }
-  }
-
-  static Map<String, Object?> _sanitize(Map<String, Object?> fields) {
-    return {
-      for (final entry in fields.entries)
-        entry.key: _sanitizeValue(entry.key, entry.value),
-    };
-  }
-
-  static Object? _sanitizeValue(String key, Object? value) {
-    final normalized = key.toLowerCase();
-    if (normalized.contains('ticket') ||
-        normalized.contains('proof') ||
-        normalized.contains('token') ||
-        normalized.contains('secret')) {
-      return '[redacted]';
-    }
-    if (normalized.contains('device') && value is String && value.length > 4) {
-      return '...${value.substring(value.length - 4)}';
-    }
-    if (value is Iterable<int> &&
-        (normalized.contains('audio') ||
-            normalized.contains('data') ||
-            normalized.contains('firmware'))) {
-      return 'bytes=${value.length}';
-    }
-    return value;
   }
 
   @override
