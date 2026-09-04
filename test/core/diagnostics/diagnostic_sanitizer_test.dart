@@ -212,4 +212,86 @@ void main() {
       },
     });
   });
+
+  test('preserves safe current and generated semantic event identifiers', () {
+    const cases = <String, String>{
+      'service discovery start': 'service_discovery_start',
+      'service discovery success': 'service_discovery_success',
+      'service discovery failure': 'service_discovery_failure',
+      'write start': 'write_start',
+      'write success': 'write_success',
+      'write failure': 'write_failure',
+      'write without response start': 'write_without_response_start',
+      'write without response success': 'write_without_response_success',
+      'write without response failure': 'write_without_response_failure',
+      'initial read decode failure': 'initial_read_decode_failure',
+      'initial read success': 'initial_read_success',
+      'session observable': 'session_observable',
+      'device status load failure': 'device_status_load_failed',
+      'device battery load failure': 'device_battery_load_failed',
+      'device privacy duration load failure':
+          'device_privacy_duration_load_failed',
+      'device configuration time load failure':
+          'device_configuration_time_load_failed',
+      'device storage load failure': 'device_storage_load_failed',
+      'device file count load failure': 'device_file_count_load_failed',
+    };
+    const sanitizer = DiagnosticSanitizer();
+
+    for (final entry in cases.entries) {
+      expect(
+        sanitizer.normalizeEvent(entry.value),
+        entry.value,
+        reason: entry.key,
+      );
+    }
+  });
+
+  test('rejects unsafe event identifiers', () {
+    const cases = <String, String>{
+      'token fragment': 'access_token_received',
+      'secret fragment': 'secret_rotated',
+      'authorization fragment': 'authorization_complete',
+      'raw payload fragment': 'raw_payload_received',
+      'URL': 'https://example.invalid/debug?query=source-literal',
+      'whitespace': 'event source literal',
+      'device UUID': '550e8400-e29b-41d4-a716-446655440000',
+      'device MAC': 'AA:BB:CC:DD:EE:FF',
+    };
+    const sanitizer = DiagnosticSanitizer();
+
+    for (final entry in cases.entries) {
+      expect(
+        sanitizer.normalizeEvent(entry.value),
+        'unknown_event',
+        reason: entry.key,
+      );
+    }
+  });
+
+  test('recursively removes UUID-shaped values under allowed nested keys', () {
+    const deviceUuid = '550e8400-e29b-41d4-a716-446655440000';
+    final fields = const DiagnosticSanitizer().sanitize(
+      scope: 'AUTH',
+      fields: const <String, Object?>{
+        'safe': deviceUuid,
+        'nested': <String, Object?>{
+          'safe': <Object?>[
+            deviceUuid,
+            <String, Object?>{'safe': deviceUuid, 'length': 3},
+            'accepted',
+          ],
+        },
+      },
+    );
+
+    expect(fields, <String, Object?>{
+      'nested': <String, Object?>{
+        'safe': <Object?>[
+          <String, Object?>{'length': 3},
+          'accepted',
+        ],
+      },
+    });
+  });
 }

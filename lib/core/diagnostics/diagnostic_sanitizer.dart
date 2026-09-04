@@ -64,70 +64,26 @@ class DiagnosticSanitizer {
     'unconfigured',
   };
 
-  static const _safeEvents = <String>{
-    'archive_upload_started',
-    'archive_upload_succeeded',
-    'att_mtu_ready',
-    'bluetooth_status',
-    'clear_resume_failed',
-    'command_write_started',
-    'configuration_template_updated',
-    'connect_request',
-    'connect_reuse',
-    'connect_start',
-    'connected',
-    'connection_error',
-    'connection_state',
-    'connection_stream_done',
-    'connection_stream_error',
-    'connection_update',
-    'device_battery_loaded',
-    'device_configuration_time_loaded',
-    'device_file_count_loaded',
-    'device_privacy_duration_loaded',
-    'device_status_loaded',
-    'device_storage_loaded',
-    'disconnect_noop',
-    'disconnect_request',
-    'early_event',
-    'firmware_manifest_started',
-    'firmware_manifest_succeeded',
-    'gateway_initialized',
-    'live_event',
-    'mtu_negotiated',
-    'mtu_negotiation_failure',
-    'notification_decode_failure',
-    'notification_event',
-    'notification_received',
-    'notification_subscribe_failure',
-    'notification_subscribe_start',
-    'notification_subscribed',
-    'notification_subscription_settling',
-    'phase_changed',
-    'read_failure',
-    'read_start',
-    'read_success',
-    'realtime_audio_subscribed',
-    'request_failed',
-    'request_skipped',
-    'request_started',
-    'response_received',
-    'scan_failure',
-    'scan_result',
-    'scan_start',
-    'second',
-    'session_authentication_ready',
-    'session_failure',
-    'session_interrupted',
-    'status_event_decode_failed',
-    'third',
-    'ticket_issue_started',
-    'ticket_issue_succeeded',
-    'transcript_accepted',
-    'transport_closed',
-    'wqota_mtu_ready',
-    'wqota_subscribed',
+  static final _eventIdentifier = RegExp(r'^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$');
+
+  static const _unsafeEventSegments = <String>{
+    'authorization',
+    'nonce',
+    'payload',
+    'proof',
+    'secret',
+    'token',
   };
+
+  static final _uuidValue = RegExp(
+    r'^\{?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\}?$',
+    caseSensitive: false,
+  );
+
+  static final _compactUuidValue = RegExp(
+    r'^[a-f0-9]{32}$',
+    caseSensitive: false,
+  );
 
   static const _blockedFragments = <String>{
     'ticket',
@@ -288,7 +244,13 @@ class DiagnosticSanitizer {
   }
 
   String normalizeEvent(String value) {
-    return _safeEvents.contains(value) ? value : 'unknown_event';
+    if (!_eventIdentifier.hasMatch(value) || _isUnsafeString(value)) {
+      return 'unknown_event';
+    }
+    final segments = value.split('_');
+    return segments.any(_unsafeEventSegments.contains)
+        ? 'unknown_event'
+        : value;
   }
 
   String normalizeResult(String? value) {
@@ -316,6 +278,8 @@ class DiagnosticSanitizer {
     final normalized = value.toLowerCase();
     return normalized.contains('://') ||
         normalized.contains('?') ||
+        _uuidValue.hasMatch(value) ||
+        _compactUuidValue.hasMatch(value) ||
         RegExp(
           r'([a-f0-9]{2}:){5}[a-f0-9]{2}',
           caseSensitive: false,
