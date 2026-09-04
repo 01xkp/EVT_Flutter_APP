@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:aipin/core/diagnostics/diagnostic_event.dart';
 import '../domain/app_log_entry.dart';
 import '../domain/app_log_store.dart';
+import '../domain/public_diagnostic_log_sink.dart';
 
 class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   FileAppLogStore({
@@ -18,9 +19,13 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     this.keepFiles = 7,
     bool? enabled,
     bool Function()? isDebugBuild,
+    PublicDiagnosticLogSink? publicDiagnosticLogSink,
+    Duration mirrorDebounce = const Duration(seconds: 1),
   }) : _supportDirectoryProvider = supportDirectoryProvider,
        _clock = clock ?? DateTime.now,
-       _enabled = (enabled ?? true) && (isDebugBuild ?? _isDebugBuild)();
+       _enabled = (enabled ?? true) && (isDebugBuild ?? _isDebugBuild)(),
+       _publicDiagnosticLogSink = publicDiagnosticLogSink,
+       _mirrorDebounce = mirrorDebounce;
 
   final Future<Directory> Function()? _supportDirectoryProvider;
   final DateTime Function() _clock;
@@ -28,12 +33,19 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   final int maxEntries;
   final int maxFileBytes;
   final int keepFiles;
+  final PublicDiagnosticLogSink? _publicDiagnosticLogSink;
+  final Duration _mirrorDebounce;
   final List<AppLogEntry> _entries = <AppLogEntry>[];
   final StreamController<AppLogEntry> _stream =
       StreamController<AppLogEntry>.broadcast();
   Future<void> _writeQueue = Future<void>.value();
+  Future<void> _mirrorQueue = Future<void>.value();
   Directory? _logDirectory;
   File? _currentFile;
+  DateTime? _lastMirrorAttemptAt;
+  PublicDiagnosticLogMirrorStatus? _publicMirrorStatus;
+  Timer? _mirrorTimer;
+  var _mirrorPending = false;
   var _disposed = false;
   var _closedStream = false;
 
@@ -50,6 +62,10 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
 
   @override
   bool get isPersistent => _enabled && _currentFile != null;
+
+  @override
+  PublicDiagnosticLogMirrorStatus? get publicMirrorStatus =>
+      _publicMirrorStatus;
 
   @override
   Future<void> initialize() async {
@@ -114,6 +130,7 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
       try {
         await initialize();
         await _append(line);
+        _scheduleMirror();
       } on Object {
         // Diagnostics must never break the feature that emitted the log.
       }
@@ -121,7 +138,13 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   }
 
   @override
-  Future<void> flush() => _writeQueue;
+  Future<void> flush() async {
+    await _writeQueue;
+    _mirrorTimer?.cancel();
+    _mirrorTimer = null;
+    await _mirrorQueue;
+    await _mirrorPendingFile();
+  }
 
   @override
   Future<String?> exportPath() async {
@@ -154,6 +177,70 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
       await _pruneFiles();
     }
     await _currentFile!.writeAsBytes(bytes, mode: FileMode.append, flush: true);
+  }
+
+  void _scheduleMirror() {
+    if (_publicDiagnosticLogSink == null) {
+      return;
+    }
+    _mirrorPending = true;
+    if (_mirrorTimer != null) {
+      return;
+    }
+    _mirrorTimer = Timer(_mirrorDebounce, () {
+      _mirrorTimer = null;
+      _mirrorQueue = _mirrorQueue.then((_) => _mirrorPendingFile());
+    });
+  }
+
+  Future<void> _mirrorPendingFile() async {
+    if (!_mirrorPending) {
+      return;
+    }
+    _mirrorPending = false;
+    final sink = _publicDiagnosticLogSink;
+    final file = _currentFile;
+    if (!_enabled || sink == null || file == null) {
+      return;
+    }
+    final now = _clock();
+    final previousAttempt = _lastMirrorAttemptAt;
+    if (previousAttempt != null &&
+        now.difference(previousAttempt) < _mirrorDebounce) {
+      _mirrorPending = true;
+      _scheduleMirror();
+      return;
+    }
+    _lastMirrorAttemptAt = now;
+    try {
+      _publicMirrorStatus = await sink.mirrorCanonicalFile(
+        sourcePath: file.path,
+        filename: file.uri.pathSegments.last,
+      );
+    } on Object {
+      _publicMirrorStatus = PublicDiagnosticLogMirrorStatus.failure(
+        'storage_error',
+      );
+    }
+    if (_publicMirrorStatus?.failureCode != null) {
+      _recordMirrorFailure(_publicMirrorStatus!.failureCode!);
+    }
+    notifyListeners();
+  }
+
+  void _recordMirrorFailure(String failureCode) {
+    if (_entries.length >= maxEntries) {
+      _entries.removeAt(0);
+    }
+    final entry = AppLogEntry(
+      timestamp: _clock(),
+      level: DiagnosticLevel.warning,
+      scope: 'STORAGE',
+      event: 'public_mirror_failed',
+      result: failureCode,
+    );
+    _entries.add(entry);
+    _stream.add(entry);
   }
 
   Future<void> _selectCurrentFile() async {

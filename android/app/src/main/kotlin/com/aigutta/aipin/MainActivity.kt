@@ -4,13 +4,19 @@ import android.Manifest
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.content.Intent
+import android.content.ContentValues
+import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.Locale
 import io.flutter.embedding.android.FlutterActivity
@@ -21,6 +27,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val bluetoothChannel = "com.aigutta.aipin/bluetooth"
         private const val audioSegmentationChannel = "com.aigutta.aipin/audio-segmentation"
+        private const val publicDiagnosticLogsChannel = "aipin/public_diagnostic_logs"
         private const val enableBluetoothRequestCode = 7101
     }
 
@@ -44,7 +51,118 @@ class MainActivity : FlutterActivity() {
                     result.notImplemented()
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, publicDiagnosticLogsChannel)
+            .setMethodCallHandler { call, result ->
+                if (call.method == "mirrorCanonicalLog") {
+                    mirrorCanonicalLog(call, result)
+                } else {
+                    result.notImplemented()
+                }
+            }
     }
+
+    private fun mirrorCanonicalLog(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
+        val sourcePath = call.argument<String>("sourcePath")
+        val filename = call.argument<String>("filename")
+        if (sourcePath.isNullOrBlank() || filename.isNullOrBlank()) {
+            result.success(mirrorFailure("invalid_arguments"))
+            return
+        }
+        Thread {
+            val response = try {
+                mirrorCanonicalLogFile(sourcePath, filename)
+            } catch (_: Exception) {
+                mirrorFailure("storage_error")
+            }
+            runOnUiThread { result.success(response) }
+        }.start()
+    }
+
+    private fun mirrorCanonicalLogFile(sourcePath: String, filename: String): Map<String, Any?> {
+        if (!BuildConfig.DEBUG) return mirrorFailure("debug_only")
+        if (!filename.matches(Regex("aipin-\\d{4}-\\d{2}-\\d{2}\\.log"))) {
+            return mirrorFailure("invalid_filename")
+        }
+        val source = File(sourcePath)
+        val appFiles = filesDir.canonicalFile
+        if (!source.isFile || !source.canonicalFile.path.startsWith("${appFiles.path}${File.separator}")) {
+            return mirrorFailure("invalid_source")
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            mirrorWithMediaStore(source, filename)
+        } else {
+            mirrorLegacyDownload(source, filename)
+        }
+    }
+
+    private fun mirrorWithMediaStore(source: File, filename: String): Map<String, Any?> {
+        val relativePath = "Download/AIPIN/logs/$filename"
+        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        contentResolver.query(
+            collection,
+            arrayOf(MediaStore.MediaColumns._ID),
+            "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+            arrayOf(filename, "Download/AIPIN/logs%"),
+            null,
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                contentResolver.delete(
+                    ContentUris.withAppendedId(
+                        collection,
+                        cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)),
+                    ),
+                    null,
+                    null,
+                )
+            }
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+            put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AIPIN/logs")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(collection, values) ?: return mirrorFailure("storage_error")
+        try {
+            contentResolver.openOutputStream(uri, "w")?.use { output ->
+                FileInputStream(source).use { input -> input.copyTo(output) }
+            } ?: return mirrorFailure("storage_error")
+            contentResolver.update(uri, ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }, null, null)
+            return mirrorSuccess(relativePath)
+        } catch (error: Exception) {
+            contentResolver.delete(uri, null, null)
+            throw error
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun mirrorLegacyDownload(source: File, filename: String): Map<String, Any?> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) return mirrorFailure("legacy_permission_required")
+        val directory = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "AIPIN/logs",
+        )
+        if (!directory.exists() && !directory.mkdirs()) return mirrorFailure("storage_error")
+        FileInputStream(source).use { input ->
+            FileOutputStream(File(directory, filename), false).use { output -> input.copyTo(output) }
+        }
+        return mirrorSuccess("Download/AIPIN/logs/$filename")
+    }
+
+    private fun mirrorSuccess(relativePath: String): Map<String, Any?> = mapOf(
+        "available" to true,
+        "relativePath" to relativePath,
+        "lastUpdatedAtEpochMilliseconds" to System.currentTimeMillis(),
+    )
+
+    private fun mirrorFailure(code: String): Map<String, Any?> = mapOf(
+        "available" to false,
+        "failureCode" to code,
+    )
 
     private fun splitM4a(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
         val sourcePath = call.argument<String>("sourcePath")

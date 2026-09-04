@@ -11,6 +11,7 @@ import 'package:aipin/core/permissions/permission_handler_gateway.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_logs/application/app_log_logger.dart';
 import 'package:aipin/features/device_logs/data/file_app_log_store.dart';
+import 'package:aipin/features/device_logs/data/platform_public_diagnostic_log_sink.dart';
 import 'package:aipin/features/device_session/data/drift_device_file_download_checkpoint_repository.dart';
 import 'package:aipin/features/device_session/domain/device_file_download_checkpoint_repository.dart';
 import 'package:aipin/features/device_session/domain/ticket_gateway.dart';
@@ -52,7 +53,11 @@ import 'package:aipin/features/research_beta/domain/temporary_asr_gateway.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final appLogStoreProvider = Provider<FileAppLogStore>((ref) {
-  final store = FileAppLogStore();
+  final store = FileAppLogStore(
+    publicDiagnosticLogSink: kDebugMode
+        ? PlatformPublicDiagnosticLogSink()
+        : null,
+  );
   unawaited(store.initialize());
   ref.onDispose(store.dispose);
   return store;

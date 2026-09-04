@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:aipin/features/device_logs/data/file_app_log_store.dart';
+import 'package:aipin/features/device_logs/domain/public_diagnostic_log_sink.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -111,4 +112,112 @@ void main() {
       store.dispose();
     },
   );
+
+  test(
+    'mirrors the completed canonical daily file once for rapid log events',
+    () async {
+      final sink = _FakePublicDiagnosticLogSink();
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        publicDiagnosticLogSink: sink,
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
+
+      store.info('first');
+      store.info('second');
+      await store.flush();
+
+      expect(sink.calls, hasLength(1));
+      expect(sink.calls.single.filename, 'aipin-2026-09-01.log');
+      expect(
+        await File(sink.calls.single.sourcePath).readAsString(),
+        contains('second'),
+      );
+      expect(
+        store.publicMirrorStatus?.relativePath,
+        'Download/AIPIN/logs/aipin-2026-09-01.log',
+      );
+      await store.close();
+      store.dispose();
+    },
+  );
+
+  test('flush forces a pending public mirror', () async {
+    final sink = _FakePublicDiagnosticLogSink();
+    final store = FileAppLogStore(
+      supportDirectoryProvider: () async => root,
+      enabled: true,
+      publicDiagnosticLogSink: sink,
+      mirrorDebounce: Duration.zero,
+      clock: () => DateTime.utc(2026, 9, 1, 12),
+    );
+
+    store.info('first');
+    await store.flush();
+    store.info('second');
+    await store.flush();
+
+    expect(sink.calls, hasLength(2));
+    await store.close();
+    store.dispose();
+  });
+
+  test(
+    'retains private logs and reports a bounded storage event on mirror failure',
+    () async {
+      final sink = _FakePublicDiagnosticLogSink(shouldFail: true);
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        publicDiagnosticLogSink: sink,
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
+
+      store.info('product_operation_completed');
+      await store.flush();
+
+      final path = await store.exportPath();
+      expect(
+        await File(path!).readAsString(),
+        contains('product_operation_completed'),
+      );
+      expect(store.publicMirrorStatus?.failureCode, 'storage_error');
+      expect(
+        store.entries.where((entry) => entry.scope == 'STORAGE'),
+        isNotEmpty,
+      );
+      await store.close();
+      store.dispose();
+    },
+  );
+}
+
+class _FakePublicDiagnosticLogSink implements PublicDiagnosticLogSink {
+  _FakePublicDiagnosticLogSink({this.shouldFail = false});
+
+  final bool shouldFail;
+  final List<_MirrorCall> calls = <_MirrorCall>[];
+
+  @override
+  Future<PublicDiagnosticLogMirrorStatus> mirrorCanonicalFile({
+    required String sourcePath,
+    required String filename,
+  }) async {
+    calls.add(_MirrorCall(sourcePath: sourcePath, filename: filename));
+    if (shouldFail) {
+      return PublicDiagnosticLogMirrorStatus.failure('storage_error');
+    }
+    return PublicDiagnosticLogMirrorStatus.success(
+      relativePath: 'Download/AIPIN/logs/$filename',
+      lastUpdatedAt: DateTime.utc(2026, 9, 1, 12),
+    );
+  }
+}
+
+class _MirrorCall {
+  const _MirrorCall({required this.sourcePath, required this.filename});
+
+  final String sourcePath;
+  final String filename;
 }
