@@ -19,6 +19,8 @@ import 'package:aipin/features/device_session/data/unconfigured_ticket_gateway.d
 import 'package:aipin/features/device_session/domain/archive_gateway.dart';
 import 'package:aipin/features/device_session/data/unconfigured_archive_gateway.dart';
 import 'package:aipin/features/device_session/data/shared_preferences_firmware_update_checkpoint_repository.dart';
+import 'package:aipin/features/device_session/data/shared_preferences_device_connection_history_repository.dart';
+import 'package:aipin/features/device_session/domain/device_connection_history_repository.dart';
 import 'package:aipin/features/device_session/data/unconfigured_firmware_package_gateway.dart';
 import 'package:aipin/features/device_session/domain/firmware_package_gateway.dart';
 import 'package:aipin/features/device_session/domain/firmware_update_checkpoint.dart';
@@ -150,6 +152,11 @@ final firmwarePackageGatewayProvider = Provider<FirmwarePackageGateway>((ref) {
 final firmwareUpdateCheckpointRepositoryProvider =
     Provider<FirmwareUpdateCheckpointRepository>((ref) {
       return SharedPreferencesFirmwareUpdateCheckpointRepository();
+    });
+
+final deviceConnectionHistoryRepositoryProvider =
+    Provider<DeviceConnectionHistoryRepository>((ref) {
+      return SharedPreferencesDeviceConnectionHistoryRepository();
     });
 
 final recordingBackgroundProvider = Provider<RecordingBackgroundPort>((ref) {
