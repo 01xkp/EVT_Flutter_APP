@@ -248,7 +248,12 @@ class DiagnosticSanitizer {
       return 'unknown_event';
     }
     final segments = value.split('_');
-    return segments.any(_unsafeEventSegments.contains)
+    return segments.any(
+          (segment) =>
+              _unsafeEventSegments.contains(segment) ||
+              _uuidValue.hasMatch(segment) ||
+              _compactUuidValue.hasMatch(segment),
+        )
         ? 'unknown_event'
         : value;
   }

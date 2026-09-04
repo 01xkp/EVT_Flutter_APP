@@ -269,6 +269,12 @@ void main() {
     }
   });
 
+  test('rejects compact UUID segments embedded in event identifiers', () {
+    const event = 'device_550e8400e29b41d4a716446655440000_connected';
+
+    expect(const DiagnosticSanitizer().normalizeEvent(event), 'unknown_event');
+  });
+
   test('recursively removes UUID-shaped values under allowed nested keys', () {
     const deviceUuid = '550e8400-e29b-41d4-a716-446655440000';
     final fields = const DiagnosticSanitizer().sanitize(
