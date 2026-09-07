@@ -9,6 +9,7 @@ class DeviceFileDownloadCheckpoints extends Table {
   TextColumn get expectedLength => text()();
   TextColumn get expectedCrc32 => text()();
   IntColumn get receivedBytes => integer()();
+  TextColumn get phase => text().withDefault(const Constant('downloading'))();
   DateTimeColumn get updatedAt => dateTime()();
 
   @override

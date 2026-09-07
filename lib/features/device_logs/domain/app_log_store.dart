@@ -12,7 +12,11 @@ abstract interface class AppLogStore implements Listenable {
   bool get isPersistent;
   PublicDiagnosticLogMirrorStatus? get publicMirrorStatus;
   void record(AppLogEntry entry);
-  void info(String event, {String scope = 'APP', Map<String, Object?> fields = const {}});
+  void info(
+    String event, {
+    String scope = 'APP',
+    Map<String, Object?> fields = const {},
+  });
   Future<void> initialize();
   Future<void> flush();
   Future<String?> exportPath();

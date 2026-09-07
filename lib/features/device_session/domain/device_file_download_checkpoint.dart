@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+enum DeviceFileDownloadPhase { downloading, readyForArchive }
+
 class DeviceFileDownloadCheckpoint {
   const DeviceFileDownloadCheckpoint({
     required this.id,
@@ -10,6 +12,7 @@ class DeviceFileDownloadCheckpoint {
     required this.expectedCrc32,
     required this.receivedBytes,
     required this.updatedAt,
+    this.phase = DeviceFileDownloadPhase.downloading,
   });
 
   final String id;
@@ -20,6 +23,7 @@ class DeviceFileDownloadCheckpoint {
   final int expectedCrc32;
   final int receivedBytes;
   final DateTime updatedAt;
+  final DeviceFileDownloadPhase phase;
 
   static String idFor({required String deviceId, required List<int> nameSlot}) {
     return '$deviceId:${base64Url.encode(nameSlot)}';
@@ -32,6 +36,7 @@ class DeviceFileDownloadCheckpoint {
   DeviceFileDownloadCheckpoint copyWith({
     int? receivedBytes,
     DateTime? updatedAt,
+    DeviceFileDownloadPhase? phase,
   }) {
     return DeviceFileDownloadCheckpoint(
       id: id,
@@ -42,6 +47,7 @@ class DeviceFileDownloadCheckpoint {
       expectedCrc32: expectedCrc32,
       receivedBytes: receivedBytes ?? this.receivedBytes,
       updatedAt: updatedAt ?? this.updatedAt,
+      phase: phase ?? this.phase,
     );
   }
 }

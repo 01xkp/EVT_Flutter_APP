@@ -31,6 +31,7 @@ class PhaseIndicator extends StatelessWidget {
     SessionPhase.connecting => '正在连接',
     SessionPhase.servicesDiscovered => '服务已发现',
     SessionPhase.subscribing => '正在订阅状态',
+    SessionPhase.authenticationReady => '等待设备认证',
     SessionPhase.initialSnapshotRead => '正在读取首个状态',
     SessionPhase.observing => '正在观察',
     SessionPhase.verifying => '正在复核',

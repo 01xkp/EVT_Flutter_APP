@@ -109,22 +109,27 @@ void main() {
     expect(await migrated.select(migrated.localRecordings).get(), isEmpty);
   });
 
-  test('database version 4 preserves existing captures with empty document names', () async {
-    await database.close();
-    final directory = await Directory.systemTemp.createTemp('aipin-drift-v4-');
-    addTearDown(() => directory.delete(recursive: true));
-    final file = File('${directory.path}${Platform.pathSeparator}v4.sqlite');
-    _seedV4Database(file);
-    final migrated = AppDatabase.forTesting(executor: NativeDatabase(file));
-    addTearDown(migrated.close);
+  test(
+    'database version 4 preserves existing captures with empty document names',
+    () async {
+      await database.close();
+      final directory = await Directory.systemTemp.createTemp(
+        'aipin-drift-v4-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}${Platform.pathSeparator}v4.sqlite');
+      _seedV4Database(file);
+      final migrated = AppDatabase.forTesting(executor: NativeDatabase(file));
+      addTearDown(migrated.close);
 
-    final row = await (migrated.select(migrated.researchCaptures)
-          ..where((capture) => capture.id.equals('capture-1')))
-        .getSingle();
-    expect(row.transcriptTitle, isNull);
-    expect(row.summaryTitle, isNull);
-    expect(row.rawTranscript, '已有转写');
-  });
+      final row = await (migrated.select(
+        migrated.researchCaptures,
+      )..where((capture) => capture.id.equals('capture-1'))).getSingle();
+      expect(row.transcriptTitle, isNull);
+      expect(row.summaryTitle, isNull);
+      expect(row.rawTranscript, '已有转写');
+    },
+  );
 }
 
 ResearchCapture _directCapture(String id) => ResearchCapture.fromDirectAiVoice(

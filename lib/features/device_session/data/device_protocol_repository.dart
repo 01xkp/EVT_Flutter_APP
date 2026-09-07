@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:aipin/core/ble/ble_models.dart';
@@ -60,12 +61,30 @@ class DeviceProtocolRepository
         content: writer.bytes,
         writeCharacteristic: _characteristic(BleLogicalEndpoint.fa10Fa12),
         expectedResponseCommand: 0x82,
+        responseMatcher: (frame) => frame.content.length == 1,
       ),
     );
     _expectContentLength(response.frame, 1);
     if (response.frame.content.first != 1) {
       throw StateError('设备拒绝了录音配置。');
     }
+  }
+
+  /// Reads the device's current UTC after a configuration write. V1.5 only
+  /// returns the four-byte UTC field for this zero-content read operation.
+  Future<DateTime> readConfigurationTime() async {
+    final response = await commands.execute(
+      EvtCommandRequest(
+        command: 0x02,
+        content: const [],
+        writeCharacteristic: _characteristic(BleLogicalEndpoint.fa10Fa12),
+        expectedResponseCommand: 0x82,
+        responseMatcher: (frame) => frame.content.length == 4,
+      ),
+    );
+    _expectContentLength(response.frame, 4);
+    final seconds = ProtocolReader(response.frame.content).u32Le(0);
+    return DateTime.fromMillisecondsSinceEpoch(seconds * 1000, isUtc: true);
   }
 
   Future<DeviceStatus> readStatus() async {
@@ -201,9 +220,17 @@ class DeviceProtocolRepository
         expectedSubCommand: 0x01,
       ),
     );
-    return decodeFileMetadata(response.frame);
+    final metadata = decodeFileMetadata(response.frame);
+    if (!_sameBytes(metadata.nameSlot, nameSlot)) {
+      throw const FormatException('设备文件元数据与请求文件键不一致。');
+    }
+    if (metadata.state != 1) {
+      throw const FormatException('设备文件尚未就绪，无法下载。');
+    }
+    return metadata;
   }
 
+  @override
   Future<int> confirmArchive({
     required List<int> nameSlot,
     required int fileSize,
@@ -276,6 +303,46 @@ class DeviceProtocolRepository
     return Uint8List.fromList(response.frame.content.sublist(6));
   }
 
+  /// Starts the V1.5 continuous 0x23 Notify transfer with exactly one write.
+  /// The device marks the end of the transfer with a zero-length data frame.
+  @override
+  Stream<Uint8List> downloadFile({
+    required List<int> nameSlot,
+    int startOffset = 0,
+    int chunkSize = 0,
+  }) async* {
+    _validateNameSlot(nameSlot);
+    if (startOffset < 0 || startOffset > 0xFFFFFFFF) {
+      throw RangeError.range(startOffset, 0, 0xFFFFFFFF);
+    }
+    if (chunkSize < 0 || chunkSize > 0xFFFF) {
+      throw RangeError.range(chunkSize, 0, 0xFFFF);
+    }
+    final writer = ProtocolWriter()..addAll(nameSlot);
+    if (startOffset != 0 || chunkSize != 0) {
+      writer
+        ..u32Le(startOffset)
+        ..u16Le(chunkSize);
+    }
+    var expectedOffset = startOffset;
+    await for (final frame in commands.executeStreaming(
+      EvtCommandRequest(
+        command: 0x23,
+        content: writer.bytes,
+        writeCharacteristic: _characteristic(BleLogicalEndpoint.ff10Ff13),
+        expectedResponseCommand: 0x23,
+      ),
+      isTerminal: _isFileDataTerminalFrame,
+    )) {
+      final chunk = _decodeFileDataFrame(frame, expectedOffset);
+      if (chunk.isEmpty) {
+        return;
+      }
+      expectedOffset += chunk.length;
+      yield chunk;
+    }
+  }
+
   static DeviceInfo decodeDeviceInfo(EvtFrame frame) {
     _expectCommand(frame, 0x81);
     final reader = ProtocolReader(frame.content);
@@ -283,10 +350,10 @@ class DeviceProtocolRepository
       throw const FormatException('设备信息字段长度不足。');
     }
     final protocolVersion = reader.u8(0);
-    final deviceCode = _paddedText(frame.content, 1, 20);
-    final software = _paddedText(frame.content, 21, 8);
-    final hardware = _paddedText(frame.content, 29, 8);
-    final name = _paddedText(frame.content, 45, 29);
+    final deviceCode = _paddedAscii(frame.content, 1, 20);
+    final software = _paddedAscii(frame.content, 21, 8);
+    final hardware = _paddedAscii(frame.content, 29, 8);
+    final name = _paddedUtf8(frame.content, 45, 29);
     final total = reader.u32Le(74);
     final remain = reader.u32Le(78);
     final reserved = reader.u8(82);
@@ -315,6 +382,8 @@ class DeviceProtocolRepository
       recordStatus: recordStatus,
       batteryLevel: reader.u8(batteryOffset),
       charging: reader.u8(batteryOffset + 1),
+      powerOff: reader.u8(batteryOffset + 3),
+      chargingMode: reader.u8(batteryOffset + 4),
       audioStreamEnabled: reader.u8(batteryOffset + 5) != 0,
     );
   }
@@ -422,6 +491,26 @@ class DeviceProtocolRepository
     );
   }
 
+  static bool _isFileDataTerminalFrame(EvtFrame frame) {
+    if (frame.content.length < 6) {
+      return false;
+    }
+    return ProtocolReader(frame.content).u16Le(4) == 0;
+  }
+
+  static Uint8List _decodeFileDataFrame(EvtFrame frame, int expectedOffset) {
+    if (frame.command != 0x23 || frame.content.length < 6) {
+      throw const FormatException('设备文件数据帧无效。');
+    }
+    final reader = ProtocolReader(frame.content);
+    final offset = reader.u32Le(0);
+    final length = reader.u16Le(4);
+    if (frame.content.length != 6 + length || offset != expectedOffset) {
+      throw const FormatException('文件数据 offset 或长度不连续。');
+    }
+    return Uint8List.fromList(frame.content.sublist(6));
+  }
+
   static DeviceSecurityResponse decodeSecurityResponse(
     EvtFrame frame, {
     required DeviceAuthAction expectedAction,
@@ -477,7 +566,9 @@ class DeviceProtocolRepository
     return commands.execute(
       EvtCommandRequest(
         command: 0x06,
-        content: [subCommand, ...data],
+        content: data.isEmpty
+            ? [subCommand]
+            : [subCommand, data.length, ...data],
         writeCharacteristic: _characteristic(BleLogicalEndpoint.fa10Fa16),
         expectedResponseCommand: 0x86,
         expectedSubCommand: subCommand,
@@ -523,10 +614,19 @@ class DeviceProtocolRepository
     );
   }
 
-  static String _paddedText(List<int> bytes, int offset, int length) {
+  static String _paddedAscii(List<int> bytes, int offset, int length) {
     final value = bytes.sublist(offset, offset + length);
     final end = value.indexOf(0);
     return String.fromCharCodes(end < 0 ? value : value.sublist(0, end));
+  }
+
+  static String _paddedUtf8(List<int> bytes, int offset, int length) {
+    final value = bytes.sublist(offset, offset + length);
+    final end = value.indexOf(0);
+    return utf8.decode(
+      end < 0 ? value : value.sublist(0, end),
+      allowMalformed: false,
+    );
   }
 
   static void _validateNameSlot(List<int> nameSlot) {
@@ -559,5 +659,17 @@ class DeviceProtocolRepository
         reader.u8(1) == action.wireValue &&
         reader.u32Le(2) == transactionId &&
         frame.content.length == 9 + reader.u16Le(7);
+  }
+
+  static bool _sameBytes(List<int> left, List<int> right) {
+    if (left.length != right.length) {
+      return false;
+    }
+    for (var index = 0; index < left.length; index += 1) {
+      if (left[index] != right[index]) {
+        return false;
+      }
+    }
+    return true;
   }
 }

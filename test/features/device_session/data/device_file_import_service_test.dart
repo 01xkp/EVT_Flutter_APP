@@ -37,7 +37,7 @@ void main() {
       expect(result.title, 'capture.ogg');
       expect(result.relativePath, 'device-1767225600000000.ogg');
       expect(records.items.single.sizeBytes, 5);
-      expect(gateway.offsets, [0, 2, 4]);
+      expect(gateway.offsets, [0]);
       expect(progress.last.received, 5);
       expect(files.bytes, [1, 2, 3, 4, 5]);
       expect(gateway.confirmationRequests, hasLength(1));
@@ -92,7 +92,7 @@ void main() {
       final imported = await service.import(file);
 
       expect(imported.relativePath, 'device-1767225600000000.ogg');
-      expect(gateway.offsets, [0, 2, 2, 4]);
+      expect(gateway.offsets, [0, 2]);
       expect(files.completedBytes, [1, 2, 3, 4, 5]);
       expect(checkpoints.items, isEmpty);
       expect(records.items, hasLength(1));
@@ -127,6 +127,37 @@ void main() {
       expect(records.items, hasLength(1));
     },
   );
+
+  test(
+    'retries archive from a verified local file without downloading or saving twice',
+    () async {
+      final gateway = _FakeGateway(<int>[1, 2, 3, 4, 5]);
+      final files = _ImportFiles();
+      final records = _Records();
+      final archive = _ArchiveGateway(fail: true);
+      final checkpoints = _Checkpoints();
+      final service = DeviceFileImportService(
+        deviceId: 'device-1',
+        gateway: gateway,
+        archive: archive,
+        files: files,
+        checkpoints: checkpoints,
+        recordings: records,
+        now: () => DateTime.utc(2026, 1, 1),
+      );
+      const file = DeviceFile(name: 'capture.ogg', nameSlot: [1], length: 5);
+
+      await expectLater(service.import(file), throwsStateError);
+      archive.fail = false;
+
+      await service.import(file);
+
+      expect(gateway.offsets, [0]);
+      expect(records.items, hasLength(1));
+      expect(gateway.confirmationRequests, hasLength(1));
+      expect(checkpoints.items, isEmpty);
+    },
+  );
 }
 
 class _FakeGateway implements DeviceFileGateway {
@@ -157,6 +188,23 @@ class _FakeGateway implements DeviceFileGateway {
   }
 
   @override
+  Stream<Uint8List> downloadFile({
+    required List<int> nameSlot,
+    int startOffset = 0,
+    int chunkSize = 0,
+  }) async* {
+    offsets.add(startOffset);
+    for (var offset = startOffset; offset < bytes.length; offset += 2) {
+      if (offset == failAtOffset) {
+        throw StateError('connection interrupted');
+      }
+      yield Uint8List.fromList(
+        bytes.sublist(offset, (offset + 2).clamp(0, bytes.length)),
+      );
+    }
+  }
+
+  @override
   Future<Uint8List> readFileChunk({
     required List<int> nameSlot,
     int startOffset = 0,
@@ -178,7 +226,11 @@ class _FakeGateway implements DeviceFileGateway {
     required int fileSize,
     required int crc32,
   }) async {
-    confirmationRequests.add((nameSlot: nameSlot, size: fileSize, crc32: crc32));
+    confirmationRequests.add((
+      nameSlot: nameSlot,
+      size: fileSize,
+      crc32: crc32,
+    ));
     return 4;
   }
 }
@@ -186,8 +238,9 @@ class _FakeGateway implements DeviceFileGateway {
 class _ArchiveGateway implements ArchiveGateway {
   _ArchiveGateway({this.fail = false});
 
-  final bool fail;
+  bool fail;
 
+  @override
   Future<void> archive(DeviceArchiveRequest request) async {
     if (fail) {
       throw StateError('archive unavailable');
@@ -199,6 +252,7 @@ class _ImportFiles implements RecordingFileStore {
   List<int> bytes = [];
   final deleted = <String>[];
   final _pending = <String, List<int>>{};
+  String? _finalizedPath;
 
   @override
   Future<PendingRecordingFile> createPending({
@@ -249,6 +303,7 @@ class _ImportFiles implements RecordingFileStore {
   Future<CompletedRecordingFile> finalize(PendingRecordingFile pending) async {
     bytes = List<int>.from(_pending[pending.relativePath] ?? const <int>[]);
     _pending.remove(pending.relativePath);
+    _finalizedPath = pending.relativePath;
     return CompletedRecordingFile(
       relativePath: pending.relativePath,
       absolutePath: '/${pending.relativePath}',
@@ -266,8 +321,17 @@ class _ImportFiles implements RecordingFileStore {
   }
 
   @override
-  Future<CompletedRecordingFile?> recoverPartial(String relativePath) =>
-      throw UnimplementedError();
+  Future<CompletedRecordingFile?> recoverPartial(String relativePath) async {
+    if (_finalizedPath != relativePath || bytes.isEmpty) {
+      return null;
+    }
+    return CompletedRecordingFile(
+      relativePath: relativePath,
+      absolutePath: '/$relativePath',
+      sizeBytes: bytes.length,
+    );
+  }
+
   @override
   Future<bool> exists(String relativePath) => throw UnimplementedError();
   @override

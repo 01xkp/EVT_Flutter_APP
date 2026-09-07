@@ -80,6 +80,7 @@ class WqotaUpdateController extends ChangeNotifier {
     );
     var updateModeEntered = false;
     try {
+      await gateway.prepareTransport();
       final identity = await gateway.readDeviceIdentity();
       package.validateFor(identity);
       final checkpoint = await checkpoints.find(deviceId);
@@ -92,8 +93,8 @@ class WqotaUpdateController extends ChangeNotifier {
         throw StateError('设备未返回 18 字节镜像头窗口。');
       }
       await gateway.inquireIfCanUpdate(package.imageHeader);
-      updateModeEntered = true;
       var window = await gateway.enterUpdateMode();
+      updateModeEntered = true;
       _setState(state.copyWith(phase: WqotaUpdatePhase.transferring));
       final image = package.image;
       while (window.length > 0) {
@@ -128,17 +129,29 @@ class WqotaUpdateController extends ChangeNotifier {
       }
       _setState(state.copyWith(phase: WqotaUpdatePhase.verifying));
       await gateway.refresh();
+      var imageVerified = false;
       for (var attempt = 0; attempt < 60; attempt += 1) {
         if (_cancelRequested) {
           return;
         }
-        if (await gateway.isSyncComplete()) {
+        switch (await gateway.readImageVerificationState()) {
+          case WqotaImageVerificationState.verified:
+            imageVerified = true;
+            break;
+          case WqotaImageVerificationState.unavailable:
+            throw StateError('设备未提供可验证的整镜像校验终态。');
+          case WqotaImageVerificationState.syncing:
+            if (attempt == 59) {
+              throw StateError('设备未完成整镜像校验。');
+            }
+            await Future<void>.delayed(const Duration(seconds: 1));
+        }
+        if (imageVerified) {
           break;
         }
-        if (attempt == 59) {
-          throw StateError('设备未完成整镜像校验。');
-        }
-        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+      if (!imageVerified) {
+        throw StateError('设备未完成整镜像校验。');
       }
       await gateway.reboot();
       _setState(

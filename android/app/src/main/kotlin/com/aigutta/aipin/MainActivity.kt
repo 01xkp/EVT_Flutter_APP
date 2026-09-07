@@ -124,12 +124,17 @@ class MainActivity : FlutterActivity() {
         }
         val uri = contentResolver.insert(collection, values) ?: return mirrorFailure("storage_error")
         try {
-            contentResolver.openOutputStream(uri, "w")?.use { output ->
+            val output = contentResolver.openOutputStream(uri, "w")
+                ?: throw IllegalStateException("MediaStore output stream unavailable")
+            output.use {
                 FileInputStream(source).use { input -> input.copyTo(output) }
-            } ?: return mirrorFailure("storage_error")
-            contentResolver.update(uri, ContentValues().apply {
+            }
+            val updated = contentResolver.update(uri, ContentValues().apply {
                 put(MediaStore.MediaColumns.IS_PENDING, 0)
             }, null, null)
+            if (updated != 1) {
+                throw IllegalStateException("MediaStore pending update failed")
+            }
             return mirrorSuccess(relativePath)
         } catch (error: Exception) {
             contentResolver.delete(uri, null, null)

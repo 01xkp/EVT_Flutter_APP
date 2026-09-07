@@ -143,25 +143,27 @@ void main() {
     },
   );
 
-  test('flush forces a pending public mirror', () async {
-    final sink = _FakePublicDiagnosticLogSink();
-    final store = FileAppLogStore(
-      supportDirectoryProvider: () async => root,
-      enabled: true,
-      publicDiagnosticLogSink: sink,
-      mirrorDebounce: Duration.zero,
-      clock: () => DateTime.utc(2026, 9, 1, 12),
-    );
+  test(
+    'flush forces a pending public mirror inside the debounce window',
+    () async {
+      final sink = _FakePublicDiagnosticLogSink();
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        publicDiagnosticLogSink: sink,
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
 
-    store.info('first');
-    await store.flush();
-    store.info('second');
-    await store.flush();
+      store.info('first');
+      await store.flush();
+      store.info('second');
+      await store.flush();
 
-    expect(sink.calls, hasLength(2));
-    await store.close();
-    store.dispose();
-  });
+      expect(sink.calls, hasLength(2));
+      await store.close();
+      store.dispose();
+    },
+  );
 
   test(
     'retains private logs and reports a bounded storage event on mirror failure',
@@ -178,10 +180,10 @@ void main() {
       await store.flush();
 
       final path = await store.exportPath();
-      expect(
-        await File(path!).readAsString(),
-        contains('product_operation_completed'),
-      );
+      final content = await File(path!).readAsString();
+      expect(content, contains('product_operation_completed'));
+      expect(content, contains('public_mirror_failed'));
+      expect(content, contains('error_code=storage_error'));
       expect(store.publicMirrorStatus?.failureCode, 'storage_error');
       expect(
         store.entries.where((entry) => entry.scope == 'STORAGE'),

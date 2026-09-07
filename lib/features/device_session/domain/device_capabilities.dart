@@ -9,4 +9,3 @@ class DeviceCapabilities {
   final bool supportsRealtimeAudio;
   final bool supportsDualOta;
 }
-

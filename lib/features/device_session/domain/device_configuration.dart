@@ -18,6 +18,26 @@ class DeviceConfiguration {
   final int powerOff;
   final int chargingMode;
   final bool audioStreamEnabled;
+
+  DeviceConfiguration copyWith({
+    DateTime? systemTime,
+    int? recordDurationSeconds,
+    int? recordMode,
+    int? recordType,
+    bool? denoise,
+    int? powerOff,
+    int? chargingMode,
+    bool? audioStreamEnabled,
+  }) => DeviceConfiguration(
+    systemTime: systemTime ?? this.systemTime,
+    recordDurationSeconds: recordDurationSeconds ?? this.recordDurationSeconds,
+    recordMode: recordMode ?? this.recordMode,
+    recordType: recordType ?? this.recordType,
+    denoise: denoise ?? this.denoise,
+    powerOff: powerOff ?? this.powerOff,
+    chargingMode: chargingMode ?? this.chargingMode,
+    audioStreamEnabled: audioStreamEnabled ?? this.audioStreamEnabled,
+  );
 }
 
 class DeviceStatus {

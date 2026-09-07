@@ -16,12 +16,18 @@ import 'package:aipin/features/device_session/data/drift_device_file_download_ch
 import 'package:aipin/features/device_session/domain/device_file_download_checkpoint_repository.dart';
 import 'package:aipin/features/device_session/domain/ticket_gateway.dart';
 import 'package:aipin/features/device_session/data/unconfigured_ticket_gateway.dart';
+import 'package:aipin/features/device_session/data/device_integration_service_configuration.dart';
+import 'package:aipin/features/device_session/data/https_ticket_gateway.dart';
 import 'package:aipin/features/device_session/domain/archive_gateway.dart';
 import 'package:aipin/features/device_session/data/unconfigured_archive_gateway.dart';
+import 'package:aipin/features/device_session/data/https_archive_gateway.dart';
 import 'package:aipin/features/device_session/data/shared_preferences_firmware_update_checkpoint_repository.dart';
+import 'package:aipin/features/device_session/data/shared_preferences_device_clear_checkpoint_repository.dart';
 import 'package:aipin/features/device_session/data/shared_preferences_device_connection_history_repository.dart';
+import 'package:aipin/features/device_session/domain/device_clear_checkpoint.dart';
 import 'package:aipin/features/device_session/domain/device_connection_history_repository.dart';
 import 'package:aipin/features/device_session/data/unconfigured_firmware_package_gateway.dart';
+import 'package:aipin/features/device_session/data/https_firmware_package_gateway.dart';
 import 'package:aipin/features/device_session/domain/firmware_package_gateway.dart';
 import 'package:aipin/features/device_session/domain/firmware_update_checkpoint.dart';
 import 'package:aipin/features/evidence/data/drift_evidence_repository.dart';
@@ -138,20 +144,47 @@ final deviceFileDownloadCheckpointRepositoryProvider =
     });
 
 final ticketGatewayProvider = Provider<TicketGateway>((ref) {
-  return UnconfiguredTicketGateway();
+  final baseUri = DeviceIntegrationServiceConfiguration.ticketBaseUri();
+  if (baseUri == null) {
+    return UnconfiguredTicketGateway();
+  }
+  return HttpsTicketGateway(
+    baseUrl: baseUri.toString(),
+    logger: ref.watch(scopedAppLoggerProvider('DEVICE_API')),
+  );
 });
 
 final archiveGatewayProvider = Provider<ArchiveGateway>((ref) {
-  return const UnconfiguredArchiveGateway();
+  final baseUri = DeviceIntegrationServiceConfiguration.archiveBaseUri();
+  if (baseUri == null) {
+    return const UnconfiguredArchiveGateway();
+  }
+  return HttpsArchiveGateway(
+    baseUrl: baseUri.toString(),
+    logger: ref.watch(scopedAppLoggerProvider('DEVICE_API')),
+  );
 });
 
 final firmwarePackageGatewayProvider = Provider<FirmwarePackageGateway>((ref) {
-  return const UnconfiguredFirmwarePackageGateway();
+  final baseUri =
+      DeviceIntegrationServiceConfiguration.firmwarePackageBaseUri();
+  if (baseUri == null) {
+    return const UnconfiguredFirmwarePackageGateway();
+  }
+  return HttpsFirmwarePackageGateway(
+    baseUrl: baseUri.toString(),
+    logger: ref.watch(scopedAppLoggerProvider('DEVICE_API')),
+  );
 });
 
 final firmwareUpdateCheckpointRepositoryProvider =
     Provider<FirmwareUpdateCheckpointRepository>((ref) {
       return SharedPreferencesFirmwareUpdateCheckpointRepository();
+    });
+
+final deviceClearCheckpointRepositoryProvider =
+    Provider<DeviceClearCheckpointRepository>((ref) {
+      return SharedPreferencesDeviceClearCheckpointRepository();
     });
 
 final deviceConnectionHistoryRepositoryProvider =

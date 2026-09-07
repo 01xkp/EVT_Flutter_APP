@@ -45,7 +45,7 @@ class TemporaryAsrHttpGateway implements TemporaryAsrGateway {
        _requestTimeout = requestTimeout,
        _uploadRequestTimeout = uploadRequestTimeout,
        _clientFactory = clientFactory ?? HttpClient.new,
-       _logger = logger ?? const DebugSafeAppLogger() {
+       _logger = logger ?? const DebugSafeAppLogger(scope: 'AI') {
     _logger.info(
       'gateway_initialized',
       fields: <String, Object?>{

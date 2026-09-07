@@ -8,10 +8,14 @@ abstract interface class BleTransport {
   Stream<DeviceCandidate> scan();
   Stream<BleConnectionState> connect(String deviceId);
   Future<List<BleService>> discoverServices(String deviceId);
+  Future<int> requestMtu(String deviceId, {required int preferredMtu});
   Stream<Uint8List> subscribe(BleCharacteristic characteristic);
   Future<Uint8List> read(BleCharacteristic characteristic);
   Future<void> write(BleCharacteristic characteristic, Uint8List bytes);
-  Future<void> writeWithoutResponse(BleCharacteristic characteristic, Uint8List bytes);
+  Future<void> writeWithoutResponse(
+    BleCharacteristic characteristic,
+    Uint8List bytes,
+  );
   Future<void> disconnect(String deviceId);
 }
 

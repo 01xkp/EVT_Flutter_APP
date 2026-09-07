@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:aipin/core/protocol/crc32.dart';
@@ -8,17 +9,48 @@ import 'package:aipin/features/device_session/domain/firmware_package.dart';
 import 'package:aipin/features/device_session/domain/wqota_update_gateway.dart';
 
 class WqotaBleUpdateGateway implements WqotaUpdateGateway {
+  // E2 is a 27-byte characteristic value. ATT reserves three bytes for the
+  // opcode and attribute handle, so a single-write E2 requires MTU 30.
+  static const _minimumTransportMtu = 30;
+
   WqotaBleUpdateGateway({
     required this.client,
     required this.verifyBusinessVersionCallback,
-    this.maximumBlockBytes = 497,
+    this.requestMtu,
+    this.wqotaFinalVerificationSupported = false,
+    this._maximumBlockBytes,
   });
 
   final WqotaClient client;
   final Future<bool> Function(String expectedBusinessVersion)
   verifyBusinessVersionCallback;
-  final int maximumBlockBytes;
+  final Future<int> Function()? requestMtu;
+  final bool wqotaFinalVerificationSupported;
+  int? _maximumBlockBytes;
   var _serialNumber = 0;
+
+  static int maximumBlockBytesForMtu(int mtu) {
+    if (mtu < 23) {
+      throw RangeError.range(mtu, 23, null, 'mtu');
+    }
+    return min(655, mtu - 20);
+  }
+
+  @override
+  Future<void> prepareTransport() async {
+    if (_maximumBlockBytes != null) {
+      return;
+    }
+    final negotiateMtu = requestMtu;
+    if (negotiateMtu == null) {
+      throw StateError('WQOTA 未配置 MTU 协商。');
+    }
+    final mtu = await negotiateMtu();
+    if (mtu < _minimumTransportMtu) {
+      throw StateError('WQOTA 需要至少 $_minimumTransportMtu 字节的 ATT MTU。');
+    }
+    _maximumBlockBytes = maximumBlockBytesForMtu(mtu);
+  }
 
   @override
   Future<WqotaDeviceIdentity> readDeviceIdentity() async {
@@ -101,6 +133,10 @@ class WqotaBleUpdateGateway implements WqotaUpdateGateway {
     if (bytes.isEmpty) {
       throw const FormatException('WQOTA 升级窗口不能为空。');
     }
+    final maximumBlockBytes = _maximumBlockBytes;
+    if (maximumBlockBytes == null) {
+      throw StateError('WQOTA 尚未完成 MTU 协商。');
+    }
     final blockCount = (bytes.length / maximumBlockBytes).ceil();
     final lastSerial = (_serialNumber + blockCount) & 0xFF;
     final response = client.waitForNotification(
@@ -148,14 +184,25 @@ class WqotaBleUpdateGateway implements WqotaUpdateGateway {
     final response = await _execute(WqotaOpcode.getRefreshStatus, [
       _nextSerial(),
     ]);
-    _successData(response, exactLength: 3);
+    final data = _successData(response, exactLength: 3);
+    if (data[2] != 0) {
+      throw StateError('设备未接受升级刷新，结果码：0x${data[2].toRadixString(16)}');
+    }
   }
 
   @override
-  Future<bool> isSyncComplete() async {
+  Future<WqotaImageVerificationState> readImageVerificationState() async {
     final response = await _execute(WqotaOpcode.getSyncState, [_nextSerial()]);
     final data = _successData(response, exactLength: 3);
-    return data[2] == 0;
+    return switch (data[2]) {
+      1 => WqotaImageVerificationState.syncing,
+      0 when wqotaFinalVerificationSupported =>
+        WqotaImageVerificationState.verified,
+      0 => WqotaImageVerificationState.unavailable,
+      final state => throw StateError(
+        '设备返回未知的镜像校验状态：0x${state.toRadixString(16)}',
+      ),
+    };
   }
 
   @override
@@ -169,7 +216,10 @@ class WqotaBleUpdateGateway implements WqotaUpdateGateway {
     final response = await _execute(WqotaOpcode.exitUpdateMode, [
       _nextSerial(),
     ]);
-    _successData(response, exactLength: 3);
+    final data = _successData(response, exactLength: 3);
+    if (data[2] != 0) {
+      throw StateError('设备未退出升级模式，结果码：0x${data[2].toRadixString(16)}');
+    }
   }
 
   @override

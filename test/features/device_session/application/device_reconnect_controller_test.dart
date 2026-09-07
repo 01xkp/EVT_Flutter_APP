@@ -268,6 +268,121 @@ void main() {
     },
   );
 
+  test('does not restart a reconnect cycle while backgrounded', () async {
+    var scanCalls = 0;
+    final controller = DeviceReconnectController(
+      history: _InMemoryHistory(<RememberedDevice>[rememberedFor()]),
+      startScan: () async {
+        scanCalls += 1;
+      },
+      stopScan: () async {},
+      connect: (_) async => true,
+      logger: _CapturingLogger(),
+      waitForRetry: (_) async {},
+    );
+    addTearDown(controller.dispose);
+
+    await controller.restoreAndStart();
+    await controller.pauseForBackground();
+    await controller.markUnexpectedDisconnect();
+
+    expect(scanCalls, 1);
+    expect(controller.state.phase, DeviceReconnectPhase.idle);
+  });
+
+  test(
+    'a late background pause cannot overwrite a newer foreground restore',
+    () async {
+      final stopScanGate = Completer<void>();
+      var scanCalls = 0;
+      final controller = DeviceReconnectController(
+        history: _InMemoryHistory(<RememberedDevice>[rememberedFor()]),
+        startScan: () async {
+          scanCalls += 1;
+        },
+        stopScan: () => stopScanGate.future,
+        connect: (_) async => true,
+        logger: _CapturingLogger(),
+        waitForRetry: (_) async {},
+      );
+      addTearDown(controller.dispose);
+
+      await controller.restoreAndStart();
+      final pause = controller.pauseForBackground();
+      final restore = controller.restoreAndStart();
+      await _drainMicrotasks();
+
+      expect(controller.state.phase, DeviceReconnectPhase.scanning);
+      stopScanGate.complete();
+      await Future.wait<void>(<Future<void>>[pause, restore]);
+
+      expect(scanCalls, 2);
+      expect(controller.state.phase, DeviceReconnectPhase.scanning);
+    },
+  );
+
+  test(
+    'a delayed history write preserves a manual disconnect suppression',
+    () async {
+      final history = _DelayedWriteHistory();
+      final controller = DeviceReconnectController(
+        history: history,
+        startScan: () async {},
+        stopScan: () async {},
+        connect: (_) async => true,
+        logger: _CapturingLogger(),
+        waitForRetry: (_) async {},
+        now: () => connectedAt,
+      );
+      addTearDown(controller.dispose);
+
+      final remember = controller.rememberSuccessfulConnection(candidateFor());
+      await history.upsertStarted;
+      await controller.suppressForForeground();
+      expect(controller.state.phase, DeviceReconnectPhase.suppressed);
+
+      history.releaseWrite();
+      await remember;
+
+      expect(controller.state.phase, DeviceReconnectPhase.suppressed);
+      expect(controller.state.rememberedDevice, isNotNull);
+    },
+  );
+
+  test(
+    'manual connection takeover stops automatic work and clears suppression',
+    () async {
+      var scanCalls = 0;
+      var stopScanCalls = 0;
+      final controller = DeviceReconnectController(
+        history: _InMemoryHistory(<RememberedDevice>[rememberedFor()]),
+        startScan: () async {
+          scanCalls += 1;
+        },
+        stopScan: () async {
+          stopScanCalls += 1;
+        },
+        connect: (_) async => true,
+        logger: _CapturingLogger(),
+        waitForRetry: (_) async {},
+      );
+      addTearDown(controller.dispose);
+
+      await controller.restoreAndStart();
+      await controller.takeOverManualConnection();
+      expect(stopScanCalls, 1);
+      expect(controller.state.phase, DeviceReconnectPhase.idle);
+
+      await controller.suppressForForeground();
+      expect(controller.state.phase, DeviceReconnectPhase.suppressed);
+      await controller.takeOverManualConnection();
+      await controller.markUnexpectedDisconnect();
+
+      expect(scanCalls, 2);
+      expect(controller.state.phase, DeviceReconnectPhase.scanning);
+    },
+  );
+
   test(
     'persists a successful connection then removes it after a clear',
     () async {
@@ -289,6 +404,7 @@ void main() {
       expect(stored, hasLength(1));
       expect(stored.single.connectionId, 'android-transport-id');
       expect(stored.single.physicalMacAddress, 'AA:BB:CC:DD:EE:FF');
+      expect(controller.state.phase, DeviceReconnectPhase.connected);
 
       await controller.forgetSuccessfulClear(candidate);
       expect(await history.load(), isEmpty);
@@ -324,6 +440,27 @@ void main() {
     expect(controller.state.phase, DeviceReconnectPhase.scanning);
     expect(controller.state.attempt, 0);
   });
+
+  test(
+    'stops presenting an automatic scan after the shared scanner closes',
+    () async {
+      final controller = DeviceReconnectController(
+        history: _InMemoryHistory(<RememberedDevice>[rememberedFor()]),
+        startScan: () async {},
+        stopScan: () async {},
+        connect: (_) async => true,
+        logger: _CapturingLogger(),
+        waitForRetry: (_) async {},
+      );
+      addTearDown(controller.dispose);
+
+      await controller.restoreAndStart();
+      controller.notifyScanStopped();
+
+      expect(controller.state.phase, DeviceReconnectPhase.idle);
+      expect(controller.state.canRetry, isTrue);
+    },
+  );
 
   test('reconnect diagnostics omit raw candidate identities', () async {
     const rawConnectionId = 'android-raw-connection-id';
@@ -420,6 +557,28 @@ class _InMemoryHistory implements DeviceConnectionHistoryRepository {
       physicalMacAddress: record.physicalMacAddress,
     );
     _values.add(record);
+  }
+}
+
+class _DelayedWriteHistory extends _InMemoryHistory {
+  final Completer<void> _upsertStarted = Completer<void>();
+  final Completer<void> _releaseWrite = Completer<void>();
+
+  Future<void> get upsertStarted => _upsertStarted.future;
+
+  void releaseWrite() {
+    if (!_releaseWrite.isCompleted) {
+      _releaseWrite.complete();
+    }
+  }
+
+  @override
+  Future<void> upsert(RememberedDevice record) async {
+    if (!_upsertStarted.isCompleted) {
+      _upsertStarted.complete();
+    }
+    await _releaseWrite.future;
+    await super.upsert(record);
   }
 }
 

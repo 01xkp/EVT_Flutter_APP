@@ -19,6 +19,7 @@ class FirmwarePackage {
     required this.expectedPayloadCrc32,
     required List<int> wqotaRequestPrefixFlags,
     required List<int> wqotaResponsePrefixFlags,
+    this.wqotaFinalVerificationSupported = false,
   }) : payload = Uint8List.fromList(payload),
        wqotaRequestPrefixFlags = List<int>.unmodifiable(
          wqotaRequestPrefixFlags,
@@ -35,6 +36,10 @@ class FirmwarePackage {
   final int expectedPayloadCrc32;
   final List<int> wqotaRequestPrefixFlags;
   final List<int> wqotaResponsePrefixFlags;
+
+  /// Must only be set for target firmware where E8=0 is emitted after the
+  /// device has completed its asynchronous whole-image verification.
+  final bool wqotaFinalVerificationSupported;
 
   void validateFor(WqotaDeviceIdentity device) {
     if (vendorId < 0 ||
@@ -57,6 +62,11 @@ class FirmwarePackage {
     if (wqotaRequestPrefixFlags.length != 4 ||
         wqotaResponsePrefixFlags.length != 4) {
       throw const FirmwarePackageValidationException('未配置目标固件的 WQOTA 请求和响应前缀。');
+    }
+    if (!wqotaFinalVerificationSupported) {
+      throw const FirmwarePackageValidationException(
+        '目标固件未声明可验证的 WQOTA 整镜像终态，已阻止升级。',
+      );
     }
     if ((wqotaRequestPrefixFlags[3] & 0x80) == 0 ||
         (wqotaResponsePrefixFlags[3] & 0x80) != 0) {

@@ -12,6 +12,7 @@ class FakeBleTransport implements BleTransport {
     List<BleService>? services,
     this.deferRead = false,
     this.readError,
+    this.negotiatedMtu = 247,
     Map<String, List<int>> readValuesByCharacteristicUuid = const {},
   }) : profile = profile ?? DeviceProfile.empty(),
        services = services ?? const [],
@@ -37,7 +38,17 @@ class FakeBleTransport implements BleTransport {
         BleLogicalEndpoint.fa10Fa11: BleEndpoint(
           serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
           characteristicUuid: '0000FA11-1212-EFDE-1523-785FEABCD123',
-          operations: const {BleOperation.write, BleOperation.indicate},
+          operations: {BleOperation.write, BleOperation.indicate},
+        ),
+        BleLogicalEndpoint.fa10Fa19: BleEndpoint(
+          serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FA19-1212-EFDE-1523-785FEABCD123',
+          operations: {BleOperation.write, BleOperation.indicate},
+        ),
+        BleLogicalEndpoint.fa10Fa12: BleEndpoint(
+          serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FA12-1212-EFDE-1523-785FEABCD123',
+          operations: {BleOperation.write, BleOperation.indicate},
         ),
       },
     );
@@ -47,21 +58,40 @@ class FakeBleTransport implements BleTransport {
       services: const [
         BleService(
           uuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
-          characteristicUuids: [
-            '0000FA11-1212-EFDE-1523-785FEABCD123',
-            '0000FA16-1212-EFDE-1523-785FEABCD123',
+          characteristics: [
+            BleDiscoveredCharacteristic(
+              uuid: '0000FA11-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.write, BleOperation.indicate},
+            ),
+            BleDiscoveredCharacteristic(
+              uuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.write, BleOperation.indicate},
+            ),
+            BleDiscoveredCharacteristic(
+              uuid: '0000FA19-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.write, BleOperation.indicate},
+            ),
+            BleDiscoveredCharacteristic(
+              uuid: '0000FA12-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.write, BleOperation.indicate},
+            ),
           ],
         ),
         BleService(
           uuid: '0000FB10-1212-EFDE-1523-785FEABCD123',
-          characteristicUuids: ['0000FB11-1212-EFDE-1523-785FEABCD123'],
+          characteristics: [
+            BleDiscoveredCharacteristic(
+              uuid: '0000FB11-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.read, BleOperation.indicate},
+            ),
+          ],
         ),
       ],
     );
   }
 
   static final matchingCandidate = DeviceCandidate(
-    id: '71:BF:E2:3B:84:23',
+    connectionId: '71:BF:E2:3B:84:23',
     name: 'AIPIN_8423',
     manufacturerData: const [0xA3, 0x89, 0x71, 0xBF, 0xE2, 0x3B, 0x84, 0x23],
     serviceUuids: const ['0000AF30-0000-1000-8000-00805F9B34FB'],
@@ -90,13 +120,16 @@ class FakeBleTransport implements BleTransport {
   final disconnectedDeviceIds = <String>[];
   final List<String> discoveryRequests = [];
   final List<BleCharacteristic> subscribedCharacteristics = [];
+  final List<BleCharacteristic> readCharacteristics = [];
   var scanCallCount = 0;
   final bool deferRead;
   final Object? readError;
+  final int negotiatedMtu;
   final Map<String, Uint8List> _readValuesByCharacteristicUuid;
   final Completer<Uint8List> _deferredRead = Completer<Uint8List>();
   final List<BleService> services;
   Uint8List readValue = Uint8List(0);
+  final List<int> requestedMtus = [];
 
   Stream<Uint8List> get subscriptionStream => _subscriptionController.stream;
   final writes = <Uint8List>[];
@@ -137,6 +170,12 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
+  Future<int> requestMtu(String deviceId, {required int preferredMtu}) async {
+    requestedMtus.add(preferredMtu);
+    return negotiatedMtu;
+  }
+
+  @override
   Stream<Uint8List> subscribe(BleCharacteristic characteristic) {
     subscribedCharacteristics.add(characteristic);
     return _subscriptionController.stream;
@@ -144,6 +183,7 @@ class FakeBleTransport implements BleTransport {
 
   @override
   Future<Uint8List> read(BleCharacteristic characteristic) async {
+    readCharacteristics.add(characteristic);
     if (readError != null) {
       throw readError!;
     }

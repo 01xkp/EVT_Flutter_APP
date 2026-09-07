@@ -57,17 +57,24 @@ class DeviceReconnectController extends ChangeNotifier {
   Future<void> _scanOperationTail = Future<void>.value();
   int _cycleId = 0;
   bool _suppressedForForeground = false;
+  bool _pausedForBackground = false;
   bool _scanMayBeActive = false;
   bool _isDisposed = false;
 
   DeviceReconnectState get state => _state;
 
   /// Restore the newest remembered device and begin an automatic scan.
-  Future<void> restoreAndStart() => _startCycle(clearSuppression: false);
+  Future<void> restoreAndStart() {
+    _pausedForBackground = false;
+    return _startCycle(clearSuppression: false);
+  }
 
   /// A user-requested cycle clears foreground-only suppression and retry
   /// history, then waits for a matching foreground scan result.
-  Future<void> startExplicitCycle() => _startCycle(clearSuppression: true);
+  Future<void> startExplicitCycle() {
+    _pausedForBackground = false;
+    return _startCycle(clearSuppression: true);
+  }
 
   /// Evaluates one discovered candidate without retaining its raw identifier.
   Future<void> considerCandidate(DeviceCandidate candidate) async {
@@ -75,6 +82,7 @@ class DeviceReconnectController extends ChangeNotifier {
     final remembered = _state.rememberedDevice;
     if (!_isActive(cycle) ||
         _suppressedForForeground ||
+        _pausedForBackground ||
         _state.phase != DeviceReconnectPhase.scanning ||
         remembered == null ||
         !remembered.matches(candidate)) {
@@ -136,7 +144,7 @@ class DeviceReconnectController extends ChangeNotifier {
 
   /// Starts a fresh automatic cycle after a session drops unexpectedly.
   Future<void> markUnexpectedDisconnect() async {
-    if (_isDisposed || _suppressedForForeground) {
+    if (_isDisposed || _suppressedForForeground || _pausedForBackground) {
       return;
     }
     await _startCycle(clearSuppression: false);
@@ -171,10 +179,13 @@ class DeviceReconnectController extends ChangeNotifier {
     if (_isDisposed) {
       return;
     }
-    _cycleId += 1;
+    final pausedCycle = ++_cycleId;
+    _pausedForBackground = true;
     _suppressedForForeground = false;
     await _stopScanSafely();
-    if (_isDisposed || _state.phase == DeviceReconnectPhase.connected) {
+    if (!_isActive(pausedCycle) ||
+        !_pausedForBackground ||
+        _state.phase == DeviceReconnectPhase.connected) {
       return;
     }
     _setState(
@@ -199,6 +210,7 @@ class DeviceReconnectController extends ChangeNotifier {
       _logWarning('reconnect_history_write_skipped', 'invalid_candidate');
       return;
     }
+    final readyCycle = _cycleId;
 
     try {
       await _history.upsert(record);
@@ -210,8 +222,71 @@ class DeviceReconnectController extends ChangeNotifier {
     if (_isDisposed) {
       return;
     }
-    _setState(_state.copyWith(rememberedDevice: record));
+    if (!_isActive(readyCycle) || _suppressedForForeground) {
+      _setState(_state.copyWith(rememberedDevice: record));
+      _logInfo('reconnect_history_written');
+      return;
+    }
+    // A direct/manual connection can complete while this controller is idle.
+    // Treat it the same as an automatic success so no stale retry UI remains.
+    _setState(
+      _state.copyWith(
+        phase: DeviceReconnectPhase.connected,
+        rememberedDevice: record,
+        canRetry: false,
+        clearFailureCategory: true,
+      ),
+    );
     _logInfo('reconnect_history_written');
+  }
+
+  /// Lets a user-selected connection take over from automatic reconnect work.
+  ///
+  /// It clears foreground-only suppression so a later unexpected disconnect
+  /// can start a new automatic cycle after this manual connection succeeds.
+  Future<void> takeOverManualConnection() async {
+    if (_isDisposed) {
+      return;
+    }
+    _suppressedForForeground = false;
+    final manualCycle = ++_cycleId;
+    await _stopScanSafely();
+    if (!_isActive(manualCycle)) {
+      return;
+    }
+    if (_state.phase != DeviceReconnectPhase.connected) {
+      _setState(
+        _state.copyWith(
+          phase: DeviceReconnectPhase.idle,
+          attempt: 0,
+          canRetry: false,
+          clearFailureCategory: true,
+        ),
+      );
+    }
+    _logInfo('reconnect_manual_takeover', cycle: manualCycle);
+  }
+
+  /// Synchronizes state when another owner, such as the discovery page,
+  /// stops the shared scan stream. It deliberately does not schedule a new
+  /// scan: a user closing that page or a platform scan error stays recoverable
+  /// through the explicit reconnect action.
+  void notifyScanStopped() {
+    if (_isDisposed || !_scanMayBeActive) {
+      return;
+    }
+    _scanMayBeActive = false;
+    if (_state.phase != DeviceReconnectPhase.scanning) {
+      return;
+    }
+    _setState(
+      _state.copyWith(
+        phase: DeviceReconnectPhase.idle,
+        canRetry: true,
+        failureCategory: 'scan_stopped',
+      ),
+    );
+    _logWarning('reconnect_scan_stopped', 'scan_stopped');
   }
 
   /// Removes the corresponding private record after a successful clear/unbind.
@@ -360,7 +435,7 @@ class DeviceReconnectController extends ChangeNotifier {
   }
 
   Future<void> _startScanForCycle(int cycle) async {
-    if (!_isActive(cycle) || _suppressedForForeground) {
+    if (!_isActive(cycle) || _suppressedForForeground || _pausedForBackground) {
       return;
     }
     _setState(
@@ -372,7 +447,9 @@ class DeviceReconnectController extends ChangeNotifier {
     );
 
     final started = await _queueScanOperation(() async {
-      if (!_isActive(cycle) || _suppressedForForeground) {
+      if (!_isActive(cycle) ||
+          _suppressedForForeground ||
+          _pausedForBackground) {
         return false;
       }
       _scanMayBeActive = true;
@@ -481,7 +558,7 @@ class DeviceReconnectController extends ChangeNotifier {
       }
       return;
     }
-    if (!_isActive(cycle) || _suppressedForForeground) {
+    if (!_isActive(cycle) || _suppressedForForeground || _pausedForBackground) {
       return;
     }
     await _startScanForCycle(cycle);

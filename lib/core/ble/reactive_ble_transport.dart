@@ -9,10 +9,13 @@ import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/diagnostics/evt_failure.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart' as reactive;
 import 'package:permission_handler/permission_handler.dart';
 
 class ReactiveBleTransport implements BleTransport {
+  static const _pairingRequiredMessage = '设备需要完成系统配对。';
+
   ReactiveBleTransport({
     reactive.FlutterReactiveBle? ble,
     SafeAppLogger? logger,
@@ -34,21 +37,24 @@ class ReactiveBleTransport implements BleTransport {
   Stream<DeviceCandidate> scan() async* {
     try {
       _logger.info('scan_start');
-      await _ensureScanPermission();
-      final status = await _ble.statusStream.firstWhere(
-        (status) => status != reactive.BleStatus.unknown,
-      );
+      final requireLocationServicesEnabled = await _ensureScanPermission();
+      final status = await _ble.statusStream
+          .firstWhere((status) => status != reactive.BleStatus.unknown)
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () => throw BleTransportException(
+              EvtFailure.environment(message: '蓝牙状态暂时不可用，请检查系统蓝牙后重试。'),
+            ),
+          );
       _logger.info('bluetooth_status', fields: {'status': status.name});
-      if (status == reactive.BleStatus.poweredOff) {
-        throw BleTransportException(
-          EvtFailure.environment(message: '蓝牙未开启。'),
-          issue: BleTransportIssue.bluetoothOff,
-        );
+      final statusFailure = scanFailureForStatus(status);
+      if (statusFailure != null) {
+        throw statusFailure;
       }
       await for (final device in _ble.scanForDevices(
         withServices: const [],
         scanMode: reactive.ScanMode.lowLatency,
-        requireLocationServicesEnabled: false,
+        requireLocationServicesEnabled: requireLocationServicesEnabled,
       )) {
         _logger.info(
           'scan_result',
@@ -59,7 +65,7 @@ class ReactiveBleTransport implements BleTransport {
           },
         );
         yield DeviceCandidate(
-          id: device.id,
+          connectionId: device.id,
           name: device.name,
           manufacturerData: List.unmodifiable(device.manufacturerData),
           serviceUuids: List.unmodifiable(
@@ -176,6 +182,25 @@ class ReactiveBleTransport implements BleTransport {
                   (characteristic) => characteristic.id.toString(),
                 ),
               ),
+              characteristics: List.unmodifiable(
+                service.characteristics
+                    .map(
+                      (characteristic) => BleDiscoveredCharacteristic(
+                        uuid: characteristic.id.toString(),
+                        operations: {
+                          if (characteristic.isReadable) BleOperation.read,
+                          if (characteristic.isWritableWithResponse)
+                            BleOperation.write,
+                          if (characteristic.isWritableWithoutResponse)
+                            BleOperation.writeWithoutResponse,
+                          if (characteristic.isNotifiable) BleOperation.notify,
+                          if (characteristic.isIndicatable)
+                            BleOperation.indicate,
+                        },
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
             ),
           )
           .toList(growable: false);
@@ -208,6 +233,42 @@ class ReactiveBleTransport implements BleTransport {
   }
 
   @override
+  Future<int> requestMtu(String deviceId, {required int preferredMtu}) async {
+    if (preferredMtu < 23) {
+      throw RangeError.range(preferredMtu, 23, null, 'preferredMtu');
+    }
+    try {
+      final reported = await _ble
+          .requestMtu(deviceId: deviceId, mtu: preferredMtu)
+          .timeout(const Duration(seconds: 12));
+      final mtu = attMtuFromPlugin(
+        reported,
+        reportedAsWritePayload: Platform.isIOS,
+      );
+      _logger.info(
+        'mtu_negotiated',
+        fields: {
+          'device': _redactDeviceId(deviceId),
+          'mtu': mtu,
+          'platform': Platform.isIOS ? 'ios' : 'android',
+        },
+      );
+      return mtu;
+    } catch (error, stackTrace) {
+      _logger.info(
+        'mtu_negotiation_failure',
+        fields: {'device': _redactDeviceId(deviceId), 'error': '$error'},
+      );
+      Error.throwWithStackTrace(
+        BleTransportException(
+          EvtFailure.transport(message: '蓝牙 MTU 协商失败。', detail: '$error'),
+        ),
+        stackTrace,
+      );
+    }
+  }
+
+  @override
   Stream<Uint8List> subscribe(BleCharacteristic characteristic) async* {
     try {
       _logger.info(
@@ -230,19 +291,16 @@ class ReactiveBleTransport implements BleTransport {
         yield Uint8List.fromList(bytes);
       }
     } catch (error, stackTrace) {
+      final failure = gattOperationFailure(error, fallbackMessage: '状态订阅失败。');
       _logger.info(
         'notification_subscribe_failure',
         fields: {
           'device': _redactDeviceId(characteristic.deviceId),
           'error': '$error',
+          'pairing_required': failure.message == _pairingRequiredMessage,
         },
       );
-      Error.throwWithStackTrace(
-        BleTransportException(
-          EvtFailure.transport(message: '状态订阅失败。', detail: '$error'),
-        ),
-        stackTrace,
-      );
+      Error.throwWithStackTrace(BleTransportException(failure), stackTrace);
     }
   }
 
@@ -268,19 +326,16 @@ class ReactiveBleTransport implements BleTransport {
       );
       return bytes;
     } catch (error, stackTrace) {
+      final failure = gattOperationFailure(error, fallbackMessage: '状态读取失败。');
       _logger.info(
         'read_failure',
         fields: {
           'device': _redactDeviceId(characteristic.deviceId),
           'error': '$error',
+          'pairing_required': failure.message == _pairingRequiredMessage,
         },
       );
-      Error.throwWithStackTrace(
-        BleTransportException(
-          EvtFailure.transport(message: '状态读取失败。', detail: '$error'),
-        ),
-        stackTrace,
-      );
+      Error.throwWithStackTrace(BleTransportException(failure), stackTrace);
     }
   }
 
@@ -322,20 +377,17 @@ class ReactiveBleTransport implements BleTransport {
         },
       );
     } catch (error, stackTrace) {
+      final failure = gattOperationFailure(error, fallbackMessage: '蓝牙写入失败。');
       _logger.info(
         '${operation}_failure',
         fields: {
           'device': _redactDeviceId(characteristic.deviceId),
           'characteristic': characteristic.characteristicUuid,
           'error': '$error',
+          'pairing_required': failure.message == _pairingRequiredMessage,
         },
       );
-      Error.throwWithStackTrace(
-        BleTransportException(
-          EvtFailure.transport(message: '蓝牙写入失败。', detail: '$error'),
-        ),
-        stackTrace,
-      );
+      Error.throwWithStackTrace(BleTransportException(failure), stackTrace);
     }
   }
 
@@ -387,29 +439,110 @@ class ReactiveBleTransport implements BleTransport {
     return '...${deviceId.substring(deviceId.length - 4)}';
   }
 
-  Future<void> _ensureScanPermission() async {
-    if (Platform.isAndroid) {
-      final sdkInt = await _androidSdkIntProvider.sdkInt;
-      final permissions =
-          AndroidBleScanPermissionPolicy.platformPermissionsForSdkInt(sdkInt);
-      final statuses = await permissions.request();
-      if (statuses.values.any((status) => !status.isGranted)) {
-        throw BleTransportException(
-          EvtFailure.environment(
-            message: sdkInt >= 31 ? '需要附近设备权限才能开始扫描。' : '需要定位权限才能开始扫描。',
-          ),
-        );
-      }
-      return;
+  /// Android reports ATT MTU directly. On iOS the plugin reports CoreBluetooth's
+  /// maximum Write Without Response value length, which excludes the ATT header.
+  @visibleForTesting
+  static int attMtuFromPlugin(
+    int reportedMtu, {
+    bool reportedAsWritePayload = false,
+  }) => reportedAsWritePayload ? reportedMtu + 3 : reportedMtu;
+
+  /// The Reactive BLE API leaves bonding to the operating system, so a
+  /// protected-GATT error is the only portable signal available to the app.
+  @visibleForTesting
+  static EvtFailure gattOperationFailure(
+    Object error, {
+    required String fallbackMessage,
+  }) {
+    final detail = '$error';
+    if (_isPairingRequiredGattError(detail)) {
+      return EvtFailure.transport(
+        message: _pairingRequiredMessage,
+        detail: '请在系统弹窗完成设备配对后重试。原始 GATT 错误：$detail',
+      );
     }
-    if (Platform.isIOS) {
-      final status = await Permission.bluetooth.request();
-      if (!status.isGranted) {
-        throw BleTransportException(
-          EvtFailure.environment(message: '需要蓝牙权限才能开始联调。'),
-        );
-      }
+    return EvtFailure.transport(message: fallbackMessage, detail: detail);
+  }
+
+  static bool _isPairingRequiredGattError(String error) {
+    final value = error.toLowerCase();
+    const phrases = <String>[
+      'insufficient authentication',
+      'insufficient_authentication',
+      'insufficient encryption',
+      'insufficient_encryption',
+      'authentication required',
+      'encryption required',
+      'requires authentication',
+      'requires encryption',
+      'authentication before',
+      'not bonded',
+      'bond required',
+      'gatt_insufficient_authentication',
+      'gatt_insufficient_encryption',
+    ];
+    if (phrases.any(value.contains)) {
+      return true;
     }
+    return RegExp(r'\b(?:gatt\s*)?status\s*[=:]\s*(?:5|15)\b').hasMatch(value);
+  }
+
+  @visibleForTesting
+  static BleTransportException? scanFailureForStatus(
+    reactive.BleStatus status,
+  ) => switch (status) {
+    reactive.BleStatus.poweredOff => BleTransportException(
+      EvtFailure.environment(message: '蓝牙未开启。'),
+      issue: BleTransportIssue.bluetoothOff,
+    ),
+    reactive.BleStatus.unsupported => BleTransportException(
+      EvtFailure.environment(message: '当前设备不支持低功耗蓝牙。'),
+    ),
+    reactive.BleStatus.unauthorized => BleTransportException(
+      EvtFailure.environment(message: '请在系统设置中允许本应用使用蓝牙。'),
+    ),
+    reactive.BleStatus.locationServicesDisabled => BleTransportException(
+      EvtFailure.environment(message: '请开启系统定位服务后重新查找设备。'),
+    ),
+    reactive.BleStatus.unknown || reactive.BleStatus.ready => null,
+  };
+
+  /// iOS grants Bluetooth access when CoreBluetooth initializes. Do not use
+  /// PermissionHandler as a scan gate there: Swift Package builds launched by
+  /// Xcode can compile that optional permission module out before runtime.
+  @visibleForTesting
+  static bool requiresPermissionHandlerScanRequest({
+    required bool isAndroid,
+    required bool isIOS,
+  }) {
+    if (isIOS) {
+      return false;
+    }
+    return isAndroid;
+  }
+
+  Future<bool> _ensureScanPermission() async {
+    if (!requiresPermissionHandlerScanRequest(
+      isAndroid: Platform.isAndroid,
+      isIOS: Platform.isIOS,
+    )) {
+      return false;
+    }
+
+    final sdkInt = await _androidSdkIntProvider.sdkInt;
+    final permissions =
+        AndroidBleScanPermissionPolicy.platformPermissionsForSdkInt(sdkInt);
+    final statuses = await permissions.request();
+    if (statuses.values.any((status) => !status.isGranted)) {
+      throw BleTransportException(
+        EvtFailure.environment(
+          message: sdkInt >= 31 ? '需要附近设备权限才能开始扫描。' : '需要定位权限才能开始扫描。',
+        ),
+      );
+    }
+    return AndroidBleScanPermissionPolicy.requiresLocationServicesForScan(
+      sdkInt,
+    );
   }
 
   static BleConnectionState _mapConnectionState(

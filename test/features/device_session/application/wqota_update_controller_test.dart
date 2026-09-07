@@ -25,12 +25,14 @@ void main() {
         expectedPayloadCrc32: 0x55BC801D,
         wqotaRequestPrefixFlags: const [0x70, 0x07, 0x6E, 0xC1],
         wqotaResponsePrefixFlags: const [0x70, 0x07, 0x6E, 0x01],
+        wqotaFinalVerificationSupported: true,
       );
 
       await controller.start(deviceId: 'device-1', package: package);
 
       expect(controller.state.phase, WqotaUpdatePhase.awaitingReconnect);
       expect(gateway.operations, [
+        'prepare',
         'info',
         'offset',
         'admit',
@@ -68,6 +70,7 @@ void main() {
         expectedPayloadCrc32: 0x55BC801D,
         wqotaRequestPrefixFlags: const [0x70, 0x07, 0x6E, 0xC1],
         wqotaResponsePrefixFlags: const [0x70, 0x07, 0x6E, 0x01],
+        wqotaFinalVerificationSupported: true,
       );
 
       final start = controller.start(deviceId: 'device-1', package: package);
@@ -96,6 +99,7 @@ void main() {
       expectedPayloadCrc32: 0x55BC801D,
       wqotaRequestPrefixFlags: const [0x70, 0x07, 0x6E, 0xC1],
       wqotaResponsePrefixFlags: const [0x70, 0x07, 0x6E, 0x01],
+      wqotaFinalVerificationSupported: true,
     );
 
     await expectLater(
@@ -105,6 +109,7 @@ void main() {
 
     expect(controller.state.phase, WqotaUpdatePhase.failed);
     expect(gateway.operations, [
+      'prepare',
       'info',
       'offset',
       'admit',
@@ -113,14 +118,81 @@ void main() {
       'exit',
     ]);
   });
+
+  test('does not exit update mode when E3 did not enter it', () async {
+    final gateway = _Gateway(failEnter: true);
+    final controller = WqotaUpdateController(
+      gateway: gateway,
+      checkpoints: _Checkpoints(),
+    );
+    final package = FirmwarePackage(
+      vendorId: 0x1234,
+      productId: 0x5678,
+      version: 2,
+      expectedBusinessVersion: '1.0.2',
+      payload: Uint8List.fromList(const [1, 2, 3]),
+      expectedPayloadCrc32: 0x55BC801D,
+      wqotaRequestPrefixFlags: const [0x70, 0x07, 0x6E, 0xC1],
+      wqotaResponsePrefixFlags: const [0x70, 0x07, 0x6E, 0x01],
+      wqotaFinalVerificationSupported: true,
+    );
+
+    await expectLater(
+      controller.start(deviceId: 'device-1', package: package),
+      throwsStateError,
+    );
+
+    expect(controller.state.phase, WqotaUpdatePhase.failed);
+    expect(gateway.operations, ['prepare', 'info', 'offset', 'admit', 'enter']);
+  });
+
+  test('does not reboot after an unverified E8 idle state', () async {
+    final gateway = _Gateway(
+      verificationState: WqotaImageVerificationState.unavailable,
+    );
+    final controller = WqotaUpdateController(
+      gateway: gateway,
+      checkpoints: _Checkpoints(),
+    );
+    final package = FirmwarePackage(
+      vendorId: 0x1234,
+      productId: 0x5678,
+      version: 2,
+      expectedBusinessVersion: '1.0.2',
+      payload: Uint8List.fromList(const [1, 2, 3]),
+      expectedPayloadCrc32: 0x55BC801D,
+      wqotaRequestPrefixFlags: const [0x70, 0x07, 0x6E, 0xC1],
+      wqotaResponsePrefixFlags: const [0x70, 0x07, 0x6E, 0x01],
+      wqotaFinalVerificationSupported: true,
+    );
+
+    await expectLater(
+      controller.start(deviceId: 'device-1', package: package),
+      throwsStateError,
+    );
+
+    expect(controller.state.phase, WqotaUpdatePhase.failed);
+    expect(gateway.operations, isNot(contains('reboot')));
+    expect(gateway.operations, contains('exit'));
+  });
 }
 
 class _Gateway implements WqotaUpdateGateway {
-  _Gateway({this.holdTransfer = false, this.failTransfer = false});
+  _Gateway({
+    this.holdTransfer = false,
+    this.failTransfer = false,
+    this.failEnter = false,
+    this.verificationState = WqotaImageVerificationState.verified,
+  });
 
   final bool holdTransfer;
   final bool failTransfer;
+  final bool failEnter;
+  final WqotaImageVerificationState verificationState;
   final operations = <String>[];
+
+  @override
+  Future<void> prepareTransport() async => operations.add('prepare');
 
   @override
   Future<WqotaDeviceIdentity> readDeviceIdentity() async {
@@ -142,6 +214,9 @@ class _Gateway implements WqotaUpdateGateway {
   @override
   Future<WqotaTransferWindow> enterUpdateMode() async {
     operations.add('enter');
+    if (failEnter) {
+      throw StateError('simulated enter failure');
+    }
     return const WqotaTransferWindow(offset: 18, length: 3);
   }
 
@@ -164,9 +239,9 @@ class _Gateway implements WqotaUpdateGateway {
   Future<void> refresh() async => operations.add('refresh');
 
   @override
-  Future<bool> isSyncComplete() async {
+  Future<WqotaImageVerificationState> readImageVerificationState() async {
     operations.add('sync');
-    return true;
+    return verificationState;
   }
 
   @override

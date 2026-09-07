@@ -2,7 +2,13 @@ import 'package:aipin/core/design_system/evt_theme.dart';
 import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
 import 'package:flutter/material.dart';
 
-enum DeviceSummaryStatus { disconnected, searching, connected }
+enum DeviceSummaryStatus {
+  disconnected,
+  searching,
+  reconnecting,
+  reconnectFailed,
+  connected,
+}
 
 class DeviceSummary {
   const DeviceSummary._({
@@ -37,6 +43,22 @@ class DeviceSummary {
          connectionLabel: '已连接',
          recordingLabel: recordingLabel,
        );
+
+  const DeviceSummary.reconnecting({required String name})
+    : this._(
+        name: name,
+        status: DeviceSummaryStatus.reconnecting,
+        connectionLabel: '正在回连设备',
+        recordingLabel: '暂时无法获取',
+      );
+
+  const DeviceSummary.reconnectFailed({required String name})
+    : this._(
+        name: name,
+        status: DeviceSummaryStatus.reconnectFailed,
+        connectionLabel: '回连失败，可再次尝试',
+        recordingLabel: '暂时无法获取',
+      );
 
   final String name;
   final DeviceSummaryStatus status;
@@ -144,6 +166,8 @@ class _DeviceSummaryContent extends StatelessWidget {
         : switch (device.status) {
             DeviceSummaryStatus.disconnected => '连接设备',
             DeviceSummaryStatus.searching => '查看附近设备',
+            DeviceSummaryStatus.reconnecting => '正在回连',
+            DeviceSummaryStatus.reconnectFailed => '重新连接',
             DeviceSummaryStatus.connected => '查看设备',
           };
     return Column(
@@ -154,11 +178,12 @@ class _DeviceSummaryContent extends StatelessWidget {
         const SizedBox(height: 12),
         Row(
           children: [
-            Icon(
-              device.isConnected
-                  ? Icons.bluetooth_connected
-                  : Icons.bluetooth_outlined,
-            ),
+            Icon(switch (device.status) {
+              DeviceSummaryStatus.connected => Icons.bluetooth_connected,
+              DeviceSummaryStatus.reconnecting => Icons.bluetooth_searching,
+              DeviceSummaryStatus.reconnectFailed => Icons.bluetooth_disabled,
+              _ => Icons.bluetooth_outlined,
+            }),
             const SizedBox(width: 12),
             Expanded(
               child: Column(

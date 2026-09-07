@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:aipin/core/ble/ble_models.dart';
@@ -43,8 +44,8 @@ void main() {
         0x50,
         0,
         0,
-        0,
-        0,
+        1,
+        1,
         0,
       ]),
     );
@@ -57,6 +58,47 @@ void main() {
     expect(info.totalDiskSpaceMb, 256);
     expect(info.remainDiskSpaceMb, 128);
     expect(info.batteryLevel, 0x50);
+    expect(info.powerOff, 1);
+    expect(info.chargingMode, 1);
+  });
+
+  test('decodes the UTF-8 device name slot from the V1.5 device response', () {
+    final frame = EvtFrame(
+      command: 0x81,
+      content: Uint8List.fromList([
+        3,
+        ...'SN202608130001'.codeUnits,
+        ...List<int>.filled(6, 0),
+        ...'1.0.0'.codeUnits,
+        ...List<int>.filled(3, 0),
+        ...'A1'.codeUnits,
+        ...List<int>.filled(6, 0),
+        ...List<int>.filled(8, 0),
+        ...utf8.encode('\u58f0\u9875'),
+        ...List<int>.filled(23, 0),
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x80,
+        0x00,
+        0x00,
+        0x00,
+        0,
+        0,
+        0x50,
+        0,
+        0,
+        1,
+        1,
+        0,
+      ]),
+    );
+
+    expect(
+      DeviceProtocolRepository.decodeDeviceInfo(frame).deviceName,
+      '\u58f0\u9875',
+    );
   });
 
   test('decodes status and paged file responses with strict lengths', () {
@@ -149,6 +191,113 @@ void main() {
   });
 
   test(
+    'ignores a delayed UTC response while waiting for configuration acknowledgement',
+    () async {
+      final transport = FakeBleTransport();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
+      final repository = DeviceProtocolRepository(
+        deviceId: 'device-1',
+        profile: _profile,
+        transport: transport,
+        commands: client,
+        codec: codec,
+      );
+
+      final operation = repository.writeConfiguration(
+        DeviceConfiguration(
+          systemTime: DateTime.fromMillisecondsSinceEpoch(
+            1_726_000_000_000,
+            isUtc: true,
+          ),
+          recordDurationSeconds: 1800,
+          recordMode: 1,
+          recordType: 2,
+          denoise: false,
+          powerOff: 0,
+          chargingMode: 0,
+          audioStreamEnabled: false,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x82, const [0x80, 0x96, 0x98, 0x66]),
+      );
+      transport.emitSubscriptionBytes(codec.encodeRequest(0x82, const [1]));
+
+      await operation;
+      await client.close();
+    },
+  );
+
+  test('reads the device UTC with an empty 0x02 request', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    final repository = DeviceProtocolRepository(
+      deviceId: 'device-1',
+      profile: _profile,
+      transport: transport,
+      commands: client,
+      codec: codec,
+    );
+
+    final operation = repository.readConfigurationTime();
+    await Future<void>.delayed(Duration.zero);
+
+    final request = codec.decode(transport.writes.single).value!;
+    expect(request.command, 0x02);
+    expect(request.content, isEmpty);
+    transport.emitSubscriptionBytes(
+      codec.encodeRequest(0x82, const [0x80, 0x96, 0x98, 0x66]),
+    );
+
+    expect(
+      await operation,
+      DateTime.fromMillisecondsSinceEpoch(1_721_276_032_000, isUtc: true),
+    );
+    await client.close();
+  });
+
+  test(
+    'ignores a stale configuration acknowledgement while reading UTC',
+    () async {
+      final transport = FakeBleTransport();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
+      final repository = DeviceProtocolRepository(
+        deviceId: 'device-1',
+        profile: _profile,
+        transport: transport,
+        commands: client,
+        codec: codec,
+      );
+
+      final operation = repository.readConfigurationTime();
+      await Future<void>.delayed(Duration.zero);
+      transport.emitSubscriptionBytes(codec.encodeRequest(0x82, const [1]));
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x82, const [0x80, 0x96, 0x98, 0x66]),
+      );
+
+      expect(
+        await operation,
+        DateTime.fromMillisecondsSinceEpoch(1_721_276_032_000, isUtc: true),
+      );
+      await client.close();
+    },
+  );
+
+  test(
     'updates consent and privacy duration through their 0x06 subcommands',
     () async {
       final transport = FakeBleTransport();
@@ -167,7 +316,11 @@ void main() {
 
       final consent = repository.setRecordConsent(true);
       await Future<void>.delayed(Duration.zero);
-      expect(codec.decode(transport.writes.single).value!.content, [0x02, 1]);
+      expect(codec.decode(transport.writes.single).value!.content, [
+        0x02,
+        0x01,
+        1,
+      ]);
       transport.emitSubscriptionBytes(
         codec.encodeRequest(0x86, const [0x02, 0, 0]),
       );
@@ -175,7 +328,11 @@ void main() {
 
       final privacy = repository.setPrivacyDuration(3);
       await Future<void>.delayed(Duration.zero);
-      expect(codec.decode(transport.writes.last).value!.content, [0x04, 3]);
+      expect(codec.decode(transport.writes.last).value!.content, [
+        0x04,
+        0x01,
+        3,
+      ]);
       transport.emitSubscriptionBytes(
         codec.encodeRequest(0x86, const [0x04, 0, 0]),
       );
@@ -219,6 +376,88 @@ void main() {
         codec.encodeRequest(0xA6, const [0x02, 0x00, 0x01, 0x04]),
       );
       await expectLater(operation, completion(4));
+      await client.close();
+    },
+  );
+
+  test(
+    'rejects metadata returned for a different immutable file slot',
+    () async {
+      final transport = FakeBleTransport();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
+      final repository = DeviceProtocolRepository(
+        deviceId: 'device-1',
+        profile: _profile,
+        transport: transport,
+        commands: client,
+        codec: codec,
+      );
+      final requestedSlot = <int>[
+        ...'capture.ogg'.codeUnits,
+        ...List<int>.filled(6, 0),
+      ];
+      final returnedSlot = <int>[
+        ...'other.ogg'.codeUnits,
+        ...List<int>.filled(8, 0),
+      ];
+      final metadataData = <int>[...returnedSlot, ...List<int>.filled(28, 0)];
+      metadataData[44] = 1;
+
+      final operation = repository.readFileMetadata(requestedSlot);
+      await Future<void>.delayed(Duration.zero);
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0xA6, <int>[0x01, 0, 45, ...metadataData]),
+      );
+
+      await expectLater(operation, throwsA(isA<FormatException>()));
+      await client.close();
+    },
+  );
+
+  test(
+    'downloads a file from one request followed by continuous notify frames',
+    () async {
+      final transport = FakeBleTransport();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
+      final repository = DeviceProtocolRepository(
+        deviceId: 'device-1',
+        profile: _profile,
+        transport: transport,
+        commands: client,
+        codec: codec,
+      );
+      final nameSlot = <int>[
+        ...'capture.ogg'.codeUnits,
+        ...List<int>.filled(6, 0),
+      ];
+
+      final bytes = <int>[];
+      final completed = repository
+          .downloadFile(nameSlot: nameSlot)
+          .forEach(bytes.addAll);
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes, hasLength(1));
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x23, const [0, 0, 0, 0, 2, 0, 1, 2]),
+      );
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x23, const [2, 0, 0, 0, 1, 0, 3]),
+      );
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x23, const [3, 0, 0, 0, 0, 0]),
+      );
+
+      await completed;
+      expect(bytes, <int>[1, 2, 3]);
+      expect(transport.writes, hasLength(1));
       await client.close();
     },
   );

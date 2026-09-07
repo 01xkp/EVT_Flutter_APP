@@ -73,9 +73,7 @@ void main() {
     );
     await tester.pump();
 
-    final label = tester.widget<Text>(
-      find.text('$recordingName 转写完成'),
-    );
+    final label = tester.widget<Text>(find.text('$recordingName 转写完成'));
     expect(label.maxLines, 1);
     expect(label.overflow, TextOverflow.ellipsis);
     controller.dispose();

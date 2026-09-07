@@ -19,6 +19,8 @@ class DiscoveryPage extends StatefulWidget {
     this.onSettings,
     this.bluetoothEnableGateway = const PlatformBluetoothEnableGateway(),
     this.onOpenBluetoothSettings,
+    this.onStartScan,
+    this.onStopScan,
   });
 
   final DiscoveryController? controller;
@@ -26,6 +28,14 @@ class DiscoveryPage extends StatefulWidget {
   final VoidCallback? onSettings;
   final BluetoothEnableGateway bluetoothEnableGateway;
   final Future<void> Function()? onOpenBluetoothSettings;
+
+  /// Lets the shell prepare an explicit reconnect cycle before a user-driven
+  /// scan begins. The page still starts its [controller] afterward.
+  final Future<void> Function()? onStartScan;
+
+  /// Lets the shell cancel its matching reconnect cycle before this page stops
+  /// the shared scanner.
+  final Future<void> Function()? onStopScan;
 
   @override
   State<DiscoveryPage> createState() => _DiscoveryPageState();
@@ -37,6 +47,11 @@ class _DiscoveryPageState extends State<DiscoveryPage>
       widget.controller?.state ?? const DiscoveryState();
   var _isBluetoothPromptVisible = false;
   var _retryScanWhenResumed = false;
+  Future<void> _scanActionTail = Future<void>.value();
+  Future<void>? _pendingStartScan;
+  Future<void>? _pendingStopScan;
+  var _stopScanCompleted = false;
+  var _isDisposed = false;
 
   @override
   void initState() {
@@ -63,7 +78,8 @@ class _DiscoveryPageState extends State<DiscoveryPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     widget.controller?.removeListener(_onStateChanged);
-    unawaited(widget.controller?.stop());
+    _isDisposed = true;
+    unawaited(_stopScanning());
     super.dispose();
   }
 
@@ -73,7 +89,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
       return;
     }
     _retryScanWhenResumed = false;
-    widget.controller?.start();
+    unawaited(_startScanning());
   }
 
   @override
@@ -115,13 +131,13 @@ class _DiscoveryPageState extends State<DiscoveryPage>
                     if (_state.isScanning)
                       AppButton.secondary(
                         label: '停止查找',
-                        onPressed: () => unawaited(widget.controller?.stop()),
+                        onPressed: () => unawaited(_stopScanning()),
                         icon: Icons.close,
                       )
                     else
                       AppButton.primary(
                         label: '查找附近设备',
-                        onPressed: widget.controller?.start,
+                        onPressed: () => unawaited(_startScanning()),
                         icon: Icons.radar_outlined,
                       ),
                     const SizedBox(height: 16),
@@ -148,7 +164,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
     if (_state.failure case final failure?) {
       return _DiscoveryFailure(
         message: failure.message,
-        onRetry: widget.controller?.start,
+        onRetry: () => unawaited(_startScanning()),
       );
     }
     if (_state.isScanning && _state.candidates.isEmpty) {
@@ -163,7 +179,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
         final candidate = _state.candidates[index];
         return DeviceCandidateRow(
           candidate: candidate,
-          selected: candidate.id == _state.selected?.id,
+          selected: candidate.connectionId == _state.selected?.connectionId,
           onTap: () => widget.controller?.select(candidate),
         );
       },
@@ -188,9 +204,9 @@ class _DiscoveryPageState extends State<DiscoveryPage>
       title: canRequestEnable ? '蓝牙未开启？' : '请开启蓝牙',
       message: canRequestEnable
           ? '开启蓝牙后即可查找附近设备。'
-          : '请在控制中心开启蓝牙后，返回 App 重新查找设备。',
+          : '请在系统设置或控制中心开启蓝牙后，返回 App 重新查找设备。',
       cancelLabel: '暂不',
-      confirmLabel: canRequestEnable ? '开启蓝牙' : '打开应用设置',
+      confirmLabel: canRequestEnable ? '开启蓝牙' : '打开 App 设置',
     );
     if (!mounted || !confirmed) {
       _isBluetoothPromptVisible = false;
@@ -204,9 +220,75 @@ class _DiscoveryPageState extends State<DiscoveryPage>
     }
     final result = await widget.bluetoothEnableGateway.requestEnable();
     if (mounted && result == BluetoothEnableResult.enabled) {
-      widget.controller?.start();
+      await _startScanning();
     }
     _isBluetoothPromptVisible = false;
+  }
+
+  Future<void> _startScanning() {
+    final pending = _pendingStartScan;
+    if (pending != null) {
+      return pending;
+    }
+    late final Future<void> action;
+    action = _enqueueScanAction(() async {
+      if (_isDisposed) {
+        return;
+      }
+      _stopScanCompleted = false;
+      await widget.onStartScan?.call();
+      if (!_isDisposed && mounted) {
+        widget.controller?.start();
+      }
+    });
+    _pendingStartScan = action;
+    action.then<void>(
+      (_) => _clearPendingStart(action),
+      onError: (_, _) => _clearPendingStart(action),
+    );
+    return action;
+  }
+
+  Future<void> _stopScanning() {
+    if (_stopScanCompleted) {
+      return Future<void>.value();
+    }
+    final pending = _pendingStopScan;
+    if (pending != null) {
+      return pending;
+    }
+    final onStopScan = widget.onStopScan;
+    final controller = widget.controller;
+    late final Future<void> action;
+    action = _enqueueScanAction(() async {
+      await onStopScan?.call();
+      await controller?.stop();
+      _stopScanCompleted = true;
+    });
+    _pendingStopScan = action;
+    action.then<void>(
+      (_) => _clearPendingStop(action),
+      onError: (_, _) => _clearPendingStop(action),
+    );
+    return action;
+  }
+
+  Future<void> _enqueueScanAction(Future<void> Function() action) {
+    final queued = _scanActionTail.then<void>((_) => action());
+    _scanActionTail = queued.then<void>((_) {}).catchError((_) {});
+    return queued;
+  }
+
+  void _clearPendingStart(Future<void> action) {
+    if (identical(_pendingStartScan, action)) {
+      _pendingStartScan = null;
+    }
+  }
+
+  void _clearPendingStop(Future<void> action) {
+    if (identical(_pendingStopScan, action)) {
+      _pendingStopScan = null;
+    }
   }
 }
 

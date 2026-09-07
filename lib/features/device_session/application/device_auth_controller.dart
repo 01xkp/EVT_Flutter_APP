@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:aipin/features/device_session/domain/device_clear.dart';
+import 'package:aipin/features/device_session/domain/device_clear_checkpoint.dart';
 import 'package:aipin/features/device_session/domain/device_auth_protocol.dart';
 import 'package:aipin/features/device_session/domain/device_auth_state.dart';
 import 'package:aipin/features/device_session/domain/device_security_gateway.dart';
@@ -9,24 +11,29 @@ import 'package:flutter/foundation.dart';
 
 class DeviceAuthController extends ChangeNotifier {
   DeviceAuthController({
-    required TicketGateway ticketGateway,
+    required this._ticketGateway,
     int Function()? transactionIdSource,
     List<int> Function()? nonceSource,
-    Future<void> Function(String deviceId)? onClearCompleted,
+    this._onClearCompleted,
     Future<void> Function(Duration delay)? waitForPoll,
-  }) : _ticketGateway = ticketGateway,
-       _transactionIdSource = transactionIdSource ?? _secureTransactionId,
+    this._clearCheckpoints,
+    Timer Function(Duration delay, void Function() callback)? grantExpiryTimer,
+  }) : _transactionIdSource = transactionIdSource ?? _secureTransactionId,
        _nonceSource = nonceSource ?? _secureNonce,
-       _onClearCompleted = onClearCompleted,
-       _waitForPoll = waitForPoll ?? Future<void>.delayed;
+       _waitForPoll = waitForPoll ?? Future<void>.delayed,
+       _grantExpiryTimerFactory = grantExpiryTimer ?? Timer.new;
 
   final TicketGateway _ticketGateway;
   final int Function() _transactionIdSource;
   final List<int> Function() _nonceSource;
   final Future<void> Function(String deviceId)? _onClearCompleted;
   final Future<void> Function(Duration delay) _waitForPoll;
+  final DeviceClearCheckpointRepository? _clearCheckpoints;
+  final Timer Function(Duration delay, void Function() callback)
+  _grantExpiryTimerFactory;
   DeviceAuthState _state = DeviceAuthState.unknown;
   DeviceAuthGrant? _grant;
+  Timer? _grantExpiryTimer;
   _PendingClear? _pendingClear;
   Object? _error;
 
@@ -38,6 +45,48 @@ class DeviceAuthController extends ChangeNotifier {
 
   bool allows(DevicePermission permission) =>
       _grant?.allows(permission) ?? false;
+
+  /// A BLE connection loss invalidates a session-scoped firmware grant.
+  void revokeForConnectionLoss() {
+    _cancelGrantExpiryTimer();
+    _grant = null;
+    if (_state != DeviceAuthState.clearing) {
+      _pendingClear = null;
+      _error = null;
+      _state = DeviceAuthState.unbound;
+    }
+    notifyListeners();
+  }
+
+  Future<bool> restorePendingClear(String deviceId) async {
+    if (_state != DeviceAuthState.unknown &&
+        _state != DeviceAuthState.unbound) {
+      return false;
+    }
+    final checkpoint = await _clearCheckpoints?.find(deviceId);
+    if (checkpoint == null) {
+      return false;
+    }
+    _cancelGrantExpiryTimer();
+    _grant = null;
+    _pendingClear = _PendingClear(
+      deviceId: checkpoint.deviceId,
+      transactionId: checkpoint.transactionId,
+      expectedBindingGeneration: checkpoint.expectedBindingGeneration,
+      preparation: DeviceClearPreparation(
+        pendingFiles: 0,
+        confirmNonce: checkpoint.confirmNonce,
+        pendingBytes: 0,
+        effectiveClearScope: checkpoint.clearScope,
+        riskFlags: 0,
+        prepareTtlSeconds: 0,
+      ),
+    );
+    _error = null;
+    _state = DeviceAuthState.clearing;
+    notifyListeners();
+    return true;
+  }
 
   Future<void> bind(DeviceSecurityGateway channel, {required String deviceId}) {
     return _runHandshake(
@@ -121,10 +170,10 @@ class DeviceAuthController extends ChangeNotifier {
         ),
       );
       _ensureSucceeded(confirm, confirmAction);
-      _grant = DeviceAuthGrant.fromConfirmation(confirm.data);
-      _state = DeviceAuthState.authenticated;
+      _acceptGrant(DeviceAuthGrant.fromConfirmation(confirm.data));
       notifyListeners();
     } catch (error) {
+      _cancelGrantExpiryTimer();
       _grant = null;
       _state = DeviceAuthState.failed;
       _error = error;
@@ -233,6 +282,7 @@ class DeviceAuthController extends ChangeNotifier {
       if (confirm.data.length != 3 || confirm.data[0] != 2) {
         throw const DeviceAuthenticationException('设备未进入数据清除状态。');
       }
+      await _saveClearCheckpoint(pending);
       await _pollClearStatus(
         channel,
         pending: pending,
@@ -287,6 +337,12 @@ class DeviceAuthController extends ChangeNotifier {
       _ensureSucceeded(response, DeviceAuthAction.clearStatus);
       final status = DeviceClearStatus.fromResponse(response.data);
       if (status.state == DeviceClearProgressState.failed) {
+        await _discardClearCheckpoint(pending.deviceId);
+        _cancelGrantExpiryTimer();
+        _grant = null;
+        _pendingClear = null;
+        _state = DeviceAuthState.failed;
+        notifyListeners();
         throw const DeviceAuthenticationException('设备数据清除失败。');
       }
       if (status.state == DeviceClearProgressState.done) {
@@ -296,9 +352,11 @@ class DeviceAuthController extends ChangeNotifier {
                 pending.preparation.effectiveClearScope) {
           throw const DeviceAuthenticationException('设备未完成完整的数据清除。');
         }
+        _cancelGrantExpiryTimer();
         _grant = null;
         _pendingClear = null;
         _state = DeviceAuthState.unbound;
+        await _discardClearCheckpoint(pending.deviceId);
         await _onClearCompleted?.call(pending.deviceId);
         notifyListeners();
         return;
@@ -309,11 +367,64 @@ class DeviceAuthController extends ChangeNotifier {
   }
 
   void clear() {
+    _cancelGrantExpiryTimer();
     _grant = null;
     _pendingClear = null;
     _error = null;
     _state = DeviceAuthState.unbound;
     notifyListeners();
+  }
+
+  void _acceptGrant(DeviceAuthGrant grant) {
+    _cancelGrantExpiryTimer();
+    _grant = grant;
+    _state = DeviceAuthState.authenticated;
+    final ttl = Duration(seconds: grant.sessionTtlSeconds);
+    if (ttl <= Duration.zero) {
+      _expireGrant();
+      return;
+    }
+    _grantExpiryTimer = _grantExpiryTimerFactory(ttl, _expireGrant);
+  }
+
+  void _expireGrant() {
+    _grantExpiryTimer = null;
+    _grant = null;
+    if (_state == DeviceAuthState.authenticated) {
+      _state = DeviceAuthState.unbound;
+    }
+    notifyListeners();
+  }
+
+  void _cancelGrantExpiryTimer() {
+    _grantExpiryTimer?.cancel();
+    _grantExpiryTimer = null;
+  }
+
+  @override
+  void dispose() {
+    _cancelGrantExpiryTimer();
+    super.dispose();
+  }
+
+  Future<void> _saveClearCheckpoint(_PendingClear pending) async {
+    final checkpoints = _clearCheckpoints;
+    if (checkpoints == null) {
+      return;
+    }
+    await checkpoints.save(
+      DeviceClearCheckpoint(
+        deviceId: pending.deviceId,
+        transactionId: pending.transactionId,
+        expectedBindingGeneration: pending.expectedBindingGeneration,
+        confirmNonce: pending.preparation.confirmNonce,
+        clearScope: pending.preparation.effectiveClearScope,
+      ),
+    );
+  }
+
+  Future<void> _discardClearCheckpoint(String deviceId) async {
+    await _clearCheckpoints?.clear(deviceId);
   }
 
   static void _ensureSucceeded(

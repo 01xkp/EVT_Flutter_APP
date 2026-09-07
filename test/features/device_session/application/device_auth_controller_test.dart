@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:aipin/features/device_session/application/device_auth_controller.dart';
+import 'package:aipin/features/device_session/domain/device_clear_checkpoint.dart';
 import 'package:aipin/features/device_session/domain/device_security_gateway.dart';
 import 'package:aipin/features/device_session/domain/device_auth_state.dart';
 import 'package:aipin/features/device_session/domain/ticket_gateway.dart';
@@ -31,6 +33,50 @@ void main() {
         0,
         ...'TKT-AUTH-V2'.codeUnits,
       ]);
+    },
+  );
+
+  test('revokes every granted scope when the device session is lost', () async {
+    final controller = DeviceAuthController(
+      ticketGateway: _TicketGateway(),
+      transactionIdSource: () => 0x05060708,
+      nonceSource: () => List<int>.generate(16, (index) => 0x10 + index),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.authenticate(_SecurityGateway(), deviceId: 'AIPIN-1234');
+    expect(controller.allows(DevicePermission.files), isTrue);
+
+    controller.revokeForConnectionLoss();
+
+    expect(controller.state, DeviceAuthState.unbound);
+    expect(controller.grant, isNull);
+    expect(controller.allows(DevicePermission.files), isFalse);
+  });
+
+  test(
+    'revokes granted scopes when the firmware session TTL expires',
+    () async {
+      void Function()? expire;
+      final controller = DeviceAuthController(
+        ticketGateway: _TicketGateway(),
+        transactionIdSource: () => 0x05060708,
+        nonceSource: () => List<int>.generate(16, (index) => 0x10 + index),
+        grantExpiryTimer: (_, callback) {
+          expire = callback;
+          return Timer(const Duration(days: 1), () {});
+        },
+      );
+      addTearDown(controller.dispose);
+
+      await controller.authenticate(_SecurityGateway(), deviceId: 'AIPIN-1234');
+      expect(controller.allows(DevicePermission.status), isTrue);
+
+      expire!.call();
+
+      expect(controller.state, DeviceAuthState.unbound);
+      expect(controller.grant, isNull);
+      expect(controller.allows(DevicePermission.status), isFalse);
     },
   );
 
@@ -79,6 +125,53 @@ void main() {
       expect(controller.state, DeviceAuthState.unbound);
     },
   );
+
+  test(
+    'restores a confirmed clear transaction and removes it after completion',
+    () async {
+      final checkpoints = _ClearCheckpoints();
+      await checkpoints.save(
+        DeviceClearCheckpoint(
+          deviceId: 'AIPIN-1234',
+          transactionId: 0x0A0B0C0D,
+          expectedBindingGeneration: 1,
+          confirmNonce: List<int>.generate(16, (index) => 0x30 + index),
+          clearScope: 0x3F,
+        ),
+      );
+      final controller = DeviceAuthController(
+        ticketGateway: _TicketGateway(),
+        clearCheckpoints: checkpoints,
+        waitForPoll: (_) async {},
+      );
+
+      expect(await controller.restorePendingClear('AIPIN-1234'), isTrue);
+      expect(controller.state, DeviceAuthState.clearing);
+
+      await controller.resumeClearStatus(_ClearSecurityGateway());
+
+      expect(controller.state, DeviceAuthState.unbound);
+      expect(await checkpoints.find('AIPIN-1234'), isNull);
+    },
+  );
+}
+
+class _ClearCheckpoints implements DeviceClearCheckpointRepository {
+  final _items = <String, DeviceClearCheckpoint>{};
+
+  @override
+  Future<void> clear(String deviceId) async {
+    _items.remove(deviceId);
+  }
+
+  @override
+  Future<DeviceClearCheckpoint?> find(String deviceId) async =>
+      _items[deviceId];
+
+  @override
+  Future<void> save(DeviceClearCheckpoint checkpoint) async {
+    _items[checkpoint.deviceId] = checkpoint;
+  }
 }
 
 class _TicketGateway implements TicketGateway {

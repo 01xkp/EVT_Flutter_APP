@@ -12,9 +12,13 @@ final class DeviceStatusViewModel {
 
   factory DeviceStatusViewModel.from(SessionState state) {
     final snapshot = state.latestSnapshot;
-    final connected = state.isObservable;
+    final connected = state.hasActiveBleConnection;
     return DeviceStatusViewModel(
-      connectionLabel: connected ? '已连接' : '已断开',
+      connectionLabel: !connected
+          ? '已断开'
+          : state.isObservable
+          ? '已连接'
+          : '已连接，待认证',
       recordingLabel: switch (snapshot?.state) {
         DeviceState.recording => '正在录音',
         DeviceState.paused => '已暂停',

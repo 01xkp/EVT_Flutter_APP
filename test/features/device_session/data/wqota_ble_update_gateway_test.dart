@@ -21,6 +21,37 @@ void main() {
     characteristicUuid: '00002001-0000-1000-8000-00805F9B34FB',
   );
 
+  test('derives the E5 payload limit from the negotiated ATT MTU', () {
+    expect(WqotaBleUpdateGateway.maximumBlockBytesForMtu(23), 3);
+    expect(WqotaBleUpdateGateway.maximumBlockBytesForMtu(185), 165);
+    expect(WqotaBleUpdateGateway.maximumBlockBytesForMtu(517), 497);
+    expect(
+      () => WqotaBleUpdateGateway.maximumBlockBytesForMtu(20),
+      throwsRangeError,
+    );
+  });
+
+  test(
+    'rejects transport preparation when E2 cannot fit in one ATT write',
+    () async {
+      final transport = FakeBleTransport();
+      final client = WqotaClient(
+        transport: transport,
+        writeCharacteristic: characteristic,
+        notifications: transport.subscriptionStream,
+        codec: codec,
+      );
+      addTearDown(client.close);
+      final gateway = WqotaBleUpdateGateway(
+        client: client,
+        requestMtu: () async => 27,
+        verifyBusinessVersionCallback: (_) async => true,
+      );
+
+      await expectLater(gateway.prepareTransport(), throwsStateError);
+    },
+  );
+
   test(
     'sends one E5 window with continuous offsets, serials, and CRC32',
     () async {

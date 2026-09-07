@@ -157,4 +157,48 @@ void main() {
       await client.close();
     },
   );
+
+  test(
+    'holds one command open while continuous matching frames arrive',
+    () async {
+      final transport = FakeBleTransport();
+      final codec = EvtProtocolCodec();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
+
+      final frames = client.executeStreaming(
+        const EvtCommandRequest(
+          command: 0x23,
+          content: [1, 0],
+          writeCharacteristic: characteristic,
+          expectedResponseCommand: 0x23,
+        ),
+        isTerminal: (frame) =>
+            frame.content.length == 6 &&
+            frame.content[4] == 0 &&
+            frame.content[5] == 0,
+      );
+      final received = <List<int>>[];
+      final done = frames.forEach((frame) => received.add(frame.content));
+
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes, hasLength(1));
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x23, const [0, 0, 0, 0, 2, 0, 1, 2]),
+      );
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x23, const [2, 0, 0, 0, 0, 0]),
+      );
+
+      await done;
+      expect(received, <List<int>>[
+        <int>[0, 0, 0, 0, 2, 0, 1, 2],
+        <int>[2, 0, 0, 0, 0, 0],
+      ]);
+      await client.close();
+    },
+  );
 }

@@ -1,3 +1,4 @@
+import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/diagnostics/evt_failure.dart';
 import 'package:aipin/core/protocol/device_event.dart';
 import 'package:aipin/features/device_session/domain/device_session.dart';
@@ -18,6 +19,7 @@ class SessionState {
     this.privacyDurationCode,
     this.fileCount,
     this.events = const [],
+    this.endpointCapabilities = const {},
     this.failure,
     this.isRecordActionInFlight = false,
   });
@@ -34,14 +36,35 @@ class SessionState {
   final int? privacyDurationCode;
   final int? fileCount;
   final List<DeviceEvent> events;
+  final Map<BleLogicalEndpoint, Set<BleOperation>> endpointCapabilities;
   final EvtFailure? failure;
   final bool isRecordActionInFlight;
 
   bool get isObservable => phase == SessionPhase.observable;
 
+  /// GATT discovery and response subscriptions are ready, so the app may
+  /// start the mandatory 0x09 bind/authentication handshake.
+  bool get isAuthenticationReady => switch (phase) {
+    SessionPhase.authenticationReady ||
+    SessionPhase.observable ||
+    SessionPhase.observing ||
+    SessionPhase.verifying ||
+    SessionPhase.completed => true,
+    _ => false,
+  };
+
+  bool supportsEndpoint(BleLogicalEndpoint endpoint, BleOperation operation) {
+    final operations = endpointCapabilities[endpoint];
+    if (operations == null) {
+      return false;
+    }
+    return operations.contains(operation);
+  }
+
   bool get hasActiveBleConnection => switch (phase) {
     SessionPhase.servicesDiscovered ||
     SessionPhase.subscribing ||
+    SessionPhase.authenticationReady ||
     SessionPhase.initialSnapshotRead ||
     SessionPhase.observable ||
     SessionPhase.observing ||
@@ -61,6 +84,7 @@ class SessionState {
     Object? privacyDurationCode = _unset,
     Object? fileCount = _unset,
     List<DeviceEvent>? events,
+    Map<BleLogicalEndpoint, Set<BleOperation>>? endpointCapabilities,
     Object? failure = _unset,
     bool? isRecordActionInFlight,
   }) {
@@ -87,8 +111,11 @@ class SessionState {
       privacyDurationCode: identical(privacyDurationCode, _unset)
           ? this.privacyDurationCode
           : privacyDurationCode as int?,
-      fileCount: identical(fileCount, _unset) ? this.fileCount : fileCount as int?,
+      fileCount: identical(fileCount, _unset)
+          ? this.fileCount
+          : fileCount as int?,
       events: events ?? this.events,
+      endpointCapabilities: endpointCapabilities ?? this.endpointCapabilities,
       failure: identical(failure, _unset)
           ? this.failure
           : failure as EvtFailure?,

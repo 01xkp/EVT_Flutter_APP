@@ -8,13 +8,11 @@ import 'wqota_codec.dart';
 
 class WqotaClient {
   WqotaClient({
-    required BleTransport transport,
-    required BleCharacteristic writeCharacteristic,
+    required this._transport,
+    required this._writeCharacteristic,
     required Stream<Uint8List> notifications,
-    required WqotaCodec codec,
-  }) : _transport = transport,
-       _writeCharacteristic = writeCharacteristic,
-       _codec = codec {
+    required this._codec,
+  }) {
     _subscription = notifications.listen(_onBytes, onError: _onError);
   }
 
@@ -70,7 +68,7 @@ class WqotaClient {
     final result = _queue.then(
       (_) => _run(opcode, data, serialNumber, timeout),
     );
-    _queue = result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _queue = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return result;
   }
 

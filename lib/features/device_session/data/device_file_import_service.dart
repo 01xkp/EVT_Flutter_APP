@@ -54,6 +54,29 @@ class DeviceFileImportService {
       await _discardPartial(checkpoint, extension);
       checkpoint = null;
     }
+    if (checkpoint?.phase == DeviceFileDownloadPhase.readyForArchive) {
+      final relativePath = '${checkpoint!.recordingId}$extension';
+      final recovered = await files.recoverPartial(relativePath);
+      if (recovered != null && recovered.sizeBytes == metadata.length) {
+        final recording = _recordingFor(
+          id: checkpoint.recordingId,
+          metadata: metadata,
+          imported: recovered,
+        );
+        return _archiveAndConfirm(
+          checkpoint: checkpoint,
+          metadata: metadata,
+          imported: recovered,
+          recording: recording,
+          crc32: metadata.crc32,
+        );
+      }
+      if (recovered != null) {
+        await files.delete(recovered.relativePath);
+      }
+      await checkpoints.remove(checkpoint.id);
+      checkpoint = null;
+    }
     final id =
         checkpoint?.recordingId ?? 'device-${_now().microsecondsSinceEpoch}';
     final pending = await files.createPending(id: id, extension: extension);
@@ -94,21 +117,19 @@ class DeviceFileImportService {
     await for (final chunk in files.readPending(pending)) {
       checksum.add(chunk);
     }
-    var requestOffset = received;
     var chunks = 0;
 
     try {
       onProgress?.call(
         DeviceFileImportProgress(received: received, total: metadata.length),
       );
-      while (received < metadata.length) {
-        final chunk = await gateway.readFileChunk(
-          nameSlot: metadata.nameSlot,
-          startOffset: requestOffset,
-          chunkSize: 0,
-        );
+      await for (final chunk in gateway.downloadFile(
+        nameSlot: metadata.nameSlot,
+        startOffset: received,
+        chunkSize: 0,
+      )) {
         if (chunk.isEmpty) {
-          throw const FormatException('设备文件在完整接收前结束。');
+          throw const FormatException('设备文件传输包含空数据块。');
         }
         await files.append(pending, chunk);
         checksum.add(chunk);
@@ -116,7 +137,6 @@ class DeviceFileImportService {
         if (received > metadata.length) {
           throw const FormatException('设备文件数据超出元数据长度。');
         }
-        requestOffset = received;
         chunks += 1;
         activeCheckpoint = activeCheckpoint.copyWith(
           receivedBytes: received,
@@ -146,29 +166,66 @@ class DeviceFileImportService {
         sizeBytes: imported.sizeBytes,
       );
       await recordings.save(recording);
-      await archive.archive(
-        DeviceArchiveRequest(
-          deviceId: deviceId,
-          metadata: metadata,
-          absolutePath: imported.absolutePath,
-          sizeBytes: imported.sizeBytes,
-          crc32: checksum.value,
-        ),
+      activeCheckpoint = activeCheckpoint.copyWith(
+        phase: DeviceFileDownloadPhase.readyForArchive,
+        updatedAt: _now(),
       );
-      final archiveState = await gateway.confirmArchive(
-        nameSlot: metadata.nameSlot,
-        fileSize: imported.sizeBytes,
+      await checkpoints.save(activeCheckpoint);
+      return _archiveAndConfirm(
+        checkpoint: activeCheckpoint,
+        metadata: metadata,
+        imported: imported,
+        recording: recording,
         crc32: checksum.value,
       );
-      if (archiveState != 3 && archiveState != 4) {
-        throw StateError('设备未确认文件归档。');
-      }
-      await checkpoints.remove(activeCheckpoint.id);
-      return recording;
     } on FormatException {
       await _discardPartial(activeCheckpoint, extension);
       rethrow;
     }
+  }
+
+  LocalRecording _recordingFor({
+    required String id,
+    required DeviceFileMetadata metadata,
+    required CompletedRecordingFile imported,
+  }) {
+    return LocalRecording.saved(
+      id: id,
+      title: metadata.name,
+      relativePath: imported.relativePath,
+      createdAt: metadata.startUtc,
+      completedAt: _now(),
+      duration: Duration(seconds: metadata.durationSeconds),
+      sizeBytes: imported.sizeBytes,
+    );
+  }
+
+  Future<LocalRecording> _archiveAndConfirm({
+    required DeviceFileDownloadCheckpoint checkpoint,
+    required DeviceFileMetadata metadata,
+    required CompletedRecordingFile imported,
+    required LocalRecording recording,
+    required int crc32,
+  }) async {
+    await archive.archive(
+      DeviceArchiveRequest(
+        deviceId: deviceId,
+        metadata: metadata,
+        absolutePath: imported.absolutePath,
+        sizeBytes: imported.sizeBytes,
+        crc32: crc32,
+      ),
+    );
+    final archiveState = await gateway.confirmArchive(
+      nameSlot: metadata.nameSlot,
+      fileSize: imported.sizeBytes,
+      crc32: crc32,
+    );
+    if (archiveState != 3 && archiveState != 4) {
+      throw StateError('设备未确认文件归档。');
+    }
+    await checkpoints.remove(checkpoint.id);
+    return recording;
   }
 
   Future<void> _discardPartial(

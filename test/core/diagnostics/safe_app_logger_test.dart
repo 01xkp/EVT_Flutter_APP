@@ -6,6 +6,7 @@ import 'package:aipin/core/diagnostics/diagnostic_trace.dart';
 import 'package:aipin/features/device_logs/application/app_log_logger.dart';
 import 'package:aipin/features/device_logs/domain/app_log_entry.dart';
 import 'package:aipin/features/device_logs/domain/app_log_store.dart';
+import 'package:aipin/features/device_logs/domain/public_diagnostic_log_sink.dart';
 
 void main() {
   test('debug logger writes a sanitized structured event', () {
@@ -70,6 +71,9 @@ class _FakeAppLogStore implements AppLogStore {
 
   @override
   bool get isPersistent => false;
+
+  @override
+  PublicDiagnosticLogMirrorStatus? get publicMirrorStatus => null;
 
   @override
   void info(

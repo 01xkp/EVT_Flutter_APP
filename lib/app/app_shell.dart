@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:aipin/app/app_destination.dart';
 import 'package:aipin/app/branding/aipin_brand_splash.dart';
 import 'package:aipin/app/providers.dart';
+import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/ble/device_profile.dart';
 import 'package:aipin/core/ble/device_profile_loader.dart';
 import 'package:aipin/core/design_system/evt_theme.dart';
@@ -10,6 +11,8 @@ import 'package:aipin/core/design_system/widgets/app_navigation_bar.dart';
 import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/core/design_system/widgets/ai_processing_toast.dart';
 import 'package:aipin/features/device_session/application/realtime_audio_controller.dart';
+import 'package:aipin/features/device_session/application/device_reconnect_controller.dart';
+import 'package:aipin/features/device_session/application/device_reconnect_state.dart';
 import 'package:aipin/features/device_session/application/wqota_update_controller.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:aipin/core/protocol/wqota_client.dart';
@@ -69,6 +72,7 @@ class AppShell extends ConsumerStatefulWidget {
 class _AppShellState extends ConsumerState<AppShell>
     with WidgetsBindingObserver {
   late final DiscoveryController _discoveryController;
+  late final DeviceReconnectController _reconnectController;
   late final OnboardingController _onboardingController;
   SessionController? _sessionController;
   DeviceAuthController? _deviceAuthController;
@@ -88,7 +92,14 @@ class _AppShellState extends ConsumerState<AppShell>
       <ResearchCaptureUiUpdate>[];
   Future<void> _researchUpdateForwarding = Future<void>.value();
   var _isAppForeground = true;
+  var _reconnectPausedForBackground = false;
+  Future<void>? _reconnectBackgroundPause;
   var _recordingDetailDepth = 0;
+  var _sessionReachedAuthenticationReady = false;
+  var _sessionHistoryPersisted = false;
+  var _unexpectedReconnectStarted = false;
+  Future<void>? _sessionHistoryPersistence;
+  var _sessionConnectionOperation = 0;
   OverlayEntry? _aiProcessingToastEntry;
 
   @override
@@ -98,6 +109,16 @@ class _AppShellState extends ConsumerState<AppShell>
     _discoveryController = DiscoveryController(
       ref.read(bleTransportProvider),
       const AdvertisementFilter(),
+    );
+    _discoveryController.addListener(_onDiscoveryChanged);
+    _reconnectController = DeviceReconnectController(
+      history: ref.read(deviceConnectionHistoryRepositoryProvider),
+      startScan: () async {
+        _discoveryController.start();
+      },
+      stopScan: _discoveryController.stop,
+      connect: _connectRememberedDevice,
+      logger: ref.read(scopedAppLoggerProvider('RECONNECT')),
     );
     _onboardingController = OnboardingController(
       ref.read(onboardingStoreProvider),
@@ -113,9 +134,11 @@ class _AppShellState extends ConsumerState<AppShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _discoveryController.removeListener(_onDiscoveryChanged);
+    _reconnectController.dispose();
     _discoveryController.dispose();
     _onboardingController.dispose();
-    _sessionController?.removeListener(_syncDiscoveryExclusions);
+    _sessionController?.removeListener(_onSessionChanged);
     _sessionController?.dispose();
     _deviceAuthController?.dispose();
     _evidenceHistoryController?.dispose();
@@ -141,10 +164,18 @@ class _AppShellState extends ConsumerState<AppShell>
       _syncAiToastVisibility();
       _flushDeferredResearchUpdates();
       unawaited(_recoverResearchCaptures());
+      if (_reconnectPausedForBackground) {
+        _reconnectPausedForBackground = false;
+        unawaited(_restoreRememberedDevice());
+      }
       return;
     }
     _isAppForeground = false;
     _syncAiToastVisibility();
+    if (_isReconnectBackgroundState(state)) {
+      _reconnectPausedForBackground = true;
+      unawaited(_pauseReconnectForBackground());
+    }
   }
 
   @override
@@ -174,7 +205,11 @@ class _AppShellState extends ConsumerState<AppShell>
   Widget _buildConsumerShell(BuildContext context) {
     final session = _sessionController;
     return AnimatedBuilder(
-      animation: session ?? _discoveryController,
+      animation: Listenable.merge([
+        _discoveryController,
+        _reconnectController,
+        ?session,
+      ]),
       builder: (context, _) {
         final canRecord = session?.state.isObservable ?? false;
         return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -227,6 +262,9 @@ class _AppShellState extends ConsumerState<AppShell>
     await _onboardingController.load();
     if (mounted) {
       setState(() => _isOnboardingLoaded = true);
+      if (_onboardingController.isComplete) {
+        unawaited(_restoreRememberedDevice());
+      }
     }
   }
 
@@ -392,7 +430,7 @@ class _AppShellState extends ConsumerState<AppShell>
       _destination = destination;
     });
     if (destination == AppDestination.home) {
-      _discoveryController.start();
+      unawaited(_restoreRememberedDevice(startDiscoveryWhenNoRecord: true));
     }
   }
 
@@ -407,6 +445,7 @@ class _AppShellState extends ConsumerState<AppShell>
   DeviceSummary _deviceSummary() {
     final session = _sessionController?.state;
     final candidate = session?.session?.candidate;
+    final reconnect = _reconnectController.state;
     if (candidate != null) {
       if (session!.isObservable) {
         final recordingLabel = switch (session.latestSnapshot?.state) {
@@ -420,32 +459,141 @@ class _AppShellState extends ConsumerState<AppShell>
           recordingLabel: recordingLabel,
         );
       }
+      if (reconnect.phase == DeviceReconnectPhase.connecting ||
+          reconnect.phase == DeviceReconnectPhase.waitingToRetry ||
+          reconnect.phase == DeviceReconnectPhase.scanning) {
+        return DeviceSummary.reconnecting(name: candidate.name);
+      }
+      if (reconnect.phase == DeviceReconnectPhase.exhausted) {
+        return DeviceSummary.reconnectFailed(name: candidate.name);
+      }
+      if (session.phase == SessionPhase.interrupted) {
+        return DeviceSummary.disconnected(name: candidate.name);
+      }
       return DeviceSummary.searching(name: candidate.name);
     }
     final discovery = _discoveryController.state;
-    final name = discovery.selected?.name ?? 'AIPIN';
+    final rememberedName = reconnect.rememberedDevice?.displayName;
+    final name = discovery.selected?.name ?? rememberedName ?? 'AIPIN';
+    if (reconnect.phase == DeviceReconnectPhase.connecting ||
+        reconnect.phase == DeviceReconnectPhase.waitingToRetry ||
+        reconnect.phase == DeviceReconnectPhase.scanning) {
+      return DeviceSummary.reconnecting(name: name);
+    }
+    if (reconnect.phase == DeviceReconnectPhase.exhausted) {
+      return DeviceSummary.reconnectFailed(name: name);
+    }
     return discovery.isScanning
         ? DeviceSummary.searching(name: name)
         : DeviceSummary.disconnected(name: name);
   }
 
   void _openConnectionJourney() {
-    _discoveryController.start();
+    unawaited(_startExplicitConnectionJourney());
     unawaited(
-      Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (context) => DiscoveryPage(
-            controller: _discoveryController,
-            onConnect: _openSession,
-            onSettings: _openSettings,
-            bluetoothEnableGateway: ref.read(bluetoothEnableGatewayProvider),
-            onOpenBluetoothSettings: () async {
-              await ref.read(appPermissionGatewayProvider).openSettings();
-            },
-          ),
-        ),
-      ),
+      Navigator.of(context)
+          .push<void>(
+            MaterialPageRoute(
+              builder: (context) => DiscoveryPage(
+                controller: _discoveryController,
+                onConnect: _openSession,
+                onStartScan: _startExplicitConnectionJourney,
+                onStopScan: _stopConnectionJourneyScan,
+                onSettings: _openSettings,
+                bluetoothEnableGateway: ref.read(
+                  bluetoothEnableGatewayProvider,
+                ),
+                onOpenBluetoothSettings: () async {
+                  await ref.read(appPermissionGatewayProvider).openSettings();
+                },
+              ),
+            ),
+          )
+          .whenComplete(() => unawaited(_onConnectionJourneyClosed())),
     );
+  }
+
+  Future<void> _startExplicitConnectionJourney() async {
+    if (_hasActiveOrConnectingSession) {
+      return;
+    }
+    await _reconnectController.startExplicitCycle();
+    if (!mounted || _hasActiveOrConnectingSession) {
+      return;
+    }
+    // A first-time device has no private history, so the explicit reconnect
+    // cycle intentionally does not own a scan in that case.
+    if (!_discoveryController.state.isScanning) {
+      _discoveryController.start();
+    }
+  }
+
+  Future<void> _onConnectionJourneyClosed() async {
+    if (_hasActiveOrConnectingSession) {
+      return;
+    }
+    await _reconnectController.cancelAutomaticCycle();
+  }
+
+  Future<void> _stopConnectionJourneyScan() async {
+    await _reconnectController.cancelAutomaticCycle();
+  }
+
+  Future<void> _restoreRememberedDevice({
+    bool startDiscoveryWhenNoRecord = false,
+  }) async {
+    if (!mounted ||
+        !_isAppForeground ||
+        !_isOnboardingLoaded ||
+        !_onboardingController.isComplete ||
+        _hasActiveOrConnectingSession) {
+      return;
+    }
+    await _reconnectController.restoreAndStart();
+    if (!mounted ||
+        !_isAppForeground ||
+        _hasActiveOrConnectingSession ||
+        !startDiscoveryWhenNoRecord ||
+        _discoveryController.state.isScanning) {
+      return;
+    }
+    _discoveryController.start();
+  }
+
+  bool get _hasActiveOrConnectingSession {
+    final phase = _sessionController?.state.phase;
+    return phase != null && phase != SessionPhase.interrupted;
+  }
+
+  bool _isReconnectBackgroundState(AppLifecycleState state) => switch (state) {
+    AppLifecycleState.paused ||
+    AppLifecycleState.hidden ||
+    AppLifecycleState.detached => true,
+    _ => false,
+  };
+
+  Future<void> _pauseReconnectForBackground() {
+    final activePause = _reconnectBackgroundPause;
+    if (activePause != null) {
+      return activePause;
+    }
+    final pause = _reconnectController.pauseForBackground();
+    _reconnectBackgroundPause = pause;
+    return pause.whenComplete(() {
+      if (identical(_reconnectBackgroundPause, pause)) {
+        _reconnectBackgroundPause = null;
+      }
+    });
+  }
+
+  void _onDiscoveryChanged() {
+    final state = _discoveryController.state;
+    if (!state.isScanning) {
+      _reconnectController.notifyScanStopped();
+    }
+    for (final candidate in state.candidates) {
+      unawaited(_reconnectController.considerCandidate(candidate));
+    }
   }
 
   void _openSessionDashboard(SessionController session) {
@@ -479,6 +627,9 @@ class _AppShellState extends ConsumerState<AppShell>
                   onAuthenticate: auth == null
                       ? null
                       : () => unawaited(_authenticateDevice(session, auth)),
+                  onBind: auth == null
+                      ? null
+                      : () => unawaited(_bindDevice(session, auth)),
                   clearPreparation: auth?.pendingClear,
                   onPrepareClear: auth == null
                       ? null
@@ -486,18 +637,105 @@ class _AppShellState extends ConsumerState<AppShell>
                   onConfirmClear: auth == null
                       ? null
                       : () => _confirmDeviceClear(session, auth),
-                  canOpenFiles: auth?.allows(DevicePermission.files) ?? false,
+                  canOpenFiles:
+                      (auth?.allows(DevicePermission.files) ?? false) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.ff10Ff12,
+                        BleOperation.write,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.ff10Ff12,
+                        BleOperation.indicate,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.ff10Ff13,
+                        BleOperation.write,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.ff10Ff13,
+                        BleOperation.notify,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.ff10Ff16,
+                        BleOperation.write,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.ff10Ff16,
+                        BleOperation.indicate,
+                      ),
                   canControlRecording:
-                      auth?.allows(DevicePermission.configuration) ?? false,
+                      (auth?.allows(DevicePermission.configuration) ?? false) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa17,
+                        BleOperation.write,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa17,
+                        BleOperation.indicate,
+                      ),
                   canConfigureDevice:
-                      auth?.allows(DevicePermission.configuration) ?? false,
+                      (auth?.allows(DevicePermission.configuration) ?? false) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa12,
+                        BleOperation.write,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa12,
+                        BleOperation.indicate,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa16,
+                        BleOperation.write,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa16,
+                        BleOperation.indicate,
+                      ),
+                  canRefreshDeviceDetails:
+                      (auth?.allows(DevicePermission.status) ?? false) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa16,
+                        BleOperation.write,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa16,
+                        BleOperation.indicate,
+                      ),
                   onOpenFirmwareUpdate: () =>
                       unawaited(_openFirmwareUpdate(session)),
                   canUpdateFirmware:
-                      auth?.allows(DevicePermission.ota) ?? false,
+                      (auth?.allows(DevicePermission.ota) ?? false) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.wqota2001,
+                        BleOperation.writeWithoutResponse,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.wqota2002,
+                        BleOperation.notify,
+                      ),
                   realtimeAudioController: realtimeAudio,
                   canCaptureRealtimeAudio:
-                      auth?.allows(DevicePermission.realtimeAudio) ?? false,
+                      (auth?.allows(DevicePermission.realtimeAudio) ?? false) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa12,
+                        BleOperation.write,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa12,
+                        BleOperation.indicate,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa17,
+                        BleOperation.write,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa17,
+                        BleOperation.indicate,
+                      ) &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa18,
+                        BleOperation.notify,
+                      ),
                   onExportRealtimeAudio: _exportRealtimeAudio,
                 ),
               ),
@@ -528,8 +766,18 @@ class _AppShellState extends ConsumerState<AppShell>
 
   Future<void> _openFirmwareUpdate(SessionController session) async {
     final candidate = session.state.session?.candidate;
+    final physicalDeviceId = candidate?.physicalDeviceId;
     if (candidate == null ||
-        _deviceAuthController?.allows(DevicePermission.ota) != true) {
+        physicalDeviceId == null ||
+        _deviceAuthController?.allows(DevicePermission.ota) != true ||
+        !session.state.supportsEndpoint(
+          BleLogicalEndpoint.wqota2001,
+          BleOperation.writeWithoutResponse,
+        ) ||
+        !session.state.supportsEndpoint(
+          BleLogicalEndpoint.wqota2002,
+          BleOperation.notify,
+        )) {
       return;
     }
     WqotaClient? updateClient;
@@ -545,11 +793,11 @@ class _AppShellState extends ConsumerState<AppShell>
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => FirmwareUpdatePage(
-          deviceId: candidate.id,
+          deviceId: physicalDeviceId,
           deviceName: candidate.name,
           loadPackage: () => ref
               .read(firmwarePackageGatewayProvider)
-              .loadForDevice(candidate.id),
+              .loadForDevice(physicalDeviceId),
           createUpdateController: (package) {
             final client = session.openWqotaClient(
               WqotaCodec(
@@ -564,6 +812,9 @@ class _AppShellState extends ConsumerState<AppShell>
               checkpoints: ref.read(firmwareUpdateCheckpointRepositoryProvider),
               gateway: WqotaBleUpdateGateway(
                 client: client,
+                requestMtu: session.requestWqotaMtu,
+                wqotaFinalVerificationSupported:
+                    package.wqotaFinalVerificationSupported,
                 verifyBusinessVersionCallback: (expectedBusinessVersion) async {
                   final actual = session.state.deviceInfo?.softwareVersion;
                   return actual?.trim() == expectedBusinessVersion.trim();
@@ -572,10 +823,16 @@ class _AppShellState extends ConsumerState<AppShell>
             );
           },
           reconnectAndVerify: (controller) async {
-            if (!session.state.isObservable) {
-              await session.connect(candidate);
-              await _waitForObservableSession(session);
+            await session.connect(candidate);
+            await _waitForAuthenticationReadySession(session);
+            final auth = _deviceAuthController;
+            if (auth == null) {
+              throw StateError('设备认证控制器不可用。');
             }
+            await auth.authenticate(session, deviceId: physicalDeviceId);
+            await session.synchronizeAfterAuthentication(
+              _grantedPermissions(auth),
+            );
             await controller.verifyAfterReconnect();
           },
           closeUpdateChannel: closeUpdateChannel,
@@ -584,13 +841,15 @@ class _AppShellState extends ConsumerState<AppShell>
     );
   }
 
-  Future<void> _waitForObservableSession(SessionController session) async {
-    if (session.state.isObservable) {
+  Future<void> _waitForAuthenticationReadySession(
+    SessionController session,
+  ) async {
+    if (session.state.isAuthenticationReady) {
       return;
     }
     final ready = Completer<void>();
     void listener() {
-      if (session.state.isObservable && !ready.isCompleted) {
+      if (session.state.isAuthenticationReady && !ready.isCompleted) {
         ready.complete();
       } else if (session.state.phase == SessionPhase.interrupted &&
           !ready.isCompleted) {
@@ -609,16 +868,38 @@ class _AppShellState extends ConsumerState<AppShell>
     }
   }
 
-  Future<void> _openSession(DeviceCandidate candidate) async {
-    try {
-      await _discoveryController.stop();
-      final profile = await const DeviceProfileLoader().load(rootBundle);
-      if (!mounted) {
-        return;
+  Future<bool> _connectRememberedDevice(DeviceCandidate candidate) {
+    return _openSession(candidate, automaticallyReconnect: true);
+  }
+
+  Future<bool> _openSession(
+    DeviceCandidate candidate, {
+    bool automaticallyReconnect = false,
+  }) async {
+    final operation = ++_sessionConnectionOperation;
+    if (!automaticallyReconnect) {
+      await _reconnectController.takeOverManualConnection();
+      if (!_isCurrentSessionConnectionOperation(operation)) {
+        return false;
       }
-      _sessionController?.removeListener(_syncDiscoveryExclusions);
-      _sessionController?.dispose();
-      _deviceAuthController?.dispose();
+    }
+
+    SessionController? createdSession;
+    DeviceAuthController? createdAuth;
+    try {
+      final physicalDeviceId = candidate.physicalDeviceId;
+      if (physicalDeviceId == null) {
+        throw StateError('设备广播身份无效。');
+      }
+      await _discoveryController.stop();
+      if (!_isCurrentSessionConnectionOperation(operation)) {
+        return false;
+      }
+      final profile = await const DeviceProfileLoader().load(rootBundle);
+      if (!_isCurrentSessionConnectionOperation(operation)) {
+        return false;
+      }
+      _disposeCurrentSessionControllers();
       final controller = SessionController(
         ref.read(bleTransportProvider),
         profile,
@@ -627,11 +908,23 @@ class _AppShellState extends ConsumerState<AppShell>
       );
       final authController = DeviceAuthController(
         ticketGateway: ref.read(ticketGatewayProvider),
-        onClearCompleted: (deviceId) => ref
-            .read(deviceFileDownloadCheckpointRepositoryProvider)
-            .removeAllForDevice(deviceId),
+        onClearCompleted: (deviceId) async {
+          await ref
+              .read(deviceFileDownloadCheckpointRepositoryProvider)
+              .removeAllForDevice(deviceId);
+          await _reconnectController.forgetSuccessfulClear(candidate);
+        },
+        clearCheckpoints: ref.read(deviceClearCheckpointRepositoryProvider),
       );
-      controller.addListener(_syncDiscoveryExclusions);
+      createdSession = controller;
+      createdAuth = authController;
+      controller.addListener(_onSessionChanged);
+      if (!_isCurrentSessionConnectionOperation(operation)) {
+        controller.removeListener(_onSessionChanged);
+        controller.dispose();
+        authController.dispose();
+        return false;
+      }
       setState(() {
         _sessionController = controller;
         _deviceAuthController = authController;
@@ -640,24 +933,121 @@ class _AppShellState extends ConsumerState<AppShell>
       });
       _syncDiscoveryExclusions();
       await controller.connect(candidate);
+      if (!_isCurrentSessionConnectionOperation(operation) ||
+          !identical(_sessionController, controller)) {
+        return false;
+      }
+      final connected = controller.state.isAuthenticationReady;
+      if (connected) {
+        unawaited(
+          _resumePendingDeviceClear(
+            controller,
+            authController,
+            physicalDeviceId,
+          ),
+        );
+      }
+      return connected;
     } catch (_) {
-      _sessionController?.removeListener(_syncDiscoveryExclusions);
-      _sessionController?.dispose();
-      _deviceAuthController?.dispose();
-      if (mounted) {
+      if (_isCurrentSessionConnectionOperation(operation) &&
+          identical(_sessionController, createdSession)) {
+        _disposeCurrentSessionControllers();
         setState(() {
           _sessionController = null;
           _deviceAuthController = null;
         });
+      } else if (!identical(_sessionController, createdSession)) {
+        createdSession?.removeListener(_onSessionChanged);
+        createdSession?.dispose();
+        createdAuth?.dispose();
       }
       _syncDiscoveryExclusions();
+      return false;
     }
+  }
+
+  bool _isCurrentSessionConnectionOperation(int operation) {
+    return mounted && operation == _sessionConnectionOperation;
+  }
+
+  void _disposeCurrentSessionControllers() {
+    _sessionController?.removeListener(_onSessionChanged);
+    _sessionController?.dispose();
+    _deviceAuthController?.dispose();
+    _resetSessionReconnectTracking();
+  }
+
+  void _resetSessionReconnectTracking() {
+    _sessionReachedAuthenticationReady = false;
+    _sessionHistoryPersisted = false;
+    _unexpectedReconnectStarted = false;
+    _sessionHistoryPersistence = null;
+  }
+
+  void _onSessionChanged() {
+    _syncDiscoveryExclusions();
+    final controller = _sessionController;
+    final state = controller?.state;
+    if (state == null) {
+      return;
+    }
+
+    // SessionController emits this transition at the beginning of every
+    // connection attempt, including a manual retry on the same controller.
+    if (state.phase == SessionPhase.discovered ||
+        state.phase == SessionPhase.connecting) {
+      _resetSessionReconnectTracking();
+      return;
+    }
+    final candidate = state.session?.candidate;
+    if (candidate == null) {
+      return;
+    }
+    if (state.isAuthenticationReady) {
+      _sessionReachedAuthenticationReady = true;
+      if (!_sessionHistoryPersisted) {
+        _sessionHistoryPersisted = true;
+        final persistence = _reconnectController.rememberSuccessfulConnection(
+          candidate,
+        );
+        _sessionHistoryPersistence = persistence;
+        unawaited(persistence);
+      }
+      return;
+    }
+    if (state.phase == SessionPhase.interrupted &&
+        _sessionReachedAuthenticationReady &&
+        !_unexpectedReconnectStarted) {
+      _unexpectedReconnectStarted = true;
+      final persistence = _sessionHistoryPersistence;
+      if (persistence == null) {
+        unawaited(_reconnectController.markUnexpectedDisconnect());
+      } else {
+        unawaited(_reconnectAfterHistoryPersists(persistence));
+      }
+    }
+  }
+
+  Future<void> _reconnectAfterHistoryPersists(Future<void> persistence) async {
+    try {
+      await persistence;
+    } catch (_) {
+      // The reconnect controller handles storage errors as a recoverable
+      // condition; a lost session can still use any previous record.
+    }
+    if (!mounted ||
+        !_unexpectedReconnectStarted ||
+        _sessionController?.state.phase != SessionPhase.interrupted) {
+      return;
+    }
+    await _reconnectController.markUnexpectedDisconnect();
   }
 
   void _showRecordObservation(SessionState state) {
     final session = state.session;
     final snapshot = state.latestSnapshot;
-    if (session == null || snapshot == null) {
+    final physicalDeviceId = session?.candidate.physicalDeviceId;
+    if (session == null || snapshot == null || physicalDeviceId == null) {
       return;
     }
     showModalBottomSheet<void>(
@@ -665,7 +1055,7 @@ class _AppShellState extends ConsumerState<AppShell>
       isScrollControlled: true,
       builder: (context) => RecordObservationSheet(
         repository: ref.read(evidenceRepositoryProvider),
-        deviceId: session.candidate.id,
+        deviceId: physicalDeviceId,
         deviceName: session.candidate.name,
         latestSnapshot: snapshot,
         events: state.events,
@@ -709,15 +1099,53 @@ class _AppShellState extends ConsumerState<AppShell>
   void _retrySession(SessionController controller) {
     final candidate = controller.state.session?.candidate;
     if (candidate != null) {
-      unawaited(controller.connect(candidate));
+      unawaited(_retrySessionExplicitly(controller, candidate));
     }
   }
 
+  Future<void> _retrySessionExplicitly(
+    SessionController controller,
+    DeviceCandidate candidate,
+  ) async {
+    _sessionConnectionOperation += 1;
+    await _reconnectController.takeOverManualConnection();
+    if (!mounted || !identical(_sessionController, controller)) {
+      return;
+    }
+    await controller.connect(candidate);
+  }
+
   Future<void> _disconnectSession(SessionController controller) async {
+    _sessionConnectionOperation += 1;
+    await _reconnectController.suppressForForeground();
+    if (!mounted || !identical(_sessionController, controller)) {
+      return;
+    }
     await controller.disconnect();
     _discoveryController.setExcludedDeviceIds(const []);
     if (mounted) {
       setState(() {});
+    }
+  }
+
+  Future<void> _resumePendingDeviceClear(
+    SessionController session,
+    DeviceAuthController auth,
+    String deviceId,
+  ) async {
+    try {
+      await _waitForAuthenticationReadySession(session);
+      if (!await auth.restorePendingClear(deviceId)) {
+        return;
+      }
+      await auth.resumeClearStatus(session);
+      if (mounted) {
+        AppToast.show(context, message: '设备数据清除已完成');
+      }
+    } catch (error) {
+      ref
+          .read(scopedAppLoggerProvider('AUTH'))
+          .info('clear_resume_failed', fields: {'error': '$error'});
     }
   }
 
@@ -752,8 +1180,14 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   Future<void> _refreshDeviceDetails(SessionController session) async {
+    if (_deviceAuthController?.allows(DevicePermission.status) != true) {
+      if (mounted) {
+        AppToast.show(context, message: '当前认证未授予设备状态读取权限');
+      }
+      return;
+    }
     try {
-      await session.refreshDeviceDetails();
+      await session.refreshDeviceDetails(const {DevicePermission.status});
     } catch (_) {
       if (mounted) {
         AppToast.show(context, message: '设备状态刷新失败，请重试');
@@ -803,13 +1237,13 @@ class _AppShellState extends ConsumerState<AppShell>
     SessionController session,
     DeviceAuthController auth,
   ) async {
-    final repository = session.protocolRepository;
-    final deviceId = session.state.session?.candidate.id;
-    if (repository == null || deviceId == null) {
+    final deviceId = session.state.session?.candidate.physicalDeviceId;
+    if (deviceId == null) {
       return;
     }
     try {
-      await auth.authenticate(repository, deviceId: deviceId);
+      await auth.authenticate(session, deviceId: deviceId);
+      await session.synchronizeAfterAuthentication(_grantedPermissions(auth));
       if (mounted) {
         AppToast.show(context, message: '设备认证完成');
       }
@@ -820,17 +1254,42 @@ class _AppShellState extends ConsumerState<AppShell>
     }
   }
 
+  Future<void> _bindDevice(
+    SessionController session,
+    DeviceAuthController auth,
+  ) async {
+    final deviceId = session.state.session?.candidate.physicalDeviceId;
+    if (deviceId == null) {
+      return;
+    }
+    try {
+      await auth.bind(session, deviceId: deviceId);
+      await session.synchronizeAfterAuthentication(_grantedPermissions(auth));
+      if (mounted) {
+        AppToast.show(context, message: '设备绑定完成');
+      }
+    } catch (error) {
+      if (mounted) {
+        AppToast.show(context, message: '$error');
+      }
+    }
+  }
+
+  Set<DevicePermission> _grantedPermissions(DeviceAuthController auth) => {
+    for (final permission in DevicePermission.values)
+      if (auth.allows(permission)) permission,
+  };
+
   Future<void> _prepareDeviceClear(
     SessionController session,
     DeviceAuthController auth,
   ) async {
-    final repository = session.protocolRepository;
-    final deviceId = session.state.session?.candidate.id;
-    if (repository == null || deviceId == null) {
+    final deviceId = session.state.session?.candidate.physicalDeviceId;
+    if (deviceId == null) {
       return;
     }
     try {
-      await auth.prepareClear(repository, deviceId: deviceId);
+      await auth.prepareClear(session, deviceId: deviceId);
       if (mounted) {
         AppToast.show(context, message: '请确认设备清除范围');
       }
@@ -845,13 +1304,17 @@ class _AppShellState extends ConsumerState<AppShell>
     SessionController session,
     DeviceAuthController auth,
   ) async {
-    final repository = session.protocolRepository;
-    final deviceId = session.state.session?.candidate.id;
-    if (repository == null || deviceId == null) {
+    final deviceId = session.state.session?.candidate.physicalDeviceId;
+    if (deviceId == null) {
       return;
     }
     try {
-      await auth.confirmClear(repository, deviceId: deviceId);
+      await auth.confirmClear(session, deviceId: deviceId);
+      _sessionConnectionOperation += 1;
+      await _reconnectController.suppressForForeground();
+      if (!mounted || !identical(_sessionController, session)) {
+        return;
+      }
       await session.disconnect();
       if (mounted) {
         AppToast.show(context, message: '设备已解除绑定并完成数据清除');
@@ -870,13 +1333,13 @@ class _AppShellState extends ConsumerState<AppShell>
       }
       return;
     }
-    final gateway = session.protocolRepository;
-    if (gateway == null || !session.state.isObservable || !mounted) {
+    final deviceId = session.state.session?.candidate.physicalDeviceId;
+    if (deviceId == null || !session.state.isObservable || !mounted) {
       return;
     }
     final importer = DeviceFileImportService(
-      deviceId: gateway.deviceId,
-      gateway: gateway,
+      deviceId: deviceId,
+      gateway: session,
       archive: ref.read(archiveGatewayProvider),
       files: ref.read(recordingFileStoreProvider),
       checkpoints: ref.read(deviceFileDownloadCheckpointRepositoryProvider),
@@ -899,9 +1362,12 @@ class _AppShellState extends ConsumerState<AppShell>
   void _syncDiscoveryExclusions() {
     final session = _sessionController?.state;
     final candidate = session?.session?.candidate;
+    if (session?.hasActiveBleConnection != true) {
+      _deviceAuthController?.revokeForConnectionLoss();
+    }
     _discoveryController.setExcludedDeviceIds(
       session?.hasActiveBleConnection == true && candidate != null
-          ? [candidate.id]
+          ? [candidate.connectionId]
           : const [],
     );
   }
@@ -1147,14 +1613,15 @@ class _AppShellState extends ConsumerState<AppShell>
   }) async {
     final session = state.session;
     final snapshot = state.latestSnapshot;
-    if (session == null || snapshot == null) {
+    final physicalDeviceId = session?.candidate.physicalDeviceId;
+    if (session == null || snapshot == null || physicalDeviceId == null) {
       return;
     }
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (context) => ObservationPage(
           repository: ref.read(evidenceRepositoryProvider),
-          deviceId: session.candidate.id,
+          deviceId: physicalDeviceId,
           deviceName: session.candidate.name,
           latestSnapshot: snapshot,
           events: state.events,

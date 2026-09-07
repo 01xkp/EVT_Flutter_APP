@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:aipin/core/persistence/app_database.dart';
 import 'package:aipin/features/device_session/domain/device_file_download_checkpoint.dart';
 import 'package:aipin/features/device_session/domain/device_file_download_checkpoint_repository.dart';
+import 'package:drift/drift.dart' show Value;
 
 class DriftDeviceFileDownloadCheckpointRepository
     implements DeviceFileDownloadCheckpointRepository {
@@ -56,6 +57,7 @@ class DriftDeviceFileDownloadCheckpointRepository
       expectedCrc32: int.parse(row.expectedCrc32),
       receivedBytes: row.receivedBytes,
       updatedAt: row.updatedAt,
+      phase: DeviceFileDownloadPhase.values.byName(row.phase),
     );
   }
 
@@ -70,6 +72,7 @@ class DriftDeviceFileDownloadCheckpointRepository
       expectedLength: checkpoint.expectedLength.toString(),
       expectedCrc32: checkpoint.expectedCrc32.toString(),
       receivedBytes: checkpoint.receivedBytes,
+      phase: Value(checkpoint.phase.name),
       updatedAt: checkpoint.updatedAt,
     );
   }

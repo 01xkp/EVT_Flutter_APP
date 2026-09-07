@@ -231,7 +231,11 @@ class _AiProcessingToastView extends StatelessWidget {
                       size: 18,
                     )
                   else if (isFailed)
-                    const Icon(Icons.error_outline, color: Colors.white, size: 18)
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.white,
+                      size: 18,
+                    )
                   else
                     const SizedBox(
                       width: 18,

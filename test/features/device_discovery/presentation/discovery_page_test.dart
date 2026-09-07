@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/ble/bluetooth_enable_gateway.dart';
 import 'package:aipin/core/diagnostics/evt_failure.dart';
@@ -72,6 +74,84 @@ void main() {
       findsOneWidget,
     );
     expect(find.byIcon(Icons.radar_outlined), findsOneWidget);
+  });
+
+  testWidgets('coordinates the outer reconnect cycle before starting a scan', (
+    tester,
+  ) async {
+    final transport = FakeBleTransport();
+    final controller = DiscoveryController(
+      transport,
+      const AdvertisementFilter(),
+    );
+    final startCoordinator = Completer<void>();
+    var startCallbackCalls = 0;
+    addTearDown(() async {
+      controller.dispose();
+      await transport.dispose();
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DiscoveryPage(
+          controller: controller,
+          onStartScan: () {
+            startCallbackCalls += 1;
+            return startCoordinator.future;
+          },
+        ),
+      ),
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '查找附近设备'));
+    await tester.pump();
+
+    expect(startCallbackCalls, 1);
+    expect(transport.scanCallCount, 0);
+
+    startCoordinator.complete();
+    await tester.pump();
+
+    expect(transport.scanCallCount, 1);
+    expect(controller.state.isScanning, isTrue);
+  });
+
+  testWidgets('coordinates reconnect cancellation before stopping a scan', (
+    tester,
+  ) async {
+    final transport = FakeBleTransport();
+    final controller = DiscoveryController(
+      transport,
+      const AdvertisementFilter(),
+    );
+    var stopCallbackCalls = 0;
+    var wasScanningWhenCancelled = false;
+    addTearDown(() async {
+      controller.dispose();
+      await transport.dispose();
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DiscoveryPage(
+          controller: controller,
+          onStopScan: () async {
+            stopCallbackCalls += 1;
+            wasScanningWhenCancelled = controller.state.isScanning;
+          },
+        ),
+      ),
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '查找附近设备'));
+    await tester.pump();
+    expect(controller.state.isScanning, isTrue);
+
+    await tester.tap(find.text('停止查找'));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+
+    expect(stopCallbackCalls, 1);
+    expect(wasScanningWhenCancelled, isTrue);
+    expect(controller.state.isScanning, isFalse);
   });
 
   testWidgets('a discovered device is rendered without a list transition', (
@@ -172,7 +252,7 @@ void main() {
   );
 
   testWidgets(
-    'iOS guidance retries discovery after returning from app settings',
+    'iOS guidance identifies App Settings instead of a system Bluetooth page',
     (tester) async {
       final transport = FakeBleTransport();
       final controller = DiscoveryController(
@@ -205,8 +285,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('请开启蓝牙'), findsOneWidget);
-      expect(find.text('打开应用设置'), findsOneWidget);
-      await tester.tap(find.text('打开应用设置'));
+      expect(find.text('请在系统设置或控制中心开启蓝牙后，返回 App 重新查找设备。'), findsOneWidget);
+      expect(find.text('打开 App 设置'), findsOneWidget);
+      await tester.tap(find.text('打开 App 设置'));
       await tester.pumpAndSettle();
 
       expect(settingsOpenCount, 1);

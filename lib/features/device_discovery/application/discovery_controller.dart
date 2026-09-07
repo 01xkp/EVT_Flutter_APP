@@ -11,6 +11,7 @@ class DiscoveryController extends ChangeNotifier {
   DiscoveryController(
     this._transport,
     this._filter, {
+    this.filterByV15Advertisement = false,
     this.staleDeviceTimeout = _defaultStaleDeviceTimeout,
     this.expiryCheckInterval = _defaultExpiryCheckInterval,
   });
@@ -20,6 +21,7 @@ class DiscoveryController extends ChangeNotifier {
 
   final BleTransport _transport;
   final AdvertisementFilter _filter;
+  final bool filterByV15Advertisement;
   final Duration staleDeviceTimeout;
   final Duration expiryCheckInterval;
   StreamSubscription<DeviceCandidate>? _scanSubscription;
@@ -56,7 +58,9 @@ class DiscoveryController extends ChangeNotifier {
   }
 
   void select(DeviceCandidate candidate) {
-    if (!_state.candidates.any((item) => item.id == candidate.id)) {
+    if (!_state.candidates.any(
+      (item) => item.connectionId == candidate.connectionId,
+    )) {
       return;
     }
     _state = _state.copyWith(selected: candidate);
@@ -72,12 +76,15 @@ class DiscoveryController extends ChangeNotifier {
     }
     _excludedDeviceIds = excludedDeviceIds;
     final candidates = _state.candidates
-        .where((candidate) => !_excludedDeviceIds.contains(candidate.id))
+        .where(
+          (candidate) => !_excludedDeviceIds.contains(candidate.connectionId),
+        )
         .toList(growable: false);
     final selected = _state.selected;
     _state = _state.copyWith(
       candidates: List.unmodifiable(candidates),
-      selected: selected != null && _excludedDeviceIds.contains(selected.id)
+      selected:
+          selected != null && _excludedDeviceIds.contains(selected.connectionId)
           ? null
           : selected,
     );
@@ -96,17 +103,18 @@ class DiscoveryController extends ChangeNotifier {
 
   void _onCandidate(DeviceCandidate candidate) {
     if (candidate.name.trim().isEmpty ||
-        _excludedDeviceIds.contains(candidate.id) ||
-        !_filter.matches(candidate)) {
+        _excludedDeviceIds.contains(candidate.connectionId) ||
+        (filterByV15Advertisement && !_filter.matches(candidate))) {
       return;
     }
     final freshCandidate = candidate.copyWith(discoveredAt: DateTime.now());
     final candidates = [
       for (final existing in _state.candidates)
-        if (existing.id != freshCandidate.id) existing,
+        if (existing.connectionId != freshCandidate.connectionId) existing,
       freshCandidate,
     ]..sort((left, right) => right.rssi.compareTo(left.rssi));
-    final selected = _state.selected?.id == freshCandidate.id
+    final selected =
+        _state.selected?.connectionId == freshCandidate.connectionId
         ? freshCandidate
         : _state.selected;
     _state = _state.copyWith(
@@ -166,7 +174,9 @@ class DiscoveryController extends ChangeNotifier {
       candidates: List.unmodifiable(candidates),
       selected:
           selected != null &&
-              !candidates.any((candidate) => candidate.id == selected.id)
+              !candidates.any(
+                (candidate) => candidate.connectionId == selected.connectionId,
+              )
           ? null
           : selected,
     );

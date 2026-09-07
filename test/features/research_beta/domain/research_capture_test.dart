@@ -59,15 +59,16 @@ void main() {
   });
 
   test('keeps independent document names when processing is restarted', () {
-    final capture = ResearchCapture.fromDirectAiVoice(
-      id: 'capture-1',
-      participantId: 'participant-1',
-      relativePath: 'research_captures/capture-1.m4a',
-      duration: const Duration(seconds: 12),
-      createdAt: DateTime(2026, 8, 24),
-    )
-        .withDocumentTitle(ResearchDocumentType.transcript, '访谈转写')
-        .withDocumentTitle(ResearchDocumentType.summary, '访谈纪要');
+    final capture =
+        ResearchCapture.fromDirectAiVoice(
+              id: 'capture-1',
+              participantId: 'participant-1',
+              relativePath: 'research_captures/capture-1.m4a',
+              duration: const Duration(seconds: 12),
+              createdAt: DateTime(2026, 8, 24),
+            )
+            .withDocumentTitle(ResearchDocumentType.transcript, '访谈转写')
+            .withDocumentTitle(ResearchDocumentType.summary, '访谈纪要');
 
     expect(capture.transcriptTitle, '访谈转写');
     expect(capture.summaryTitle, '访谈纪要');

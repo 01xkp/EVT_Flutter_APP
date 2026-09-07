@@ -30,12 +30,14 @@ class DeviceDetailPage extends StatelessWidget {
     this.onPrivacyDurationChanged,
     this.authState = DeviceAuthState.unknown,
     this.onAuthenticate,
+    this.onBind,
     this.clearPreparation,
     this.onPrepareClear,
     this.onConfirmClear,
     this.canOpenFiles = false,
     this.canControlRecording = false,
     this.canConfigureDevice = false,
+    this.canRefreshDeviceDetails = false,
     this.onOpenFirmwareUpdate,
     this.canUpdateFirmware = false,
     this.realtimeAudioController,
@@ -55,12 +57,14 @@ class DeviceDetailPage extends StatelessWidget {
   final ValueChanged<int>? onPrivacyDurationChanged;
   final DeviceAuthState authState;
   final VoidCallback? onAuthenticate;
+  final VoidCallback? onBind;
   final DeviceClearPreparation? clearPreparation;
   final Future<void> Function()? onPrepareClear;
   final Future<void> Function()? onConfirmClear;
   final bool canOpenFiles;
   final bool canControlRecording;
   final bool canConfigureDevice;
+  final bool canRefreshDeviceDetails;
   final VoidCallback? onOpenFirmwareUpdate;
   final bool canUpdateFirmware;
   final RealtimeAudioController? realtimeAudioController;
@@ -158,24 +162,28 @@ class DeviceDetailPage extends StatelessWidget {
                       onRetry: onRetry,
                     ),
                   ],
-                  if (state.isObservable) ...[
-                    const SizedBox(height: 16),
-                    _DeviceStatusPanel(
+                   if (state.isAuthenticationReady) ...[
+                     const SizedBox(height: 16),
+                     _AuthenticationPanel(
+                       state: authState,
+                       onAuthenticate: onAuthenticate,
+                       onBind: onBind,
+                       clearPreparation: clearPreparation,
+                       onPrepareClear: onPrepareClear,
+                       onConfirmClear: onConfirmClear,
+                     ),
+                   ],
+                   if (state.isObservable) ...[
+                     const SizedBox(height: 16),
+                     _DeviceStatusPanel(
                       state: state,
                       canConfigure: canConfigureDevice,
+                      canRefresh: canRefreshDeviceDetails,
                       onRefresh: onRefreshDeviceDetails,
                       onRecordConsentChanged: onRecordConsentChanged,
                       onPrivacyDurationChanged: onPrivacyDurationChanged,
                     ),
-                    const SizedBox(height: 16),
-                    _AuthenticationPanel(
-                      state: authState,
-                      onAuthenticate: onAuthenticate,
-                      clearPreparation: clearPreparation,
-                      onPrepareClear: onPrepareClear,
-                      onConfirmClear: onConfirmClear,
-                    ),
-                    const SizedBox(height: 16),
+                     const SizedBox(height: 16),
                     _RecordingControls(
                       state: state,
                       onAction: onRecordAction,
@@ -251,6 +259,7 @@ class _DeviceStatusPanel extends StatelessWidget {
   const _DeviceStatusPanel({
     required this.state,
     required this.canConfigure,
+    required this.canRefresh,
     this.onRefresh,
     this.onRecordConsentChanged,
     this.onPrivacyDurationChanged,
@@ -258,6 +267,7 @@ class _DeviceStatusPanel extends StatelessWidget {
 
   final SessionState state;
   final bool canConfigure;
+  final bool canRefresh;
   final VoidCallback? onRefresh;
   final ValueChanged<bool>? onRecordConsentChanged;
   final ValueChanged<int>? onPrivacyDurationChanged;
@@ -287,7 +297,7 @@ class _DeviceStatusPanel extends StatelessWidget {
               ),
               IconButton(
                 tooltip: '刷新设备状态',
-                onPressed: onRefresh,
+                onPressed: canRefresh ? onRefresh : null,
                 icon: const Icon(Icons.refresh_outlined),
               ),
             ],
@@ -466,6 +476,7 @@ class _AuthenticationPanel extends StatelessWidget {
   const _AuthenticationPanel({
     required this.state,
     this.onAuthenticate,
+    this.onBind,
     this.clearPreparation,
     this.onPrepareClear,
     this.onConfirmClear,
@@ -473,6 +484,7 @@ class _AuthenticationPanel extends StatelessWidget {
 
   final DeviceAuthState state;
   final VoidCallback? onAuthenticate;
+  final VoidCallback? onBind;
   final DeviceClearPreparation? clearPreparation;
   final Future<void> Function()? onPrepareClear;
   final Future<void> Function()? onConfirmClear;
@@ -506,6 +518,12 @@ class _AuthenticationPanel extends StatelessWidget {
               label: inFlight ? '正在认证' : '认证设备',
               icon: Icons.verified_user_outlined,
               onPressed: inFlight ? null : onAuthenticate,
+            ),
+            const SizedBox(height: 8),
+            AppButton.secondary(
+              label: inFlight ? '正在认证' : '首次绑定设备',
+              icon: Icons.link_outlined,
+              onPressed: inFlight ? null : onBind,
             ),
           ],
           if (authenticated) ...[

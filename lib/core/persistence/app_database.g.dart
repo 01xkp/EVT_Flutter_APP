@@ -4599,6 +4599,16 @@ class $DeviceFileDownloadCheckpointsTable extends DeviceFileDownloadCheckpoints
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _phaseMeta = const VerificationMeta('phase');
+  @override
+  late final GeneratedColumn<String> phase = GeneratedColumn<String>(
+    'phase',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('downloading'),
+  );
   static const VerificationMeta _updatedAtMeta = const VerificationMeta(
     'updatedAt',
   );
@@ -4619,6 +4629,7 @@ class $DeviceFileDownloadCheckpointsTable extends DeviceFileDownloadCheckpoints
     expectedLength,
     expectedCrc32,
     receivedBytes,
+    phase,
     updatedAt,
   ];
   @override
@@ -4701,6 +4712,12 @@ class $DeviceFileDownloadCheckpointsTable extends DeviceFileDownloadCheckpoints
     } else if (isInserting) {
       context.missing(_receivedBytesMeta);
     }
+    if (data.containsKey('phase')) {
+      context.handle(
+        _phaseMeta,
+        phase.isAcceptableOrUnknown(data['phase']!, _phaseMeta),
+      );
+    }
     if (data.containsKey('updated_at')) {
       context.handle(
         _updatedAtMeta,
@@ -4749,6 +4766,10 @@ class $DeviceFileDownloadCheckpointsTable extends DeviceFileDownloadCheckpoints
         DriftSqlType.int,
         data['${effectivePrefix}received_bytes'],
       )!,
+      phase: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}phase'],
+      )!,
       updatedAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}updated_at'],
@@ -4771,6 +4792,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
   final String expectedLength;
   final String expectedCrc32;
   final int receivedBytes;
+  final String phase;
   final DateTime updatedAt;
   const DeviceFileDownloadCheckpointRow({
     required this.id,
@@ -4780,6 +4802,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
     required this.expectedLength,
     required this.expectedCrc32,
     required this.receivedBytes,
+    required this.phase,
     required this.updatedAt,
   });
   @override
@@ -4792,6 +4815,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
     map['expected_length'] = Variable<String>(expectedLength);
     map['expected_crc32'] = Variable<String>(expectedCrc32);
     map['received_bytes'] = Variable<int>(receivedBytes);
+    map['phase'] = Variable<String>(phase);
     map['updated_at'] = Variable<DateTime>(updatedAt);
     return map;
   }
@@ -4805,6 +4829,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
       expectedLength: Value(expectedLength),
       expectedCrc32: Value(expectedCrc32),
       receivedBytes: Value(receivedBytes),
+      phase: Value(phase),
       updatedAt: Value(updatedAt),
     );
   }
@@ -4822,6 +4847,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
       expectedLength: serializer.fromJson<String>(json['expectedLength']),
       expectedCrc32: serializer.fromJson<String>(json['expectedCrc32']),
       receivedBytes: serializer.fromJson<int>(json['receivedBytes']),
+      phase: serializer.fromJson<String>(json['phase']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
   }
@@ -4836,6 +4862,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
       'expectedLength': serializer.toJson<String>(expectedLength),
       'expectedCrc32': serializer.toJson<String>(expectedCrc32),
       'receivedBytes': serializer.toJson<int>(receivedBytes),
+      'phase': serializer.toJson<String>(phase),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
   }
@@ -4848,6 +4875,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
     String? expectedLength,
     String? expectedCrc32,
     int? receivedBytes,
+    String? phase,
     DateTime? updatedAt,
   }) => DeviceFileDownloadCheckpointRow(
     id: id ?? this.id,
@@ -4857,6 +4885,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
     expectedLength: expectedLength ?? this.expectedLength,
     expectedCrc32: expectedCrc32 ?? this.expectedCrc32,
     receivedBytes: receivedBytes ?? this.receivedBytes,
+    phase: phase ?? this.phase,
     updatedAt: updatedAt ?? this.updatedAt,
   );
   DeviceFileDownloadCheckpointRow copyWithCompanion(
@@ -4880,6 +4909,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
       receivedBytes: data.receivedBytes.present
           ? data.receivedBytes.value
           : this.receivedBytes,
+      phase: data.phase.present ? data.phase.value : this.phase,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
   }
@@ -4894,6 +4924,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
           ..write('expectedLength: $expectedLength, ')
           ..write('expectedCrc32: $expectedCrc32, ')
           ..write('receivedBytes: $receivedBytes, ')
+          ..write('phase: $phase, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
         .toString();
@@ -4908,6 +4939,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
     expectedLength,
     expectedCrc32,
     receivedBytes,
+    phase,
     updatedAt,
   );
   @override
@@ -4921,6 +4953,7 @@ class DeviceFileDownloadCheckpointRow extends DataClass
           other.expectedLength == this.expectedLength &&
           other.expectedCrc32 == this.expectedCrc32 &&
           other.receivedBytes == this.receivedBytes &&
+          other.phase == this.phase &&
           other.updatedAt == this.updatedAt);
 }
 
@@ -4933,6 +4966,7 @@ class DeviceFileDownloadCheckpointsCompanion
   final Value<String> expectedLength;
   final Value<String> expectedCrc32;
   final Value<int> receivedBytes;
+  final Value<String> phase;
   final Value<DateTime> updatedAt;
   final Value<int> rowid;
   const DeviceFileDownloadCheckpointsCompanion({
@@ -4943,6 +4977,7 @@ class DeviceFileDownloadCheckpointsCompanion
     this.expectedLength = const Value.absent(),
     this.expectedCrc32 = const Value.absent(),
     this.receivedBytes = const Value.absent(),
+    this.phase = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -4954,6 +4989,7 @@ class DeviceFileDownloadCheckpointsCompanion
     required String expectedLength,
     required String expectedCrc32,
     required int receivedBytes,
+    this.phase = const Value.absent(),
     required DateTime updatedAt,
     this.rowid = const Value.absent(),
   }) : id = Value(id),
@@ -4972,6 +5008,7 @@ class DeviceFileDownloadCheckpointsCompanion
     Expression<String>? expectedLength,
     Expression<String>? expectedCrc32,
     Expression<int>? receivedBytes,
+    Expression<String>? phase,
     Expression<DateTime>? updatedAt,
     Expression<int>? rowid,
   }) {
@@ -4983,6 +5020,7 @@ class DeviceFileDownloadCheckpointsCompanion
       if (expectedLength != null) 'expected_length': expectedLength,
       if (expectedCrc32 != null) 'expected_crc32': expectedCrc32,
       if (receivedBytes != null) 'received_bytes': receivedBytes,
+      if (phase != null) 'phase': phase,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -4996,6 +5034,7 @@ class DeviceFileDownloadCheckpointsCompanion
     Value<String>? expectedLength,
     Value<String>? expectedCrc32,
     Value<int>? receivedBytes,
+    Value<String>? phase,
     Value<DateTime>? updatedAt,
     Value<int>? rowid,
   }) {
@@ -5007,6 +5046,7 @@ class DeviceFileDownloadCheckpointsCompanion
       expectedLength: expectedLength ?? this.expectedLength,
       expectedCrc32: expectedCrc32 ?? this.expectedCrc32,
       receivedBytes: receivedBytes ?? this.receivedBytes,
+      phase: phase ?? this.phase,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
     );
@@ -5036,6 +5076,9 @@ class DeviceFileDownloadCheckpointsCompanion
     if (receivedBytes.present) {
       map['received_bytes'] = Variable<int>(receivedBytes.value);
     }
+    if (phase.present) {
+      map['phase'] = Variable<String>(phase.value);
+    }
     if (updatedAt.present) {
       map['updated_at'] = Variable<DateTime>(updatedAt.value);
     }
@@ -5055,6 +5098,7 @@ class DeviceFileDownloadCheckpointsCompanion
           ..write('expectedLength: $expectedLength, ')
           ..write('expectedCrc32: $expectedCrc32, ')
           ..write('receivedBytes: $receivedBytes, ')
+          ..write('phase: $phase, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -7244,6 +7288,7 @@ typedef $$DeviceFileDownloadCheckpointsTableCreateCompanionBuilder =
       required String expectedLength,
       required String expectedCrc32,
       required int receivedBytes,
+      Value<String> phase,
       required DateTime updatedAt,
       Value<int> rowid,
     });
@@ -7256,6 +7301,7 @@ typedef $$DeviceFileDownloadCheckpointsTableUpdateCompanionBuilder =
       Value<String> expectedLength,
       Value<String> expectedCrc32,
       Value<int> receivedBytes,
+      Value<String> phase,
       Value<DateTime> updatedAt,
       Value<int> rowid,
     });
@@ -7301,6 +7347,11 @@ class $$DeviceFileDownloadCheckpointsTableFilterComposer
 
   ColumnFilters<int> get receivedBytes => $composableBuilder(
     column: $table.receivedBytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get phase => $composableBuilder(
+    column: $table.phase,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -7354,6 +7405,11 @@ class $$DeviceFileDownloadCheckpointsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get phase => $composableBuilder(
+    column: $table.phase,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
     column: $table.updatedAt,
     builder: (column) => ColumnOrderings(column),
@@ -7399,6 +7455,9 @@ class $$DeviceFileDownloadCheckpointsTableAnnotationComposer
     column: $table.receivedBytes,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get phase =>
+      $composableBuilder(column: $table.phase, builder: (column) => column);
 
   GeneratedColumn<DateTime> get updatedAt =>
       $composableBuilder(column: $table.updatedAt, builder: (column) => column);
@@ -7457,6 +7516,7 @@ class $$DeviceFileDownloadCheckpointsTableTableManager
                 Value<String> expectedLength = const Value.absent(),
                 Value<String> expectedCrc32 = const Value.absent(),
                 Value<int> receivedBytes = const Value.absent(),
+                Value<String> phase = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => DeviceFileDownloadCheckpointsCompanion(
@@ -7467,6 +7527,7 @@ class $$DeviceFileDownloadCheckpointsTableTableManager
                 expectedLength: expectedLength,
                 expectedCrc32: expectedCrc32,
                 receivedBytes: receivedBytes,
+                phase: phase,
                 updatedAt: updatedAt,
                 rowid: rowid,
               ),
@@ -7479,6 +7540,7 @@ class $$DeviceFileDownloadCheckpointsTableTableManager
                 required String expectedLength,
                 required String expectedCrc32,
                 required int receivedBytes,
+                Value<String> phase = const Value.absent(),
                 required DateTime updatedAt,
                 Value<int> rowid = const Value.absent(),
               }) => DeviceFileDownloadCheckpointsCompanion.insert(
@@ -7489,6 +7551,7 @@ class $$DeviceFileDownloadCheckpointsTableTableManager
                 expectedLength: expectedLength,
                 expectedCrc32: expectedCrc32,
                 receivedBytes: receivedBytes,
+                phase: phase,
                 updatedAt: updatedAt,
                 rowid: rowid,
               ),

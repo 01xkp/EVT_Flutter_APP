@@ -4,6 +4,24 @@ import 'package:aipin/features/device_session/domain/firmware_package.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('rejects a package without a final WQOTA verification guarantee', () {
+    final package = FirmwarePackage(
+      vendorId: 0x1234,
+      productId: 0x5678,
+      version: 2,
+      expectedBusinessVersion: '1.0.2',
+      payload: Uint8List.fromList(const [1, 2, 3]),
+      expectedPayloadCrc32: 0x55BC801D,
+      wqotaRequestPrefixFlags: const [0x70, 0x07, 0x6E, 0xC1],
+      wqotaResponsePrefixFlags: const [0x70, 0x07, 0x6E, 0x01],
+    );
+
+    expect(
+      () => package.validateFor(const WqotaDeviceIdentity(0x1234, 0x5678)),
+      throwsA(isA<FirmwarePackageValidationException>()),
+    );
+  });
+
   test('rejects a firmware package whose payload CRC does not match', () {
     final package = FirmwarePackage(
       vendorId: 0x1234,
@@ -68,6 +86,7 @@ void main() {
       expectedPayloadCrc32: 0x55BC801D,
       wqotaRequestPrefixFlags: const [0x70, 0x07, 0x6E, 0xC1],
       wqotaResponsePrefixFlags: const [0x70, 0x07, 0x6E, 0x01],
+      wqotaFinalVerificationSupported: true,
     );
 
     package.validateFor(const WqotaDeviceIdentity(0x1234, 0x5678));

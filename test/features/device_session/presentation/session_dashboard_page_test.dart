@@ -88,14 +88,17 @@ void main() {
       );
 
       await tester.scrollUntilVisible(
-        find.text('设备录音'),
+        find.text('暂停录音'),
         200,
         scrollable: find.byType(Scrollable),
       );
       expect(find.text('设备录音'), findsOneWidget);
       expect(find.text('暂停录音'), findsOneWidget);
       expect(find.text('结束录音'), findsOneWidget);
-      await tester.tap(find.text('暂停录音'));
+      final pauseRecording = find.text('暂停录音');
+      await tester.drag(find.byType(Scrollable), const Offset(0, -160));
+      await tester.pumpAndSettle();
+      await tester.tap(pauseRecording);
       expect(action, 2);
     },
   );
@@ -124,14 +127,17 @@ void main() {
     );
 
     await tester.scrollUntilVisible(
-      find.text('实时音频'),
+      find.text('开始接收'),
       200,
       scrollable: find.byType(Scrollable),
     );
     expect(find.text('实时音频'), findsOneWidget);
     expect(find.text('未知编码原始数据，不能直接播放'), findsOneWidget);
 
-    await tester.tap(find.text('开始接收'));
+    final startReceiving = find.text('开始接收');
+    await tester.drag(find.byType(Scrollable), const Offset(0, -160));
+    await tester.pumpAndSettle();
+    await tester.tap(startReceiving);
     await tester.pump();
     expect(gateway.operations, ['stream:true', 'record:true']);
 
@@ -219,9 +225,43 @@ void main() {
       expect(find.text('3 个文件'), findsOneWidget);
       expect(find.text('隐私模式，剩余 15 分钟'), findsOneWidget);
 
-      await tester.tap(find.byType(Switch));
+      final consentSwitch = find.byType(Switch);
+      await tester.scrollUntilVisible(
+        consentSwitch,
+        200,
+        scrollable: find.byType(Scrollable),
+      );
+      await tester.drag(find.byType(Scrollable), const Offset(0, -240));
+      await tester.pumpAndSettle();
+      await tester.tap(consentSwitch);
       expect(recordConsent, isFalse);
       expect(privacyDuration, isNull);
+    },
+  );
+
+  testWidgets(
+    'detail disables protected status refresh without a status grant',
+    (tester) async {
+      var refreshCount = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DeviceDetailPage(
+            state: const SessionState(phase: SessionPhase.observable),
+            onRefreshDeviceDetails: () => refreshCount += 1,
+          ),
+        ),
+      );
+
+      final refreshButton = tester.widget<IconButton>(
+        find.ancestor(
+          of: find.byIcon(Icons.refresh_outlined),
+          matching: find.byType(IconButton),
+        ),
+      );
+      expect(refreshButton.onPressed, isNull);
+
+      await tester.tap(find.byIcon(Icons.refresh_outlined));
+      expect(refreshCount, 0);
     },
   );
 

@@ -22,6 +22,11 @@ class AndroidBleScanPermissionPolicy {
     ];
   }
 
+  /// Android 6 through 11 require both location permission and an enabled
+  /// system location service before BLE scan results can be delivered.
+  static bool requiresLocationServicesForScan(int sdkInt) =>
+      sdkInt >= 23 && sdkInt < 31;
+
   static List<Permission> platformPermissionsForSdkInt(int sdkInt) => [
     for (final requirement in forSdkInt(sdkInt))
       switch (requirement) {

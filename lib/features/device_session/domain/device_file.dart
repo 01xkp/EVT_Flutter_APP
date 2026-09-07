@@ -1,5 +1,9 @@
 class DeviceFile {
-  const DeviceFile({required this.name, required this.nameSlot, required this.length});
+  const DeviceFile({
+    required this.name,
+    required this.nameSlot,
+    required this.length,
+  });
 
   final String name;
   final List<int> nameSlot;
@@ -33,4 +37,3 @@ class DeviceFileMetadata {
   final int crc32;
   final int state;
 }
-

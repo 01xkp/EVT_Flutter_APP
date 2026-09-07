@@ -49,27 +49,84 @@ void main() {
     expect(find.text('设备录音已导入记录'), findsOneWidget);
   });
 
-  testWidgets('reports archive configuration failure without claiming a checksum error', (
+  testWidgets('continues pagination until the firmware returns Count zero', (
     tester,
   ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: DeviceFileBrowserPage(
-          onListFiles: ({required offset, required pageSize}) async => const [
-            DeviceFile(name: 'capture.ogg', nameSlot: [1], length: 10),
-          ],
-          onImport: (file, {onProgress}) async {
-            throw const ArchiveGatewayUnavailableException();
-          },
+          onListFiles: ({required offset, required pageSize}) async =>
+              switch (offset) {
+                0 => const [
+                  DeviceFile(name: 'first.ogg', nameSlot: [1], length: 10),
+                ],
+                1 => const [
+                  DeviceFile(name: 'second.ogg', nameSlot: [2], length: 10),
+                ],
+                _ => const [],
+              },
+          onImport: (_, {onProgress}) => throw UnimplementedError(),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('导入到记录'));
+    expect(find.text('first.ogg'), findsOneWidget);
+    expect(find.text('second.ogg'), findsOneWidget);
+  });
+
+  testWidgets('stops a malformed list that repeats a file slot', (
+    tester,
+  ) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceFileBrowserPage(
+          onListFiles: ({required offset, required pageSize}) async {
+            calls += 1;
+            if (calls > 2) {
+              throw StateError('malformed pagination continued');
+            }
+            return const [
+              DeviceFile(name: 'repeated.ogg', nameSlot: [1], length: 10),
+            ];
+          },
+          onImport: (_, {onProgress}) => throw UnimplementedError(),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
-    expect(find.text('云端归档服务未配置，设备文件已保留'), findsOneWidget);
-    expect(find.text('导入失败，文件校验未通过，请重试'), findsNothing);
+    expect(calls, 2);
+    expect(find.text('设备录音列表暂时不可读取，请重试'), findsOneWidget);
   });
+
+  testWidgets(
+    'reports archive configuration failure without claiming a checksum error',
+    (tester) async {
+      var calls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DeviceFileBrowserPage(
+            onListFiles: ({required offset, required pageSize}) async =>
+                calls++ == 0
+                ? const [
+                    DeviceFile(name: 'capture.ogg', nameSlot: [1], length: 10),
+                  ]
+                : const [],
+            onImport: (file, {onProgress}) async {
+              throw const ArchiveGatewayUnavailableException();
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('导入到记录'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('云端归档服务未配置，设备文件已保留'), findsOneWidget);
+      expect(find.text('导入失败，文件校验未通过，请重试'), findsNothing);
+    },
+  );
 }

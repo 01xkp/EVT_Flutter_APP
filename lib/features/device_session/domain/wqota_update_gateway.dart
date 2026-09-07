@@ -9,7 +9,11 @@ class WqotaTransferWindow {
   final int length;
 }
 
+enum WqotaImageVerificationState { syncing, verified, unavailable }
+
 abstract interface class WqotaUpdateGateway {
+  Future<void> prepareTransport();
+
   Future<WqotaDeviceIdentity> readDeviceIdentity();
 
   Future<WqotaTransferWindow> queryFileInfoOffset();
@@ -25,7 +29,7 @@ abstract interface class WqotaUpdateGateway {
 
   Future<void> refresh();
 
-  Future<bool> isSyncComplete();
+  Future<WqotaImageVerificationState> readImageVerificationState();
 
   Future<void> reboot();
 

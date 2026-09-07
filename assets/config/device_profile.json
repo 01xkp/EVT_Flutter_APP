@@ -14,7 +14,7 @@
       "fa11": {"uuid": "0000FA11-1212-EFDE-1523-785FEABCD123", "operations": ["write", "indicate"]},
       "fa12": {"uuid": "0000FA12-1212-EFDE-1523-785FEABCD123", "operations": ["read", "write", "indicate"]},
       "fa15": {"uuid": "0000FA15-1212-EFDE-1523-785FEABCD123", "operations": ["read", "indicate"]},
-      "fa16": {"uuid": "0000FA16-1212-EFDE-1523-785FEABCD123", "operations": ["notify", "write"]},
+      "fa16": {"uuid": "0000FA16-1212-EFDE-1523-785FEABCD123", "operations": ["indicate", "write"]},
       "fa17": {"uuid": "0000FA17-1212-EFDE-1523-785FEABCD123", "operations": ["write", "indicate"]},
       "fa18": {"uuid": "0000FA18-1212-EFDE-1523-785FEABCD123", "operations": ["notify"]},
       "fa19": {"uuid": "0000FA19-1212-EFDE-1523-785FEABCD123", "operations": ["write", "indicate"]}

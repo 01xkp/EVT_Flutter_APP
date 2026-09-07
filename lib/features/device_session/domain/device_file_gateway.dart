@@ -5,6 +5,12 @@ import 'package:aipin/features/device_session/domain/device_file.dart';
 abstract interface class DeviceFileGateway {
   Future<DeviceFileMetadata> readFileMetadata(List<int> nameSlot);
 
+  Stream<Uint8List> downloadFile({
+    required List<int> nameSlot,
+    int startOffset,
+    int chunkSize,
+  });
+
   Future<Uint8List> readFileChunk({
     required List<int> nameSlot,
     int startOffset,

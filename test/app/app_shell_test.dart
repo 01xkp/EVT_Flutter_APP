@@ -2,7 +2,10 @@ import 'dart:async';
 
 import 'package:aipin/app/evt_app.dart';
 import 'package:aipin/app/providers.dart';
+import 'package:aipin/features/device_logs/data/file_app_log_store.dart';
 import 'package:aipin/features/local_recording/domain/local_recording.dart';
+import 'package:aipin/features/device_session/domain/device_connection_history_repository.dart';
+import 'package:aipin/features/device_session/domain/remembered_device.dart';
 import 'package:aipin/features/local_recording/domain/audio_recorder_port.dart';
 import 'package:aipin/features/research_beta/application/research_capture_library_controller.dart';
 import 'package:aipin/features/research_beta/application/research_capture_processing_controller.dart';
@@ -12,10 +15,13 @@ import 'package:aipin/features/research_beta/domain/temporary_asr_gateway.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/fake_onboarding_store.dart';
 import '../support/fake_audio_player.dart';
 import '../support/fake_audio_recorder.dart';
+import '../support/fake_ble_transport.dart';
+import '../support/fake_evidence_repository.dart';
 import '../support/fake_local_recording_repository.dart';
 import '../support/fake_recording_background_service.dart';
 import '../support/fake_recording_file_store.dart';
@@ -51,6 +57,55 @@ void main() {
       isNot(contains(researchCaptureProcessingControllerProvider)),
       reason: '首页启动不应初始化 AI 语音处理或研究数据库。',
     );
+  });
+
+  testWidgets('automatically connects when a remembered device is scanned', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final transport = FakeBleTransport.withGattReadyProfile();
+    final appLogStore = FileAppLogStore(enabled: false);
+    final candidate = FakeBleTransport.matchingCandidate;
+    final history = _MemoryConnectionHistory(<RememberedDevice>[
+      RememberedDevice(
+        connectionId: candidate.connectionId,
+        physicalMacAddress: candidate.physicalDeviceId,
+        displayName: candidate.name,
+        lastConnectedAt: DateTime.utc(2026, 9, 4, 10),
+      ),
+    ]);
+    addTearDown(transport.dispose);
+    addTearDown(appLogStore.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          onboardingStoreProvider.overrideWithValue(
+            FakeOnboardingStore(completed: true),
+          ),
+          bleTransportProvider.overrideWithValue(transport),
+          deviceConnectionHistoryRepositoryProvider.overrideWithValue(history),
+          appLogStoreProvider.overrideWithValue(appLogStore),
+        ],
+        child: const EvtApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(transport.scanCallCount, 1);
+    expect((await history.load()).single.matches(candidate), isTrue);
+
+    transport.emitCandidate(candidate);
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 350)),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+
+    expect(transport.discoveryRequests, <String>[candidate.connectionId]);
+    expect(history.upserts, hasLength(1));
+    expect(history.upserts.single.connectionId, candidate.connectionId);
   });
 
   testWidgets('ending local recording asks before AI processing', (
@@ -311,6 +366,7 @@ Widget _appWithResearchProcessing({
       localRecordingRepositoryProvider.overrideWithValue(
         FakeLocalRecordingRepository(localRecordings),
       ),
+      evidenceRepositoryProvider.overrideWithValue(FakeEvidenceRepository()),
       recordingFileStoreProvider.overrideWithValue(FakeRecordingFileStore()),
       audioRecorderProvider.overrideWithValue(FakeAudioRecorder()),
       recordingBackgroundProvider.overrideWithValue(
@@ -398,5 +454,40 @@ class _ProviderCreationObserver extends ProviderObserver {
     ProviderContainer container,
   ) {
     createdProviders.add(provider);
+  }
+}
+
+class _MemoryConnectionHistory implements DeviceConnectionHistoryRepository {
+  _MemoryConnectionHistory(Iterable<RememberedDevice> initial)
+    : _records = List<RememberedDevice>.of(initial);
+
+  final List<RememberedDevice> _records;
+  final List<RememberedDevice> upserts = <RememberedDevice>[];
+
+  @override
+  Future<List<RememberedDevice>> load() async =>
+      List<RememberedDevice>.unmodifiable(_records);
+
+  @override
+  Future<void> removeMatching({
+    required String connectionId,
+    String? physicalMacAddress,
+  }) async {
+    _records.removeWhere((record) {
+      if (physicalMacAddress != null && record.physicalMacAddress != null) {
+        return physicalMacAddress == record.physicalMacAddress;
+      }
+      return connectionId == record.connectionId;
+    });
+  }
+
+  @override
+  Future<void> upsert(RememberedDevice record) async {
+    await removeMatching(
+      connectionId: record.connectionId,
+      physicalMacAddress: record.physicalMacAddress,
+    );
+    _records.add(record);
+    upserts.add(record);
   }
 }

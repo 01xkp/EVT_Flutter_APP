@@ -12,6 +12,8 @@ class DeviceInfo {
     required this.recordStatus,
     required this.batteryLevel,
     required this.charging,
+    required this.powerOff,
+    required this.chargingMode,
     required this.audioStreamEnabled,
   });
 
@@ -25,6 +27,7 @@ class DeviceInfo {
   final int recordStatus;
   final int batteryLevel;
   final int charging;
+  final int powerOff;
+  final int chargingMode;
   final bool audioStreamEnabled;
 }
-

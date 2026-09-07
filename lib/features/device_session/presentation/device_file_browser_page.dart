@@ -106,15 +106,21 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
     if (mounted) setState(() => _loading = true);
     try {
       final loaded = <DeviceFile>[];
+      final seenFileSlots = <String>{};
       var offset = 0;
       while (true) {
         final page = await widget.onListFiles(offset: offset, pageSize: 20);
         if (page.isEmpty) break;
+        for (final file in page) {
+          if (!seenFileSlots.add(file.nameSlot.join(','))) {
+            throw StateError('设备文件列表返回了重复文件键。');
+          }
+        }
+        if (page.length > 0xFFFF - offset) {
+          throw StateError('设备文件列表超出了协议允许的偏移范围。');
+        }
         loaded.addAll(page);
         offset += page.length;
-        if (page.length < 20) {
-          break;
-        }
       }
       if (mounted) {
         setState(() {
@@ -155,9 +161,9 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
       }
     } on ArchiveGatewayUnavailableException {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('云端归档服务未配置，设备文件已保留')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('云端归档服务未配置，设备文件已保留')));
       }
     } catch (_) {
       if (mounted) {
