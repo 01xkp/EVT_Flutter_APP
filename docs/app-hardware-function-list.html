@@ -203,15 +203,15 @@
     <section id="advertisement">
       <h2>3. 设备广播和扫描</h2>
       <p>用户进入设备页后点击“查找附近设备”。<strong>当前 EVT 调试构建暂时关闭严格广播过滤：</strong>只要蓝牙设备有名称，就会显示在列表；没有名称的设备仍不显示。用户手动点击连接后，App 仍会严格校验 GATT 服务、特征 UUID 和属性，不符合 EVT GATT 合约的设备无法进入认证或控制流程。</p>
-      <div class="notice warning"><p>下表是<strong>固件应遵守的正式 EVT 广播规范</strong>，也是自动回连仍会使用的身份匹配规则；它目前不是手动扫描列表的拦截条件。固件广播字段稳定后，可把 App 的兼容扫描开关重新切回严格模式。</p></div>
+      <div class="notice warning"><p>下表是<strong>固件应遵守的正式 EVT 广播规范</strong>。当前调试构建不会用这些字段拦截手动扫描或自动回连；自动回连只会匹配本地已记录的同一设备，优先使用厂商数据中的物理地址，缺失时回退平台连接 ID。固件广播字段稳定后，可把 App 的兼容扫描开关重新切回严格模式。</p></div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>广播字段</th><th>固件 EVT V1.5 要求</th><th>App 如何检查</th><th>不满足时</th></tr></thead>
           <tbody>
-            <tr><td>本地名称</td><td><code>AIPIN_XXXX</code>，<code>XXXX</code> 是 4 位大写十六进制。</td><td>当前手动扫描只要求“名称非空”；该格式用于正式身份识别和自动回连。</td><td>手动扫描仍显示；自动回连不匹配。</td></tr>
-            <tr><td>Manufacturer Data</td><td>恰好 8 字节：<code>A3 89 + BtAddressRaw[6]</code>。</td><td>当前手动扫描不拦截；正式身份识别检查前两字节和总长度。</td><td>手动扫描仍显示；自动回连不匹配。</td></tr>
-            <tr><td>名称和地址关联</td><td>名称末四位必须等于 <code>BtAddressRaw</code> 最后两个字节拼接成的大写十六进制。</td><td>例如原始地址末两字节为 <code>12 34</code>，名称应为 <code>AIPIN_1234</code>。</td><td>手动扫描仍显示；自动回连不匹配。</td></tr>
-            <tr><td>服务 UUID</td><td>广播或 Scan Response 中包含 <code>0000AF30-0000-1000-8000-00805F9B34FB</code>。</td><td>当前手动扫描不拦截；正式身份识别接受完整 UUID 或短 UUID <code>AF30</code>。</td><td>手动扫描仍显示；自动回连不匹配。</td></tr>
+            <tr><td>本地名称</td><td><code>AIPIN_XXXX</code>，<code>XXXX</code> 是 4 位大写十六进制。</td><td>当前扫描只要求“名称非空”；该格式用于正式身份识别和固件验收。</td><td>手动扫描与已记录设备的回连扫描均仍可继续；连接后校验 GATT。</td></tr>
+            <tr><td>Manufacturer Data</td><td>恰好 8 字节：<code>A3 89 + BtAddressRaw[6]</code>。</td><td>当前扫描不拦截；自动回连优先用其中的物理地址匹配。</td><td>缺失时回退平台连接 ID；不因字段缺失直接过滤。</td></tr>
+            <tr><td>名称和地址关联</td><td>名称末四位必须等于 <code>BtAddressRaw</code> 最后两个字节拼接成的大写十六进制。</td><td>例如原始地址末两字节为 <code>12 34</code>，名称应为 <code>AIPIN_1234</code>。</td><td>不因关联缺失直接过滤；作为固件广播验收项。</td></tr>
+            <tr><td>服务 UUID</td><td>广播或 Scan Response 中包含 <code>0000AF30-0000-1000-8000-00805F9B34FB</code>。</td><td>当前扫描不拦截；正式身份识别接受完整 UUID 或短 UUID <code>AF30</code>。</td><td>不因字段缺失直接过滤；连接后由 GATT 合约决定是否可用。</td></tr>
           </tbody>
         </table>
       </div>
@@ -435,7 +435,7 @@ CRC 覆盖范围 = CMD + Content；线上 CRC 低字节在前。</pre>
         <div class="feature-head"><h3>断开、自动回连和前后台</h3><span class="feature-id">H-EVT-09</span></div>
         <div class="feature-grid">
           <div class="feature-block"><strong>怎么使用</strong><p>用户点击“断开设备”会弹出确认，确认后主动断开；意外断开时详情页给出“重新连接”。App 已有成功连接记录时，在前台会自动寻找最近一次已认证设备。</p></div>
-          <div class="feature-block"><strong>App 接口处理</strong><p>认证成功并进入可操作状态后，本地保存平台 connectionId、厂商数据解析出的物理地址、显示名和最近成功时间。回连时扫描严格广播，优先用物理地址匹配；连接成功后仍完整走服务发现、CCC、认证和同步，绝不复用旧会话权限。</p></div>
+          <div class="feature-block"><strong>App 接口处理</strong><p>认证成功并进入可操作状态后，本地保存平台 connectionId、厂商数据解析出的物理地址、显示名和最近成功时间。回连时不要求扫描结果同时具备完整广播三要素，只匹配本地已记录的同一设备，优先用物理地址匹配，缺失时回退平台 connectionId；连接成功后仍完整走服务发现、CCC、认证和同步，绝不复用旧会话权限。</p></div>
           <div class="feature-block"><strong>重试策略</strong><p>意外断连后在前台最多尝试 3 次：先尝试一次，失败后等待 1 秒，再失败等待 2 秒，之后给用户“重新连接”入口。手动断开会抑制本次前台自动回连，直到用户主动重新连接。</p></div>
           <div class="feature-block"><strong>前后台</strong><p>App 进入后台时停止扫描和自动回连，避免在后台持续扫描；回到前台可恢复流程。断开、认证窗口过期或传输出现歧义时，取消所有订阅和临时流，再重新建会话。</p></div>
         </div>
@@ -445,9 +445,9 @@ CRC 覆盖范围 = CMD + Content；线上 CRC 低字节在前。</pre>
         <div class="feature-head"><h3>实时日志和联调定位</h3><span class="feature-id">H-EVT-10</span></div>
         <div class="feature-grid">
           <div class="feature-block"><strong>怎么使用</strong><p>设备详情右上角点“实时日志”，查看本次操作的扫描、连接、订阅、读写、回包、断连与回连时间线。Debug 包可从日志页导出当前日志路径给固件同事比对。</p></div>
-          <div class="feature-block"><strong>App 记录什么</strong><p>会记录扫描结果的脱敏摘要、连接状态、服务发现数量、CCC 开始/确认/失败、MTU、写入长度、回包 CMD/长度、解析失败、传输异常和回连次数。认证码、完整协议正文、完整设备 ID 和音频正文不会写入日志。</p></div>
+          <div class="feature-block"><strong>App 记录什么</strong><p>会记录扫描结果的脱敏摘要、连接状态、服务发现数量、CCC 开始/确认/失败、MTU、写入长度、回包 CMD/长度、解析失败、传输异常和回连次数。当前 EVT Debug 包还会通过 <code>raw_packet_hex</code> 保留完整协议原始字节，可能包含认证码、文件名和音频数据，仅可用于受控联调；结构化字段不写入完整设备 ID。</p></div>
           <div class="feature-block"><strong>文件位置</strong><p>内部日志：应用 Support 目录的 <code>logs/aipin-YYYY-MM-DD.log</code>。Android Debug 镜像：<code>Download/AIPIN/logs/aipin-YYYY-MM-DD.log</code>。iOS Debug 镜像：<code>Documents/AIPIN/logs/aipin-YYYY-MM-DD.log</code>。</p></div>
-          <div class="feature-block"><strong>保留规则</strong><p>单文件最多 5 MiB，保留最近 7 个文件；日志页面内存中最多显示 500 条。日志写入/镜像失败不会影响 BLE 功能本身。</p></div>
+          <div class="feature-block"><strong>保留规则</strong><p>单文件最多 20 MiB，保留最近 8 个文件；日志页面内存中最多显示 500 条。文件导入中的日志最多每 200 ms 批量落盘，公共下载目录最多每 10 秒同步一次；导出、关闭和退出会强制写完并同步。日志写入/镜像失败不会影响 BLE 功能本身。</p></div>
         </div>
       </article>
     </section>

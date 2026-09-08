@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:aipin/core/diagnostics/diagnostic_trace.dart';
+import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_session/data/evt_device_file_import_service.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
 import 'package:aipin/features/device_session/domain/device_file_download_checkpoint.dart';
@@ -75,6 +77,40 @@ void main() {
       expect(recordings.values.single.sizeBytes, 5);
       expect(recordings.values.single.duration, Duration.zero);
       expect(checkpoints.items, isEmpty);
+    },
+  );
+
+  test(
+    'records safe import stages without retaining the device file name',
+    () async {
+      final logger = _CapturingLogger();
+      final service = _service(
+        gateway: _TransferGateway(<EvtDeviceFileTransferEvent>[
+          _data(<int>[1, 2, 3, 4, 5]),
+          EvtDeviceFileTransferEvent.terminal(),
+        ]),
+        files: _RecordingFiles(),
+        checkpoints: _Checkpoints(),
+        recordings: FakeLocalRecordingRepository(),
+        logger: logger,
+      );
+
+      await service.import(_file);
+
+      expect(
+        logger.events,
+        containsAll(<String>[
+          'device_file_import_requested',
+          'device_file_import_new_transfer',
+          'device_file_import_transfer_started',
+          'device_file_import_progress',
+          'device_file_import_completed',
+        ]),
+      );
+      expect(
+        logger.calls.expand((call) => call.fields.values).join(' '),
+        isNot(contains(_file.name)),
+      );
     },
   );
 
@@ -309,6 +345,7 @@ EvtDeviceFileImportService _service({
   required _RecordingFiles files,
   required _Checkpoints checkpoints,
   required FakeLocalRecordingRepository recordings,
+  SafeAppLogger? logger,
 }) {
   return EvtDeviceFileImportService(
     deviceId: 'device-1',
@@ -317,6 +354,7 @@ EvtDeviceFileImportService _service({
     checkpoints: checkpoints,
     recordings: recordings,
     now: () => DateTime.utc(2026, 1, 1),
+    logger: logger,
   );
 }
 
@@ -525,4 +563,50 @@ class _Checkpoints implements DeviceFileDownloadCheckpointRepository {
     }
     return true;
   }
+}
+
+class _CapturingLogger implements SafeAppLogger {
+  final calls = <_LogCall>[];
+
+  Iterable<String> get events => calls.map((call) => call.event);
+
+  @override
+  void error(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) => calls.add(_LogCall(event, fields));
+
+  @override
+  void info(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) => calls.add(_LogCall(event, fields));
+
+  @override
+  void warning(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) => calls.add(_LogCall(event, fields));
+}
+
+class _LogCall {
+  const _LogCall(this.event, this.fields);
+
+  final String event;
+  final Map<String, Object?> fields;
 }

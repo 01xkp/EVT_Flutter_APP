@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/protocol/evt_protocol_contract.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
 import 'package:aipin/features/device_session/domain/device_file_download_checkpoint.dart';
@@ -22,7 +23,9 @@ class EvtDeviceFileImportService {
     required this.checkpoints,
     required this.recordings,
     DateTime Function()? now,
-  }) : _now = now ?? DateTime.now;
+    SafeAppLogger? logger,
+  }) : _now = now ?? DateTime.now,
+       _logger = logger ?? const DebugSafeAppLogger(scope: 'FILE');
 
   final String deviceId;
   final DeviceFileTransferGateway gateway;
@@ -30,12 +33,32 @@ class EvtDeviceFileImportService {
   final DeviceFileDownloadCheckpointRepository checkpoints;
   final LocalRecordingRepository recordings;
   final DateTime Function() _now;
+  final SafeAppLogger _logger;
 
   Future<LocalRecording> import(
     DeviceFile file, {
     void Function(DeviceFileImportProgress progress)? onProgress,
   }) async {
-    _validateFile(file);
+    final startedAt = DateTime.now();
+    try {
+      _validateFile(file);
+    } catch (error) {
+      _logWarning(
+        'device_file_import_validation_failed',
+        result: 'failed',
+        elapsed: DateTime.now().difference(startedAt),
+        fields: {
+          'total_bytes': file.length,
+          'error_type': error.runtimeType.toString(),
+        },
+      );
+      rethrow;
+    }
+    _logInfo(
+      'device_file_import_requested',
+      result: 'pending',
+      fields: {'total_bytes': file.length},
+    );
     final extension = _audioExtension(file.name);
     var checkpoint = await checkpoints.find(
       deviceId: deviceId,
@@ -47,6 +70,17 @@ class EvtDeviceFileImportService {
       await _discardCheckpoint(checkpoint, extension);
       checkpoint = null;
     }
+    _logInfo(
+      checkpoint == null
+          ? 'device_file_import_new_transfer'
+          : 'device_file_import_checkpoint_found',
+      result: 'pending',
+      elapsed: DateTime.now().difference(startedAt),
+      fields: {
+        'total_bytes': file.length,
+        'offset': checkpoint?.receivedBytes ?? 0,
+      },
+    );
 
     final recordingId =
         checkpoint?.recordingId ?? 'device-${_now().microsecondsSinceEpoch}';
@@ -70,6 +104,12 @@ class EvtDeviceFileImportService {
           );
           await recordings.save(recording);
           await checkpoints.remove(checkpoint.id);
+          _logInfo(
+            'device_file_import_recovered_complete',
+            result: 'success',
+            elapsed: DateTime.now().difference(startedAt),
+            fields: {'total_bytes': file.length},
+          );
           return recording;
         }
       }
@@ -118,6 +158,13 @@ class EvtDeviceFileImportService {
 
     try {
       var receivedTerminal = false;
+      var lastLoggedReceived = received;
+      _logInfo(
+        'device_file_import_transfer_started',
+        result: 'pending',
+        elapsed: DateTime.now().difference(startedAt),
+        fields: {'total_bytes': file.length, 'offset': received},
+      );
       await for (final event in gateway.downloadEvtFile(
         nameSlot: file.nameSlot,
         startOffset: received,
@@ -146,6 +193,20 @@ class EvtDeviceFileImportService {
         onProgress?.call(
           DeviceFileImportProgress(received: received, total: file.length),
         );
+        if (received == file.length || received - lastLoggedReceived >= 65536) {
+          lastLoggedReceived = received;
+          _logInfo(
+            'device_file_import_progress',
+            result: 'pending',
+            elapsed: DateTime.now().difference(startedAt),
+            fields: {
+              'total_bytes': file.length,
+              'offset': received,
+              'chunk_length': event.bytes.length,
+              'percent': (received * 100 ~/ file.length),
+            },
+          );
+        }
       }
       if (!receivedTerminal) {
         throw const EvtDeviceFileImportException('设备未返回文件结束帧。');
@@ -161,10 +222,30 @@ class EvtDeviceFileImportService {
       );
       await recordings.save(recording);
       await checkpoints.remove(activeCheckpoint.id);
+      _logInfo(
+        'device_file_import_completed',
+        result: 'success',
+        elapsed: DateTime.now().difference(startedAt),
+        fields: {
+          'total_bytes': file.length,
+          'offset': received,
+          'percent': 100,
+        },
+      );
       return recording;
-    } catch (_) {
+    } catch (error) {
       await checkpoints.save(
         activeCheckpoint.copyWith(receivedBytes: received, updatedAt: _now()),
+      );
+      _logWarning(
+        'device_file_import_failed',
+        result: 'failed',
+        elapsed: DateTime.now().difference(startedAt),
+        fields: {
+          'total_bytes': file.length,
+          'offset': received,
+          'error_type': error.runtimeType.toString(),
+        },
       );
       rethrow;
     }
@@ -221,6 +302,46 @@ class EvtDeviceFileImportService {
       return '.m4a';
     }
     throw const EvtDeviceFileImportException('设备文件格式不支持。');
+  }
+
+  void _logInfo(
+    String event, {
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) {
+    try {
+      _logger.info(
+        event,
+        operation: 'device_file_import',
+        stage: 'import',
+        result: result,
+        elapsed: elapsed,
+        fields: fields,
+      );
+    } catch (_) {
+      // Diagnostics must not interrupt a transfer or checkpoint update.
+    }
+  }
+
+  void _logWarning(
+    String event, {
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) {
+    try {
+      _logger.warning(
+        event,
+        operation: 'device_file_import',
+        stage: 'import',
+        result: result,
+        elapsed: elapsed,
+        fields: fields,
+      );
+    } catch (_) {
+      // Diagnostics must not interrupt a transfer or checkpoint update.
+    }
   }
 }
 

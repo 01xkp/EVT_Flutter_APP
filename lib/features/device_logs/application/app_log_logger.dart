@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' hide DiagnosticLevel;
+
 import 'package:aipin/core/diagnostics/diagnostic_event.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/diagnostics/diagnostic_trace.dart';
@@ -87,21 +89,23 @@ class PersistentAppLogger implements SafeAppLogger {
     Duration? elapsed,
     required Map<String, Object?> fields,
   }) {
-    _store.record(
-      AppLogEntry.fromEvent(
-        DiagnosticEvent(
-          timestamp: DateTime.now(),
-          level: level,
-          scope: scope,
-          trace: trace,
-          operation: operation,
-          stage: stage,
-          event: event,
-          result: result,
-          elapsed: elapsed,
-          fields: fields,
-        ),
-      ),
+    final diagnostic = DiagnosticEvent(
+      timestamp: DateTime.now(),
+      level: level,
+      scope: scope,
+      trace: trace,
+      operation: operation,
+      stage: stage,
+      event: event,
+      result: result,
+      elapsed: elapsed,
+      fields: fields,
     );
+    // Debug output and the persistent file intentionally share one sanitized
+    // line so an engineer can correlate Logcat/Xcode with the exported file.
+    if (kDebugMode) {
+      debugPrint(diagnostic.formatLine());
+    }
+    _store.record(AppLogEntry.fromEvent(diagnostic));
   }
 }

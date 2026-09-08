@@ -113,6 +113,40 @@ class ReactiveBleClientTest {
         subject.onComplete()
     }
 
+    @Test
+    fun `prefers indications when an EVT response characteristic advertises both response modes`() {
+        val properties =
+            BluetoothGattCharacteristic.PROPERTY_NOTIFY or
+                BluetoothGattCharacteristic.PROPERTY_INDICATE
+
+        assertThat(
+            shouldPreferIndication(
+                UUID.fromString("0000fa11-1212-efde-1523-785feabcd123"),
+                properties,
+            ),
+        ).isTrue()
+        assertThat(
+            shouldPreferIndication(
+                UUID.fromString("0000fa11-1212-efde-1523-785feabcd123"),
+                BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+            ),
+        ).isFalse()
+    }
+
+    @Test
+    fun `uses notify for FF13 when the device advertises both response modes`() {
+        val properties =
+            BluetoothGattCharacteristic.PROPERTY_NOTIFY or
+                BluetoothGattCharacteristic.PROPERTY_INDICATE
+
+        assertThat(
+            shouldPreferIndication(
+                UUID.fromString("0000ff13-1212-efde-1523-785feabcd123"),
+                properties,
+            ),
+        ).isFalse()
+    }
+
     @DisplayName("Establishing a connection")
     @Nested
     inner class EstablishConnectionTest {

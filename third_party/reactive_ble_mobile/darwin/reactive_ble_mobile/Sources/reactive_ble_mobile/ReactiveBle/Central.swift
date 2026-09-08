@@ -29,6 +29,10 @@ final class Central {
 
     private(set) var isScanning = false
     private(set) var activePeripherals = [PeripheralID: CBPeripheral]()
+    // Cancelling a CoreBluetooth connection is asynchronous. Keep method
+    // channel callers behind the terminal callback so a new same-device
+    // connection cannot consume the previous connection's disconnect event.
+    private var pendingDisconnectCompletions = [PeripheralID: [() -> Void]]()
     private(set) var connectRegistry = PeripheralTaskRegistry<ConnectTaskController>()
     private let servicesWithCharacteristicsDiscoveryRegistry = PeripheralTaskRegistry<ServicesWithCharacteristicsDiscoveryTaskController>()
     private let characteristicNotifyRegistry = PeripheralTaskRegistry<CharacteristicNotifyTaskController>()
@@ -46,10 +50,15 @@ final class Central {
         self.centralManagerDelegate = CentralManagerDelegate(
             onStateChange: papply(weak: self) { central, state in
                 if state != .poweredOn {
-                    central.activePeripherals.forEach { _, peripheral in
+                    // `eject` removes the peripheral from `activePeripherals`.
+                    // Iterate over a snapshot so an adapter state change cannot
+                    // mutate the Dictionary while Swift is enumerating it.
+                    let activePeripherals = Array(central.activePeripherals.values)
+                    activePeripherals.forEach { peripheral in
                         let error = Failure.notPoweredOn(actualState: state)
                         central.eject(peripheral, error: error)
                         onConnectionChange(central, peripheral, .disconnected(error))
+                        central.completePendingDisconnects(for: peripheral.identifier)
                     }
                 }
                 onStateChange(central, state)
@@ -69,6 +78,15 @@ final class Central {
                 }
 
                 onConnectionChange(central, peripheral, change)
+                switch change {
+                case .connected:
+                    break
+                case .failedToConnect, .disconnected:
+                    // Send the terminal connection event before completing
+                    // the method call. Flutter then finishes cancellation
+                    // before it is allowed to open a replacement stream.
+                    central.completePendingDisconnects(for: peripheral.identifier)
+                }
             }
         )
         self.peripheralDelegate = PeripheralDelegate(
@@ -188,6 +206,25 @@ final class Central {
         guard let peripheral = try? resolve(known: peripheralID)
         else { return }
 
+        centralManager.cancelPeripheralConnection(peripheral)
+    }
+
+    /// Requests a physical disconnect and invokes [completion] only after
+    /// CoreBluetooth reports the terminal connection callback. This overload
+    /// is used by the Flutter method channel; internal fire-and-forget
+    /// cancellation continues to use the overload above.
+    func disconnect(from peripheralID: PeripheralID, completion: @escaping () -> Void) {
+        guard let peripheral = try? resolve(known: peripheralID)
+        else {
+            completion()
+            return
+        }
+        guard peripheral.state != .disconnected else {
+            completion()
+            return
+        }
+
+        pendingDisconnectCompletions[peripheralID, default: []].append(completion)
         centralManager.cancelPeripheralConnection(peripheral)
     }
 
@@ -349,6 +386,11 @@ final class Central {
             in: peripheral.identifier,
             action: { $0.cancel(error: error) }
         )
+    }
+
+    private func completePendingDisconnects(for peripheralID: PeripheralID) {
+        let completions = pendingDisconnectCompletions.removeValue(forKey: peripheralID) ?? []
+        completions.forEach { $0() }
     }
 
     private func resolve(known peripheralID: PeripheralID) throws -> CBPeripheral {

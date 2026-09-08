@@ -99,6 +99,37 @@ void main() {
   });
 
   test(
+    'can reconnect a remembered named device while EVT advertisement filtering is disabled',
+    () async {
+      final history = _InMemoryHistory(<RememberedDevice>[rememberedFor()]);
+      final connected = <DeviceCandidate>[];
+      final controller = DeviceReconnectController(
+        history: history,
+        startScan: () async {},
+        stopScan: () async {},
+        connect: (candidate) async {
+          connected.add(candidate);
+          return true;
+        },
+        logger: _CapturingLogger(),
+        filterByV15Advertisement: false,
+        waitForRetry: (_) async {},
+        now: () => connectedAt,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.restoreAndStart();
+      final incompleteAdvertisement = candidateFor(
+        manufacturerData: const <int>[0x01, 0x02],
+      );
+      await controller.considerCandidate(incompleteAdvertisement);
+
+      expect(connected, <DeviceCandidate>[incompleteAdvertisement]);
+      expect(controller.state.phase, DeviceReconnectPhase.connected);
+    },
+  );
+
+  test(
     'does not reconnect when a remembered device has an invalid broadcast',
     () async {
       var connectCalls = 0;
@@ -527,6 +558,84 @@ void main() {
 
       expect(controller.state.phase, DeviceReconnectPhase.idle);
       expect(controller.state.canRetry, isTrue);
+    },
+  );
+
+  test(
+    'emits detailed, redacted diagnostics across a retry and reconnect',
+    () async {
+      const rawConnectionId = 'ios-raw-connection-identity';
+      final delays = _DelayGate();
+      final logger = _CapturingLogger();
+      var connectCalls = 0;
+      final controller = DeviceReconnectController(
+        history: _InMemoryHistory(<RememberedDevice>[
+          rememberedFor(connectionId: rawConnectionId),
+        ]),
+        startScan: () async {},
+        stopScan: () async {},
+        connect: (_) async {
+          connectCalls += 1;
+          return connectCalls == 2;
+        },
+        logger: logger,
+        waitForRetry: delays.wait,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.restoreAndStart();
+      await controller.considerCandidate(
+        candidateFor(connectionId: rawConnectionId),
+      );
+      expect(controller.state.phase, DeviceReconnectPhase.waitingToRetry);
+
+      delays.releaseNext();
+      await _drainMicrotasks();
+      await controller.considerCandidate(
+        candidateFor(connectionId: rawConnectionId),
+      );
+
+      expect(controller.state.phase, DeviceReconnectPhase.connected);
+      expect(
+        logger.calls.map((call) => call.event),
+        containsAll(<String>[
+          'reconnect_restore_requested',
+          'reconnect_history_load_requested',
+          'reconnect_history_loaded',
+          'reconnect_scan_start_requested',
+          'reconnect_scan_started',
+          'reconnect_candidate_matched',
+          'reconnect_connect_requested',
+          'reconnect_attempt_failed',
+          'reconnect_retry_scheduled',
+          'reconnect_retry_wait_started',
+          'reconnect_retry_wait_completed',
+          'reconnect_connected',
+        ]),
+      );
+      final retry = logger.calls.firstWhere(
+        (call) => call.event == 'reconnect_retry_scheduled',
+      );
+      expect(retry.operation, 'device_reconnect');
+      expect(retry.stage, 'waiting_to_retry');
+      expect(retry.result, 'retrying');
+      expect(retry.fields['duration_ms'], 1000);
+      expect(retry.fields['reason'], contains('已安排下一次扫描'));
+
+      final diagnosticText = logger.calls
+          .map(
+            (call) => <Object?>[
+              call.event,
+              call.operation,
+              call.stage,
+              call.result,
+              call.fields,
+            ].join('|'),
+          )
+          .join('\n');
+      expect(diagnosticText, isNot(contains(rawConnectionId)));
+      expect(diagnosticText, isNot(contains('AA:BB:CC:DD:EE:FF')));
+      expect(diagnosticText, contains('...EEFF'));
     },
   );
 

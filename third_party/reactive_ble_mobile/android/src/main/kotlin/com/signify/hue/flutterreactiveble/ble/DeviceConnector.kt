@@ -33,6 +33,11 @@ internal class DeviceConnector(
     @VisibleForTesting
     internal var connectionDisposable: Disposable? = null
 
+    // The Dart connection stream can be cancelled more than once while its
+    // owner is tearing down. All callers must observe one physical disconnect
+    // and one terminal update rather than scheduling duplicate delayed work.
+    private var disconnectCompletion: Completable? = null
+
     private val lazyConnection =
         lazy {
             connectionDisposable = establishConnection(device)
@@ -60,23 +65,27 @@ internal class DeviceConnector(
             }
     }
 
-    internal fun disconnectDevice(deviceId: String) {
+    internal fun disconnectDevice(deviceId: String): Completable = synchronized(this) {
+        disconnectCompletion ?: createDisconnectCompletion(deviceId)
+            .cache()
+            .also { disconnectCompletion = it }
+    }
+
+    private fun createDisconnectCompletion(deviceId: String): Completable {
         val diff = System.currentTimeMillis() - timestampEstablishConnection
 
         /*
         in order to prevent Android from ignoring disconnects we add a delay when we try to
         disconnect to quickly after establishing connection. https://issuetracker.google.com/issues/37121223
          */
-        if (diff < DeviceConnector.Companion.minTimeMsBeforeDisconnectingIsAllowed) {
-            Single.timer(DeviceConnector.Companion.minTimeMsBeforeDisconnectingIsAllowed - diff, TimeUnit.MILLISECONDS)
-                .doFinally {
-                    sendDisconnectedUpdate(deviceId)
-                    disposeSubscriptions()
-                }.subscribe()
-        } else {
-            sendDisconnectedUpdate(deviceId)
-            disposeSubscriptions()
-        }
+        val delay =
+            (DeviceConnector.Companion.minTimeMsBeforeDisconnectingIsAllowed - diff)
+                .coerceAtLeast(0L)
+        return Completable.timer(delay, TimeUnit.MILLISECONDS)
+            .doOnComplete {
+                sendDisconnectedUpdate(deviceId)
+                disposeSubscriptions()
+            }
     }
 
     private fun sendDisconnectedUpdate(deviceId: String) {

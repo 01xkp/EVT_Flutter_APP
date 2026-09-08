@@ -11,23 +11,35 @@ import '../domain/app_log_store.dart';
 import '../domain/public_diagnostic_log_sink.dart';
 
 class FileAppLogStore extends ChangeNotifier implements AppLogStore {
+  static const _mirrorFailureLogInterval = Duration(minutes: 5);
+  static const _defaultWriteDebounce = Duration(milliseconds: 200);
+  static const _defaultMirrorDebounce = Duration(seconds: 10);
+  static const _defaultMaxFileBytes = 20 * 1024 * 1024;
+  static const _defaultKeepFiles = 8;
+  static final _logFilenamePattern = RegExp(
+    r'^aipin-\d{4}-\d{2}-\d{2}\.log(?:\.\d+)?$',
+  );
+
   FileAppLogStore({
     this._supportDirectoryProvider,
     DateTime Function()? clock,
     this.maxEntries = 500,
-    this.maxFileBytes = 5 * 1024 * 1024,
-    this.keepFiles = 7,
+    this.maxFileBytes = _defaultMaxFileBytes,
+    this.keepFiles = _defaultKeepFiles,
     bool? enabled,
     bool Function()? isDebugBuild,
     PublicDiagnosticLogSink? publicDiagnosticLogSink,
-    Duration mirrorDebounce = const Duration(seconds: 1),
+    Duration mirrorDebounce = _defaultMirrorDebounce,
+    Duration writeDebounce = _defaultWriteDebounce,
   }) : _clock = clock ?? DateTime.now,
        _enabled = (enabled ?? true) && (isDebugBuild ?? _isDebugBuild)(),
        // These public parameter names are part of the construction API.
        // ignore: prefer_initializing_formals
        _publicDiagnosticLogSink = publicDiagnosticLogSink,
        // ignore: prefer_initializing_formals
-       _mirrorDebounce = mirrorDebounce;
+       _mirrorDebounce = mirrorDebounce,
+       // ignore: prefer_initializing_formals
+       _writeDebounce = writeDebounce;
 
   final Future<Directory> Function()? _supportDirectoryProvider;
   final DateTime Function() _clock;
@@ -37,19 +49,25 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   final int keepFiles;
   final PublicDiagnosticLogSink? _publicDiagnosticLogSink;
   final Duration _mirrorDebounce;
+  final Duration _writeDebounce;
   final List<AppLogEntry> _entries = <AppLogEntry>[];
   final StreamController<AppLogEntry> _stream =
       StreamController<AppLogEntry>.broadcast();
   Future<void> _writeQueue = Future<void>.value();
   Future<void> _mirrorQueue = Future<void>.value();
+  final StringBuffer _pendingLines = StringBuffer();
   Directory? _logDirectory;
   File? _currentFile;
   DateTime? _lastMirrorAttemptAt;
+  DateTime? _lastMirrorFailureLoggedAt;
+  String? _lastMirrorFailureCode;
   PublicDiagnosticLogMirrorStatus? _publicMirrorStatus;
+  Timer? _writeTimer;
   Timer? _mirrorTimer;
   var _mirrorPending = false;
   var _disposed = false;
   var _closedStream = false;
+  Future<void>? _closeFuture;
 
   static bool _isDebugBuild() => kDebugMode;
 
@@ -71,7 +89,13 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
 
   @override
   Future<void> initialize() async {
-    if (!_enabled || _disposed || _currentFile != null) {
+    await _initialize(allowAfterDispose: false);
+  }
+
+  Future<void> _initialize({required bool allowAfterDispose}) async {
+    if (!_enabled ||
+        (!allowAfterDispose && _disposed) ||
+        _currentFile != null) {
       return;
     }
     final supportDirectory =
@@ -127,20 +151,15 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     _entries.add(sanitizedEntry);
     _stream.add(sanitizedEntry);
     notifyListeners();
-    final line = '${sanitizedEntry.formatLine()}\n';
-    _writeQueue = _writeQueue.then((_) async {
-      try {
-        await initialize();
-        await _append(line);
-        _scheduleMirror();
-      } on Object {
-        // Diagnostics must never break the feature that emitted the log.
-      }
-    });
+    _pendingLines.write('${sanitizedEntry.formatLine()}\n');
+    _scheduleWrite();
   }
 
   @override
   Future<void> flush() async {
+    _writeTimer?.cancel();
+    _writeTimer = null;
+    _enqueuePendingWrite();
     await _writeQueue;
     _mirrorTimer?.cancel();
     _mirrorTimer = null;
@@ -162,7 +181,41 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     notifyListeners();
   }
 
+  /// BLE file import can deliver thousands of Debug entries in a short time.
+  /// Coalescing them keeps diagnostic disk I/O from competing with the GATT
+  /// callback while [flush], export, and disposal still persist every accepted
+  /// line before they complete.
+  void _scheduleWrite() {
+    if (_writeTimer != null) {
+      return;
+    }
+    _writeTimer = Timer(_writeDebounce, () {
+      _writeTimer = null;
+      _enqueuePendingWrite();
+    });
+  }
+
+  void _enqueuePendingWrite() {
+    if (_pendingLines.isEmpty) {
+      return;
+    }
+    final lines = _pendingLines.toString();
+    _pendingLines.clear();
+    _writeQueue = _writeQueue.then((_) async {
+      try {
+        // Disposal stops new entries but must not discard entries that were
+        // already accepted into the serialized write queue.
+        await _initialize(allowAfterDispose: true);
+        await _append(lines);
+        _scheduleMirror();
+      } on Object {
+        // Diagnostics must never break the feature that emitted the log.
+      }
+    });
+  }
+
   Future<void> _append(String line) async {
+    await _selectCurrentFileForToday();
     final file = _currentFile;
     if (file == null) {
       return;
@@ -170,16 +223,55 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     final bytes = utf8.encode(line);
     final length = await file.length();
     if (length + bytes.length > maxFileBytes) {
-      final rotated = File('${file.path}.1');
-      if (await rotated.exists()) {
-        await rotated.delete();
+      final rotated = await _rotateCurrentFile(file);
+      if (rotated != null) {
+        await _mirrorRotatedFile(rotated);
       }
-      await file.rename(rotated.path);
-      _currentFile = File(file.path);
-      await _currentFile!.create();
       await _pruneFiles();
     }
     await _currentFile!.writeAsBytes(bytes, mode: FileMode.append, flush: true);
+  }
+
+  Future<File?> _rotateCurrentFile(File file) async {
+    if (keepFiles <= 1) {
+      await file.delete();
+      _currentFile = File(file.path);
+      await _currentFile!.create();
+      return null;
+    }
+
+    final oldest = File('${file.path}.${keepFiles - 1}');
+    if (await oldest.exists()) {
+      await oldest.delete();
+    }
+    for (var index = keepFiles - 2; index >= 1; index -= 1) {
+      final source = File('${file.path}.$index');
+      if (await source.exists()) {
+        await source.rename('${file.path}.${index + 1}');
+      }
+    }
+    final rotated = File('${file.path}.1');
+    await file.rename(rotated.path);
+    _currentFile = File(file.path);
+    await _currentFile!.create();
+    return rotated;
+  }
+
+  Future<void> _mirrorRotatedFile(File file) async {
+    final sink = _publicDiagnosticLogSink;
+    if (!_enabled || sink == null || !await file.exists()) {
+      return;
+    }
+    try {
+      _publicMirrorStatus = await sink.mirrorCanonicalFile(
+        sourcePath: file.path,
+        filename: file.uri.pathSegments.last,
+      );
+    } on Object {
+      _publicMirrorStatus = PublicDiagnosticLogMirrorStatus.failure(
+        'storage_error',
+      );
+    }
   }
 
   void _scheduleMirror() {
@@ -216,6 +308,7 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
       return;
     }
     _lastMirrorAttemptAt = now;
+    final previousFailureCode = _lastMirrorFailureCode;
     try {
       _publicMirrorStatus = await sink.mirrorCanonicalFile(
         sourcePath: file.path,
@@ -228,20 +321,45 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     }
     if (_publicMirrorStatus?.failureCode != null) {
       await _recordMirrorFailure(_publicMirrorStatus!.failureCode!);
+    } else if (previousFailureCode != null) {
+      await _recordMirrorRecovered(previousFailureCode);
     }
-    notifyListeners();
+    if (!_disposed) {
+      notifyListeners();
+    }
   }
 
   Future<void> _recordMirrorFailure(String failureCode) async {
+    final now = _clock();
+    if (_lastMirrorFailureCode == failureCode &&
+        _lastMirrorFailureLoggedAt != null &&
+        now.difference(_lastMirrorFailureLoggedAt!) <
+            _mirrorFailureLogInterval) {
+      return;
+    }
+    _lastMirrorFailureCode = failureCode;
+    _lastMirrorFailureLoggedAt = now;
+    await _recordMirrorStatus('public_mirror_failed', failureCode);
+  }
+
+  Future<void> _recordMirrorRecovered(String previousFailureCode) async {
+    _lastMirrorFailureCode = null;
+    _lastMirrorFailureLoggedAt = null;
+    await _recordMirrorStatus('public_mirror_recovered', previousFailureCode);
+  }
+
+  Future<void> _recordMirrorStatus(String event, String failureCode) async {
     if (_entries.length >= maxEntries) {
       _entries.removeAt(0);
     }
     final entry = AppLogEntry.fromEvent(
       DiagnosticEvent(
         timestamp: _clock(),
-        level: DiagnosticLevel.warning,
+        level: event == 'public_mirror_recovered'
+            ? DiagnosticLevel.info
+            : DiagnosticLevel.warning,
         scope: 'STORAGE',
-        event: 'public_mirror_failed',
+        event: event,
         fields: {'error_code': failureCode},
       ),
     );
@@ -259,17 +377,31 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   }
 
   Future<void> _selectCurrentFile() async {
-    final now = _clock();
-    final date =
-        '${now.year.toString().padLeft(4, '0')}-'
-        '${now.month.toString().padLeft(2, '0')}-'
-        '${now.day.toString().padLeft(2, '0')}';
+    final filename = _dailyLogFilename(_clock());
     _currentFile = File(
-      '${_logDirectory!.path}${Platform.pathSeparator}aipin-$date.log',
+      '${_logDirectory!.path}${Platform.pathSeparator}$filename',
     );
     if (!await _currentFile!.exists()) {
       await _currentFile!.create();
     }
+  }
+
+  Future<void> _selectCurrentFileForToday() async {
+    final expectedFilename = _dailyLogFilename(_clock());
+    final current = _currentFile;
+    if (current != null && current.uri.pathSegments.last == expectedFilename) {
+      return;
+    }
+    await _selectCurrentFile();
+    await _pruneFiles();
+  }
+
+  static String _dailyLogFilename(DateTime value) {
+    final date =
+        '${value.year.toString().padLeft(4, '0')}-'
+        '${value.month.toString().padLeft(2, '0')}-'
+        '${value.day.toString().padLeft(2, '0')}';
+    return 'aipin-$date.log';
   }
 
   Future<void> _pruneFiles() async {
@@ -277,22 +409,32 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     if (directory == null) {
       return;
     }
-    final files = (await directory.list().where((entry) {
-      return entry is File &&
-          (entry.path.contains('aipin-') || entry.path.contains('.1'));
-    }).toList())..sort((a, b) => b.path.compareTo(a.path));
+    final files = <File>[];
+    await for (final entry in directory.list()) {
+      if (entry is File &&
+          _logFilenamePattern.hasMatch(entry.uri.pathSegments.last)) {
+        files.add(entry);
+      }
+    }
+    files.sort(
+      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+    );
     for (final file in files.skip(keepFiles)) {
       await file.delete();
     }
   }
 
   @override
-  Future<void> close() async {
+  Future<void> close() => _closeFuture ??= _close();
+
+  Future<void> _close() async {
     if (_closedStream) {
       return;
     }
     _closedStream = true;
     await flush();
+    _writeTimer?.cancel();
+    _writeTimer = null;
     _mirrorTimer?.cancel();
     _mirrorTimer = null;
     await _stream.close();
@@ -301,7 +443,6 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   @override
   void dispose() {
     if (_disposed) {
-      super.dispose();
       return;
     }
     _disposed = true;

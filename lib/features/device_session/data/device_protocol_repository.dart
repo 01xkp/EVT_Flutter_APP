@@ -158,6 +158,11 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
         content: [action],
         writeCharacteristic: _characteristic(BleLogicalEndpoint.fa10Fa17),
         expectedResponseCommand: 0x87,
+        // FA17 also carries unsolicited device state changes. A response to
+        // this request is only authoritative when it reports the state that
+        // the requested action should have reached; otherwise an unrelated
+        // VAD/key/privacy event could complete the pending user action.
+        responseMatcher: (frame) => _matchesRecordActionResponse(frame, action),
         // A lost indication does not mean that the device ignored a record
         // action. Re-sending a non-idempotent action can produce a different
         // device state, so callers must resolve a timeout by reading status.
@@ -304,6 +309,9 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     if (frame.content.length != expectedLength) {
       throw const FormatException('设备信息条件字段长度无效。');
     }
+    if (recordStatus != 0) {
+      _validateActiveRecordFields(frame.content, recordOffset + 1);
+    }
     final batteryOffset = recordOffset + 1 + recordDataLength;
     final batteryLevel = reader.u8(batteryOffset);
     final charging = reader.u8(batteryOffset + 1);
@@ -402,6 +410,25 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     final expectedLength = recordStatus == 0 ? 1 : 8;
     if (frame.content.length != expectedLength) {
       throw const FormatException('设备录音状态条件字段长度无效。');
+    }
+    if (recordStatus != 0) {
+      _validateActiveRecordFields(frame.content, 1);
+    }
+  }
+
+  /// Matches a V1.5 record-control result without allowing malformed
+  /// unsolicited FA17 state events to break the pending command stream.
+  static bool _matchesRecordActionResponse(EvtFrame frame, int action) {
+    if (frame.command != 0x87 ||
+        frame.content.isEmpty ||
+        frame.content.first != action) {
+      return false;
+    }
+    try {
+      validateRecordState(frame);
+      return true;
+    } on FormatException {
+      return false;
     }
   }
 
@@ -601,6 +628,17 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
   }
 
   static bool _isBoolean(int value) => value == 0 || value == 1;
+
+  /// V1.5 active record layouts are:
+  /// RecordDuration:u16, CurrentDuration:u16, RecordMode:u8,
+  /// RecordType:u8, Denoise:u8.
+  static void _validateActiveRecordFields(List<int> bytes, int offset) {
+    final recordType = bytes[offset + 5];
+    final denoise = bytes[offset + 6];
+    if ((recordType != 1 && recordType != 2) || !_isBoolean(denoise)) {
+      throw const FormatException('设备录音参数枚举无效。');
+    }
+  }
 
   static void _validateBatteryFields({
     required int batteryLevel,

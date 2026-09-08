@@ -334,62 +334,56 @@ void main() {
     },
   );
 
-  testWidgets(
-    'iOS guidance opens App Settings and retries after the app resumes',
-    (tester) async {
-      final transport = FakeBleTransport();
-      final controller = DiscoveryController(
-        transport,
-        const AdvertisementFilter(),
-      );
-      final bluetooth = _FakeBluetoothEnableGateway(canRequestEnable: false);
-      var openedSystemSettings = 0;
-      addTearDown(() async {
-        controller.dispose();
-        await transport.dispose();
-      });
+  testWidgets('iOS guidance retries scanning immediately after confirmation', (
+    tester,
+  ) async {
+    final transport = FakeBleTransport();
+    final controller = DiscoveryController(
+      transport,
+      const AdvertisementFilter(),
+    );
+    final bluetooth = _FakeBluetoothEnableGateway(canRequestEnable: false);
+    addTearDown(() async {
+      controller.dispose();
+      await transport.dispose();
+    });
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: DiscoveryPage(
-            controller: controller,
-            bluetoothEnableGateway: bluetooth,
-            onOpenSystemSettings: () async {
-              openedSystemSettings += 1;
-              return true;
-            },
-          ),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DiscoveryPage(
+          controller: controller,
+          bluetoothEnableGateway: bluetooth,
         ),
-      );
-      await tester.tap(find.widgetWithText(FilledButton, '查找附近设备'));
-      transport.emitScanError(
-        BleTransportException(
-          EvtFailure.environment(message: '蓝牙未开启。'),
-          issue: BleTransportIssue.bluetoothOff,
-        ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '查找附近设备'));
+    transport.emitScanError(
+      BleTransportException(
+        EvtFailure.environment(message: '蓝牙未开启。'),
+        issue: BleTransportIssue.bluetoothOff,
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      expect(find.text('请开启蓝牙'), findsOneWidget);
-      expect(
-        find.text('iPhone 不允许 App 直接开启蓝牙。请在控制中心或系统设置中打开蓝牙后返回。'),
-        findsOneWidget,
-      );
-      expect(find.text('打开设置'), findsOneWidget);
-      await tester.tap(find.text('打开设置'));
-      await tester.pumpAndSettle();
+    expect(find.text('请开启蓝牙'), findsOneWidget);
+    expect(
+      find.text('iPhone 不允许 App 直接开启蓝牙。请在控制中心或系统设置中打开蓝牙后返回。'),
+      findsOneWidget,
+    );
+    expect(find.text('我已开启'), findsOneWidget);
+    await tester.tap(find.text('我已开启'));
+    await tester.pump();
+    await tester.pump();
 
-      expect(bluetooth.requestCount, 0);
-      expect(openedSystemSettings, 1);
-      expect(transport.scanCallCount, 1);
+    expect(bluetooth.requestCount, 0);
+    expect(transport.scanCallCount, 2);
 
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
 
-      expect(transport.scanCallCount, 2);
-    },
-  );
+    expect(transport.scanCallCount, 2);
+  });
 }
 
 class _FakeBluetoothEnableGateway implements BluetoothEnableGateway {

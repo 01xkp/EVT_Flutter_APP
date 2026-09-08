@@ -298,9 +298,12 @@ final class PluginController {
             return
         }
 
-        completion(.success(nil))
-
-        central.disconnect(from: deviceID)
+        // CoreBluetooth disconnect is asynchronous. Waiting for Central's
+        // terminal callback prevents the next same-device connection stream
+        // from receiving this connection's late disconnected event.
+        central.disconnect(from: deviceID) {
+            completion(.success(nil))
+        }
     }
 
     func discoverServices(name: String, args: DiscoverServicesRequest, completion: @escaping PlatformMethodCompletionHandler) {

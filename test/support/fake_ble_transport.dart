@@ -15,6 +15,8 @@ class FakeBleTransport implements BleTransport {
     this.deferDisconnect = false,
     this.readError,
     this.negotiatedMtu = 247,
+    this.gattCacheClearResult = BleGattCacheClearResult.unsupported,
+    this.gattCacheClearError,
     this.closeSubscriptionImmediatelyForCharacteristic,
     this.deferNotificationSetup = false,
     Map<String, Object> notificationSetupFailureByCharacteristicUuid = const {},
@@ -196,6 +198,8 @@ class FakeBleTransport implements BleTransport {
       <String, StreamController<Uint8List>>{};
   final disconnectedDeviceIds = <String>[];
   final List<String> discoveryRequests = [];
+  final List<String> gattCacheClearDeviceIds = [];
+  final List<String> connectionOperations = [];
   final List<BleCharacteristic> subscribedCharacteristics = [];
   final List<BleCharacteristic> notificationSetupRequests = [];
   final List<BleCharacteristic> readCharacteristics = [];
@@ -205,6 +209,8 @@ class FakeBleTransport implements BleTransport {
   final bool deferDisconnect;
   final Object? readError;
   final int negotiatedMtu;
+  final BleGattCacheClearResult gattCacheClearResult;
+  final Object? gattCacheClearError;
   final String? closeSubscriptionImmediatelyForCharacteristic;
   final bool deferNotificationSetup;
   final Map<String, Object> _notificationSetupFailureByCharacteristicUuid;
@@ -270,6 +276,16 @@ class FakeBleTransport implements BleTransport {
   Future<List<BleService>> discoverServices(String deviceId) async {
     discoveryRequests.add(deviceId);
     return deferServiceDiscovery ? _deferredServices.future : services;
+  }
+
+  @override
+  Future<BleGattCacheClearResult> clearGattCache(String deviceId) async {
+    gattCacheClearDeviceIds.add(deviceId);
+    connectionOperations.add('clear_gatt_cache');
+    if (gattCacheClearError != null) {
+      throw gattCacheClearError!;
+    }
+    return gattCacheClearResult;
   }
 
   void completeServiceDiscovery([List<BleService>? value]) {
@@ -362,6 +378,7 @@ class FakeBleTransport implements BleTransport {
   @override
   Future<void> disconnect(String deviceId) async {
     disconnectedDeviceIds.add(deviceId);
+    connectionOperations.add('disconnect');
     if (deferDisconnect) {
       await _deferredDisconnect.future;
     }

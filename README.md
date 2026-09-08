@@ -19,7 +19,7 @@ flutter build apk --debug
 
 ## EVT 联调功能
 
-1. 当前 EVT 手动扫描显示所有名称非空的 BLE 设备；用户手动连接后才严格校验 EVT GATT 合约。自动回连仍以 `AIPIN_XXXX`、`A3 89 + 6B` Manufacturer Data 和 `AF30` Service UUID 识别已记住的设备。
+1. 当前 EVT 调试构建的手动扫描不以 V1.5 名称格式、厂商数据和服务 UUID 三要素作为准入条件，只显示名称非空的 BLE 设备；用户主动连接后才严格校验 EVT GATT 合约。自动回连同样不要求扫描结果同时具备三要素，只会在扫描结果中匹配本地已记录的同一设备，优先使用 `A3 89 + 6B` 中的物理地址，缺失时回退平台连接 ID。
 2. 连接后验证九个必需 EVT 特征及属性，建立对应的 Indicate/Notify 订阅。
 3. 用户通过 `FA19 / 0x09` 输入 V1 六字节认证码，进行认证、首次绑定或恢复初始认证码。
 4. 认证成功后协商 MTU，读取并校验 `ProtocolVersion=3`，写入 EVT 基线时间和录音配置。
@@ -43,19 +43,19 @@ EVT 仅允许 `0x01`、`0x02`、`0x05`、`0x06`、`0x07`、`0x09`、`0x11`、`0x
 
 ## 调试日志
 
-Debug 构建会将脱敏日志写入应用支持目录：
+Debug 构建会将完整 EVT 联调日志写入应用支持目录：
 
 ```text
 <App Support>/logs/aipin-YYYY-MM-DD.log
 ```
 
-单个文件最大 5 MiB，保留最近 7 个文件。设备详情页的“实时日志”可查看当前路径和导出日志。Android Debug 会额外镜像到：
+单个文件最大 20 MiB，保留最近 8 个文件（最多 160 MiB）。BLE 文件导入期间的日志会以最多 200 ms 一批落盘，避免大量 `0x23` 数据包写日志拖慢传输；公共下载目录镜像最多每 10 秒同步一次，点击导出、关闭日志页或退出应用会强制写完并同步已接收的日志。设备详情页的“实时日志”可查看当前路径和导出日志。Android Debug 会额外镜像到：
 
 ```text
 Download/AIPIN/logs/aipin-YYYY-MM-DD.log
 ```
 
-Android 6-9 首次镜像时会请求存储权限；应用私有日志不受该权限影响。日志不写入认证码、音频内容、文件名、原始 MAC 或 CoreBluetooth UUID。
+Android 6-9 首次镜像时会请求存储权限；应用私有日志不受该权限影响。当前 EVT Debug 包会在 `raw_packet_hex` 中保留 App 到设备和设备到 App 的完整原始字节，因此其中可能包含认证码、文件名和音频数据，仅可用于受控联调，不得对外分享。结构化字段仍只保留脱敏设备引用，不写入完整 MAC 或 CoreBluetooth UUID；Release/Profile 构建不会持久化该日志。
 
 ## 验证
 

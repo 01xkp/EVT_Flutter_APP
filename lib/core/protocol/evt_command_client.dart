@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/ble/ble_models.dart';
+import 'package:aipin/core/diagnostics/evt_packet_log_summary.dart';
+import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 
@@ -66,16 +68,24 @@ class EvtCommandClient {
     required this._codec,
     required Stream<Uint8List> responses,
     this._beforeWrite,
-  }) {
+    SafeAppLogger? logger,
+  }) : _logger = logger ?? const DebugSafeAppLogger(scope: 'CMD') {
     _responseSubscription = responses.listen(
       _onBytes,
       onError: _onTransportError,
+    );
+    _logInfo(
+      'evt_command_client_opened',
+      stage: 'initialization',
+      result: 'success',
+      fields: const {'state': 'listening'},
     );
   }
 
   final BleTransport _transport;
   final EvtProtocolCodec _codec;
   final EvtCommandWriteAdmission? _beforeWrite;
+  final SafeAppLogger _logger;
   final StreamController<EvtFrame> _events =
       StreamController<EvtFrame>.broadcast();
   StreamSubscription<Uint8List>? _responseSubscription;
@@ -88,8 +98,20 @@ class EvtCommandClient {
 
   Future<EvtCommandResponse> execute(EvtCommandRequest request) {
     if (_closed) {
+      _logWarning(
+        'evt_command_rejected',
+        stage: 'request',
+        result: 'failed',
+        fields: _requestFields(request, reason: 'client_closed'),
+      );
       return Future<EvtCommandResponse>.error(StateError('命令客户端已关闭。'));
     }
+    _logInfo(
+      'evt_command_queued',
+      stage: 'request',
+      result: 'pending',
+      fields: _requestFields(request),
+    );
     final result = _queue.then((_) => _run(request));
     _queue = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return result;
@@ -103,16 +125,44 @@ class EvtCommandClient {
     Duration idleTimeout = const Duration(seconds: 15),
   }) {
     if (_closed) {
+      _logWarning(
+        'evt_stream_command_rejected',
+        stage: 'request',
+        result: 'failed',
+        fields: _requestFields(request, reason: 'client_closed'),
+      );
       return Stream<EvtFrame>.error(StateError('命令客户端已关闭。'));
     }
     late final StreamController<EvtFrame> controller;
     _PendingStreamingCommand? active;
     controller = StreamController<EvtFrame>(
       onListen: () {
+        _logInfo(
+          'evt_stream_command_queued',
+          stage: 'request',
+          result: 'pending',
+          fields: _requestFields(
+            request,
+            timeout: idleTimeout,
+            reason: 'streaming',
+          ),
+        );
         final scheduled = _queue.then((_) async {
           _PendingStreamingCommand? pending;
+          final stopwatch = Stopwatch();
           try {
             _admitWrite(request);
+            stopwatch.start();
+            _logInfo(
+              'evt_stream_command_admitted',
+              stage: 'write',
+              result: 'accepted',
+              fields: _requestFields(
+                request,
+                timeout: idleTimeout,
+                reason: 'streaming',
+              ),
+            );
             pending = _PendingStreamingCommand(
               request: request,
               controller: controller,
@@ -121,13 +171,77 @@ class EvtCommandClient {
             );
             active = pending;
             _pending = pending;
-            pending.start();
-            await _transport.write(
-              request.writeCharacteristic,
-              _codec.encodeRequest(request.command, request.content),
+            final bytes = _codec.encodeRequest(
+              request.command,
+              request.content,
             );
+            final packet = EvtPacketLogSummary.fromWireBytes(bytes);
+            _logInfo(
+              'evt_stream_command_transmit_started',
+              stage: 'write',
+              result: 'pending',
+              fields: {
+                ...packet.fields,
+                ..._requestFields(request, timeout: idleTimeout),
+                'reason': 'streaming',
+              },
+            );
+            await _transport.write(request.writeCharacteristic, bytes);
+            _logInfo(
+              'evt_stream_command_transmit_completed',
+              stage: 'write',
+              result: 'success',
+              elapsed: stopwatch.elapsed,
+              fields: {
+                ...packet.fields,
+                ..._requestFields(request, timeout: idleTimeout),
+                'reason': 'streaming',
+              },
+            );
+            // The device cannot send a file packet until the GATT write has
+            // completed, so do not count native write latency as idle time.
+            pending.start();
             await pending.done;
+            _logInfo(
+              'evt_stream_command_completed',
+              stage: 'response',
+              result: 'completed',
+              elapsed: stopwatch.elapsed,
+              fields: _requestFields(
+                request,
+                timeout: idleTimeout,
+                reason: 'streaming_terminal_frame',
+              ),
+            );
+          } on EvtCommandTimeoutException catch (error, stackTrace) {
+            _logWarning(
+              'evt_stream_command_timeout',
+              stage: 'response',
+              result: 'failed',
+              elapsed: stopwatch.elapsed,
+              fields: _requestFields(
+                request,
+                timeout: idleTimeout,
+                reason: 'idle_timeout',
+                attempt: error.attempts,
+              ),
+            );
+            if (!controller.isClosed) {
+              controller.addError(error, stackTrace);
+            }
           } catch (error, stackTrace) {
+            _logError(
+              'evt_stream_command_error',
+              stage: 'response',
+              result: 'failed',
+              elapsed: stopwatch.elapsed,
+              fields: _requestFields(
+                request,
+                timeout: idleTimeout,
+                reason: 'stream_failed',
+                errorType: error.runtimeType.toString(),
+              ),
+            );
             if (!controller.isClosed) {
               controller.addError(error, stackTrace);
             }
@@ -149,6 +263,12 @@ class EvtCommandClient {
       onCancel: () {
         final pending = active;
         if (pending != null && identical(_pending, pending)) {
+          _logInfo(
+            'evt_stream_command_cancelled',
+            stage: 'response',
+            result: 'cancelled',
+            fields: _requestFields(request, reason: 'stream_cancelled'),
+          );
           pending.completeError(StateError('连续命令已取消。'));
         }
       },
@@ -157,13 +277,53 @@ class EvtCommandClient {
   }
 
   Future<EvtCommandResponse> _run(EvtCommandRequest request) async {
-    final bytes = _codec.encodeRequest(request.command, request.content);
+    late final Uint8List bytes;
+    try {
+      bytes = _codec.encodeRequest(request.command, request.content);
+    } catch (error, stackTrace) {
+      _logError(
+        'evt_command_encode_failed',
+        stage: 'request',
+        result: 'failed',
+        fields: _requestFields(
+          request,
+          reason: 'encode_failed',
+          errorType: error.runtimeType.toString(),
+        ),
+      );
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    final packet = EvtPacketLogSummary.fromWireBytes(bytes);
     final expectedCommand =
         request.expectedResponseCommand ?? ((request.command | 0x80) & 0xFF);
     final attempts = request.maxRetries < 0 ? 0 : request.maxRetries;
     Object? lastError;
     for (var retry = 0; retry <= attempts; retry += 1) {
-      _admitWrite(request);
+      final attempt = retry + 1;
+      final stopwatch = Stopwatch();
+      try {
+        _admitWrite(request);
+      } catch (error, stackTrace) {
+        _logError(
+          'evt_command_admission_failed',
+          stage: 'write',
+          result: 'failed',
+          fields: _requestFields(
+            request,
+            attempt: attempt,
+            reason: 'write_admission_rejected',
+            errorType: error.runtimeType.toString(),
+          ),
+        );
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      stopwatch.start();
+      _logInfo(
+        'evt_command_admitted',
+        stage: 'write',
+        result: 'accepted',
+        fields: _requestFields(request, attempt: attempt),
+      );
       final pending = _PendingCommand(
         command: expectedCommand,
         subCommand: request.expectedSubCommand,
@@ -173,13 +333,69 @@ class EvtCommandClient {
       );
       _pending = pending;
       try {
+        _logInfo(
+          'evt_command_transmit_started',
+          stage: 'write',
+          result: 'pending',
+          fields: {
+            ...packet.fields,
+            ..._requestFields(request, attempt: attempt),
+          },
+        );
         await _transport.write(request.writeCharacteristic, bytes);
+        _logInfo(
+          'evt_command_transmit_completed',
+          stage: 'write',
+          result: 'success',
+          elapsed: stopwatch.elapsed,
+          fields: {
+            ...packet.fields,
+            ..._requestFields(request, attempt: attempt),
+          },
+        );
         final frame = await pending.future.timeout(request.timeout);
-        return EvtCommandResponse(frame: frame, attempts: retry + 1);
+        _logInfo(
+          'evt_command_completed',
+          stage: 'response',
+          result: 'completed',
+          elapsed: stopwatch.elapsed,
+          fields: {
+            ..._requestFields(request, attempt: attempt),
+            'actual_command': _commandHex(frame.command),
+          },
+        );
+        return EvtCommandResponse(frame: frame, attempts: attempt);
       } on TimeoutException {
-        lastError = EvtCommandTimeoutException(request.command, retry + 1);
+        lastError = EvtCommandTimeoutException(request.command, attempt);
+        _logWarning(
+          'evt_command_timeout',
+          stage: 'response',
+          result: retry < attempts && _transportError == null
+              ? 'retrying'
+              : 'failed',
+          elapsed: stopwatch.elapsed,
+          fields: _requestFields(
+            request,
+            attempt: attempt,
+            reason: 'response_timeout',
+          ),
+        );
       } catch (error) {
         lastError = error;
+        _logError(
+          'evt_command_error',
+          stage: 'response',
+          result: retry < attempts && _transportError == null
+              ? 'retrying'
+              : 'failed',
+          elapsed: stopwatch.elapsed,
+          fields: _requestFields(
+            request,
+            attempt: attempt,
+            reason: 'command_failed',
+            errorType: error.runtimeType.toString(),
+          ),
+        );
       } finally {
         if (identical(_pending, pending)) {
           _pending = null;
@@ -204,21 +420,97 @@ class EvtCommandClient {
   }
 
   void _onBytes(Uint8List bytes) {
+    final packet = EvtPacketLogSummary.fromWireBytes(bytes);
     final result = _codec.decode(bytes);
     if (!result.isSuccess) {
+      _logWarning(
+        'evt_command_response_decode_failed',
+        stage: 'response',
+        result: 'failed',
+        fields: {
+          ...packet.fields,
+          'event_kind': 'decode_failed',
+          'failure_kind': result.failure?.kind.name ?? 'protocol',
+          'reason': 'decode_failed',
+        },
+      );
       return;
     }
     final frame = result.value!;
     final pending = _pending;
-    if (pending != null && pending.matches(frame)) {
-      pending.accept(frame);
+    final fields = <String, Object?>{
+      ...packet.fields,
+      'actual_command': _commandHex(frame.command),
+      ..._pendingExpectedCommandField(pending),
+    };
+    _logInfo(
+      'evt_command_frame_decoded',
+      stage: 'response',
+      result: 'success',
+      fields: {...fields, 'event_kind': 'frame_decoded'},
+    );
+    _logInfo(
+      'evt_command_response_received',
+      stage: 'response',
+      result: 'accepted',
+      fields: {...fields, 'event_kind': 'response_received'},
+    );
+    bool matches = false;
+    if (pending != null) {
+      try {
+        matches = pending.matches(frame);
+      } catch (error, stackTrace) {
+        _logError(
+          'evt_command_response_match_failed',
+          stage: 'response',
+          result: 'failed',
+          fields: {
+            ...fields,
+            'reason': 'response_matcher_failed',
+            'error_type': error.runtimeType.toString(),
+          },
+        );
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+    }
+    if (matches) {
+      _logInfo(
+        'evt_command_response_matched',
+        stage: 'response',
+        result: 'success',
+        fields: {...fields, 'event_kind': 'acknowledged'},
+      );
+      pending!.accept(frame);
       return;
     }
+    _logInfo(
+      'evt_command_response_unmatched',
+      stage: 'response',
+      result: 'pending',
+      fields: {
+        ...fields,
+        'event_kind': pending == null ? 'unsolicited' : 'unmatched_response',
+        'reason': pending == null
+            ? 'no_pending_command'
+            : 'response_not_expected',
+      },
+    );
     _events.add(frame);
   }
 
   void _onTransportError(Object error, StackTrace stackTrace) {
     _transportError = error;
+    final pending = _pending;
+    _logError(
+      'evt_command_transport_error',
+      stage: 'response',
+      result: 'failed',
+      fields: {
+        ..._pendingExpectedCommandField(pending),
+        'reason': 'response_stream_error',
+        'error_type': error.runtimeType.toString(),
+      },
+    );
     _pending?.completeError(error, stackTrace);
   }
 
@@ -227,13 +519,132 @@ class EvtCommandClient {
       return;
     }
     _closed = true;
+    _logInfo(
+      'evt_command_client_closing',
+      stage: 'idle',
+      result: 'pending',
+      fields: const {'state': 'closing'},
+    );
     _pending?.completeError(StateError('命令客户端已关闭。'));
     await _responseSubscription?.cancel();
     await _events.close();
+    _logInfo(
+      'evt_command_client_closed',
+      stage: 'idle',
+      result: 'completed',
+      fields: const {'state': 'closed'},
+    );
+  }
+
+  Map<String, Object?> _requestFields(
+    EvtCommandRequest request, {
+    Duration? timeout,
+    String? reason,
+    int? attempt,
+    String? errorType,
+  }) {
+    final expectedCommand =
+        request.expectedResponseCommand ?? ((request.command | 0x80) & 0xFF);
+    return <String, Object?>{
+      'command': _commandHex(request.command),
+      'content_length': request.content.length,
+      'expected_command': _commandHex(expectedCommand),
+      'max_retries': request.maxRetries < 0 ? 0 : request.maxRetries,
+      'timeout_ms': (timeout ?? request.timeout).inMilliseconds,
+      ..._optionalField(
+        'sub_command',
+        request.expectedSubCommand == null
+            ? null
+            : _commandHex(request.expectedSubCommand!),
+      ),
+      ..._optionalField('attempt', attempt),
+      ..._optionalField('reason', reason),
+      ..._optionalField('error_type', errorType),
+    };
+  }
+
+  static String _commandHex(int command) {
+    if (command < 0 || command > 0xFF) {
+      return 'out_of_range';
+    }
+    return '0x${command.toRadixString(16).padLeft(2, '0').toUpperCase()}';
+  }
+
+  Map<String, Object?> _pendingExpectedCommandField(_PendingRequest? pending) =>
+      pending == null
+      ? const <String, Object?>{}
+      : <String, Object?>{
+          'expected_command': _commandHex(pending.expectedCommand),
+        };
+
+  static Map<String, Object?> _optionalField(String key, Object? value) =>
+      value == null ? const <String, Object?>{} : <String, Object?>{key: value};
+
+  /// Diagnostics must not become a source of command failures.
+  void _logInfo(
+    String event, {
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) {
+    try {
+      _logger.info(
+        event,
+        stage: stage,
+        result: result,
+        elapsed: elapsed,
+        fields: fields,
+      );
+    } on Object {
+      // Logging is best effort. Command execution retains its original result.
+    }
+  }
+
+  void _logWarning(
+    String event, {
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) {
+    try {
+      _logger.warning(
+        event,
+        stage: stage,
+        result: result,
+        elapsed: elapsed,
+        fields: fields,
+      );
+    } on Object {
+      // Logging is best effort. Command execution retains its original result.
+    }
+  }
+
+  void _logError(
+    String event, {
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) {
+    try {
+      _logger.error(
+        event,
+        stage: stage,
+        result: result,
+        elapsed: elapsed,
+        fields: fields,
+      );
+    } on Object {
+      // Logging is best effort. Command execution retains its original result.
+    }
   }
 }
 
 abstract interface class _PendingRequest {
+  int get expectedCommand;
+
   bool matches(EvtFrame frame);
 
   void accept(EvtFrame frame);
@@ -256,6 +667,9 @@ class _PendingCommand implements _PendingRequest {
   final int? sequenceOffset;
   final EvtResponseMatcher? responseMatcher;
   final Completer<EvtFrame> _completer = Completer<EvtFrame>();
+
+  @override
+  int get expectedCommand => command;
 
   Future<EvtFrame> get future => _completer.future;
 
@@ -315,8 +729,13 @@ class _PendingStreamingCommand implements _PendingRequest {
 
   Future<void> get done => _done.future;
 
+  @override
+  int get expectedCommand => _expectedCommand;
+
   void start() {
-    _armIdleTimeout();
+    if (!_done.isCompleted) {
+      _armIdleTimeout();
+    }
   }
 
   @override

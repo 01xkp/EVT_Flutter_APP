@@ -1,6 +1,7 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' hide DiagnosticLevel;
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:aipin/core/diagnostics/diagnostic_event.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/diagnostics/diagnostic_trace.dart';
 import 'package:aipin/features/device_logs/application/app_log_logger.dart';
@@ -34,27 +35,161 @@ void main() {
     );
 
     expect(messages, hasLength(1));
+    expect(messages.single, startsWith('【AIPIN联调】【蓝牙】【警告】【阶段：蓝牙连接】【动作：连接更新】 '));
     expect(messages.single, contains(' | WARNING | BLE | 8fa2c1 | '));
     expect(messages.single, contains('connection_update'));
     expect(messages.single, contains('state=disconnected'));
     expect(messages.single, isNot(contains('must-not-leak')));
   });
 
-  test('persistent logger forwards events to the shared log store', () {
-    final store = _FakeAppLogStore();
-    PersistentAppLogger(store).error(
-      'connection_update',
-      stage: 'connect',
-      result: 'failed',
-      fields: const {'state': 'connected', 'error': 'must-not-leak'},
+  test('Chinese log prefix uses normalized scope and level labels', () {
+    final diagnostic = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 8),
+      level: DiagnosticLevel.error,
+      scope: 'untrusted-scope',
+      event: 'write_failure',
+      fields: const {'token': 'must-not-leak', 'status': 'failed'},
     );
-    expect(store.entries, hasLength(1));
-    expect(store.entries.single.event, 'connection_update');
-    expect(store.entries.single.scope, 'APP');
-    expect(store.entries.single.fields['state'], 'connected');
-    expect(store.entries.single.fields.containsKey('error'), isFalse);
-    expect(store.entries.single.level.name, 'error');
+
+    final line = diagnostic.formatLine();
+
+    expect(line, startsWith('【AIPIN联调】【应用】【错误】【阶段：未分阶段】【动作：写入失败】 '));
+    expect(
+      line,
+      contains(' | ERROR | APP | - | - | - | write_failure | - | -'),
+    );
+    expect(line, contains('status=failed'));
+    expect(line, isNot(contains('must-not-leak')));
   });
+
+  test('persistent Debug BLE logs retain complete packet hex', () {
+    final store = _FakeAppLogStore();
+
+    PersistentAppLogger(store, scope: 'BLE').info(
+      'notification_received',
+      stage: 'connected',
+      result: 'success',
+      fields: const {'raw_packet_hex': 'ED 04 00 89 01 2E AC', 'bytes': 7},
+    );
+
+    expect(store.entries, hasLength(1));
+    expect(
+      store.entries.single.fields['raw_packet_hex'],
+      'ED 04 00 89 01 2E AC',
+    );
+  });
+
+  test(
+    'Chinese log prefix includes scope, level, stage, and action markers',
+    () {
+      final lifecycle = DiagnosticEvent(
+        timestamp: DateTime.utc(2026, 9, 8),
+        level: DiagnosticLevel.info,
+        scope: 'APP_LIFECYCLE',
+        event: 'app_lifecycle_changed',
+      );
+      final sessionFlow = DiagnosticEvent(
+        timestamp: DateTime.utc(2026, 9, 8),
+        level: DiagnosticLevel.info,
+        scope: 'SESSION_FLOW',
+        event: 'session_open_requested',
+      );
+
+      expect(
+        lifecycle.formatLine(),
+        startsWith('【AIPIN联调】【应用生命周期】【信息】【阶段：未分阶段】【动作：应用生命周期变更】 '),
+      );
+      expect(lifecycle.formatLine(), contains(' | INFO | APP_LIFECYCLE | '));
+      expect(
+        sessionFlow.formatLine(),
+        startsWith('【AIPIN联调】【会话流程】【信息】【阶段：未分阶段】【动作：会话打开请求】 '),
+      );
+      expect(sessionFlow.formatLine(), contains(' | INFO | SESSION_FLOW | '));
+    },
+  );
+
+  test('EVT command logs show the packet direction in Chinese', () {
+    final transmit = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 8),
+      level: DiagnosticLevel.info,
+      scope: 'CMD',
+      stage: 'write',
+      event: 'evt_command_transmit_completed',
+    );
+    final receive = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 8),
+      level: DiagnosticLevel.info,
+      scope: 'CMD',
+      stage: 'response',
+      event: 'evt_command_response_matched',
+    );
+    final timeout = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 8),
+      level: DiagnosticLevel.warning,
+      scope: 'CMD',
+      stage: 'response',
+      event: 'evt_command_timeout',
+    );
+
+    expect(transmit.formatLine(), startsWith('【AIPIN联调】【协议】【发送：App到设备】'));
+    expect(receive.formatLine(), startsWith('【AIPIN联调】【协议】【接收：设备到App】'));
+    expect(timeout.formatLine(), startsWith('【AIPIN联调】【协议】【等待：设备响应】'));
+  });
+
+  test('physical BLE packet logs show the packet direction in Chinese', () {
+    final write = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 8),
+      level: DiagnosticLevel.info,
+      scope: 'BLE',
+      stage: 'write',
+      event: 'write_requested',
+    );
+    final notification = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 8),
+      level: DiagnosticLevel.info,
+      scope: 'BLE',
+      stage: 'connected',
+      event: 'notification_received',
+    );
+
+    expect(write.formatLine(), startsWith('【AIPIN联调】【蓝牙】【发送：App到设备】'));
+    expect(notification.formatLine(), startsWith('【AIPIN联调】【蓝牙】【接收：设备到App】'));
+  });
+
+  test(
+    'persistent logger forwards its console line and event to the shared log store',
+    () {
+      final store = _FakeAppLogStore();
+      final messages = <String>[];
+      final previous = debugPrint;
+      debugPrint = (message, {wrapWidth}) {
+        if (message != null) {
+          messages.add(message);
+        }
+      };
+      addTearDown(() => debugPrint = previous);
+
+      PersistentAppLogger(store).error(
+        'connection_update',
+        stage: 'connect',
+        result: 'failed',
+        fields: const {'state': 'connected', 'error': 'must-not-leak'},
+      );
+      expect(store.entries, hasLength(1));
+      expect(store.entries.single.event, 'connection_update');
+      expect(store.entries.single.scope, 'APP');
+      expect(store.entries.single.fields['state'], 'connected');
+      expect(store.entries.single.fields.containsKey('error'), isFalse);
+      expect(store.entries.single.level.name, 'error');
+      expect(messages, hasLength(1));
+      expect(
+        messages.single,
+        startsWith('【AIPIN联调】【应用】【错误】【阶段：蓝牙连接】【动作：连接更新】 '),
+      );
+      expect(messages.single, contains('connection_update'));
+      expect(messages.single, isNot(contains('must-not-leak')));
+    },
+  );
 }
 
 class _FakeAppLogStore implements AppLogStore {

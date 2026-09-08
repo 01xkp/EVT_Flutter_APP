@@ -159,9 +159,20 @@ class PluginController {
         call: MethodCall,
         result: Result,
     ) {
-        result.success(null)
         val connectDeviceMessage = pb.DisconnectFromDeviceRequest.parseFrom(call.arguments as ByteArray)
         deviceConnectionHandler.disconnectDevice(connectDeviceMessage.deviceId)
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe(
+                { result.success(null) },
+                { error ->
+                    result.error(
+                        "disconnect_failed",
+                        error.message ?: "Failed to disconnect device",
+                        null,
+                    )
+                },
+            )
+            .discard()
     }
 
     private fun readCharacteristic(

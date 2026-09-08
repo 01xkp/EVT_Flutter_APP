@@ -3,6 +3,7 @@ package com.signify.hue.flutterreactiveble.channelhandlers
 import com.signify.hue.flutterreactiveble.converters.ProtobufMessageConverter
 import com.signify.hue.flutterreactiveble.utils.Duration
 import io.flutter.plugin.common.EventChannel
+import io.reactivex.Completable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
 import java.util.concurrent.TimeUnit
@@ -36,9 +37,7 @@ class DeviceConnectionHandler(private val bleClient: com.signify.hue.flutterreac
         )
     }
 
-    fun disconnectDevice(deviceId: String) {
-        bleClient.disconnectDevice(deviceId)
-    }
+    fun disconnectDevice(deviceId: String): Completable = bleClient.disconnectDevice(deviceId)
 
     fun disconnectAll() {
         connectDeviceSink = null

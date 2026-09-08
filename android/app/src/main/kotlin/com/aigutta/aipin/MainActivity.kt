@@ -129,7 +129,7 @@ class MainActivity : FlutterActivity() {
 
     private fun mirrorCanonicalLogFile(sourcePath: String, filename: String): Map<String, Any?> {
         if (!BuildConfig.DEBUG) return mirrorFailure("debug_only")
-        if (!filename.matches(Regex("aipin-\\d{4}-\\d{2}-\\d{2}\\.log"))) {
+        if (!filename.matches(Regex("aipin-\\d{4}-\\d{2}-\\d{2}\\.log(?:\\.\\d+)?"))) {
             return mirrorFailure("invalid_filename")
         }
         val source = File(sourcePath)

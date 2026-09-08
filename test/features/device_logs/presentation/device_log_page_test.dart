@@ -1,6 +1,6 @@
 import 'dart:async';
-
 import 'package:aipin/features/device_logs/data/file_app_log_store.dart';
+import 'package:aipin/features/device_logs/domain/app_log_entry.dart';
 import 'package:aipin/features/device_logs/domain/public_diagnostic_log_sink.dart';
 import 'package:aipin/features/device_logs/presentation/device_log_page.dart';
 import 'package:flutter/material.dart';
@@ -8,14 +8,14 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets('shows live entries, path and view controls', (tester) async {
-    final store = FileAppLogStore(enabled: true);
+    final store = _StubLogStore();
     addTearDown(store.dispose);
     await tester.pumpWidget(MaterialApp(home: DeviceLogPage(store: store)));
 
     expect(find.text('实时日志'), findsOneWidget);
     expect(find.byTooltip('暂停跟随'), findsOneWidget);
     expect(find.byTooltip('导出日志'), findsOneWidget);
-    store.info('live_event');
+    store.emit('live_event');
     await tester.pump();
     expect(find.textContaining('live_event'), findsOneWidget);
   });
@@ -69,6 +69,21 @@ class _StubLogStore extends FileAppLogStore {
 
   final PublicDiagnosticLogMirrorStatus? mirror;
   final String? exportPathValue;
+  final List<AppLogEntry> _liveEntries = <AppLogEntry>[];
+
+  @override
+  List<AppLogEntry> get entries => List.unmodifiable(_liveEntries);
+
+  void emit(String event) {
+    _liveEntries.add(
+      AppLogEntry(
+        timestamp: DateTime.utc(2026, 9, 8),
+        scope: 'APP',
+        event: event,
+      ),
+    );
+    notifyListeners();
+  }
 
   @override
   PublicDiagnosticLogMirrorStatus? get publicMirrorStatus => mirror;

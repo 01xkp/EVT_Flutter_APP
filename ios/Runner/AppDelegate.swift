@@ -141,7 +141,7 @@ import UIKit
 
     private static func isValidDailyLogFilename(_ filename: String) -> Bool {
       filename.range(
-        of: "^aipin-[0-9]{4}-[0-9]{2}-[0-9]{2}\\.log$",
+          of: "^aipin-[0-9]{4}-[0-9]{2}-[0-9]{2}\\.log(?:\\.[0-9]+)?$",
         options: .regularExpression
       ) != nil
     }

@@ -18,7 +18,6 @@ class DiscoveryPage extends StatefulWidget {
     this.controller,
     this.onConnect,
     this.onSettings,
-    this.onOpenSystemSettings,
     this.bluetoothEnableGateway = const PlatformBluetoothEnableGateway(),
     this.onStartScan,
     this.onStopScan,
@@ -28,10 +27,6 @@ class DiscoveryPage extends StatefulWidget {
   final Future<bool> Function(DeviceCandidate candidate)? onConnect;
   final VoidCallback? onSettings;
 
-  /// iOS cannot programmatically enable the Bluetooth adapter. The shell
-  /// supplies the platform-supported App Settings handoff so a user can check
-  /// the Bluetooth permission before returning to retry the scan.
-  final Future<bool> Function()? onOpenSystemSettings;
   final BluetoothEnableGateway bluetoothEnableGateway;
 
   /// Lets the shell prepare an explicit reconnect cycle before a user-driven
@@ -205,7 +200,6 @@ class _DiscoveryPageState extends State<DiscoveryPage>
     }
     _isBluetoothPromptVisible = true;
     final canRequestEnable = widget.bluetoothEnableGateway.canRequestEnable;
-    final canOpenSystemSettings = widget.onOpenSystemSettings != null;
     final confirmed = await AppConfirmationSheet.show(
       context,
       title: canRequestEnable ? '蓝牙未开启？' : '请开启蓝牙',
@@ -213,23 +207,19 @@ class _DiscoveryPageState extends State<DiscoveryPage>
           ? '开启蓝牙后即可查找附近设备。'
           : 'iPhone 不允许 App 直接开启蓝牙。请在控制中心或系统设置中打开蓝牙后返回。',
       cancelLabel: '暂不',
-      confirmLabel: canRequestEnable
-          ? '开启蓝牙'
-          : canOpenSystemSettings
-          ? '打开设置'
-          : '我已开启',
+      confirmLabel: canRequestEnable ? '开启蓝牙' : '我已开启',
     );
     if (!mounted || !confirmed) {
       _isBluetoothPromptVisible = false;
       return;
     }
     if (!canRequestEnable) {
-      _retryScanWhenResumed = true;
+      // The user has returned from Control Center or Settings and explicitly
+      // confirmed that Bluetooth is on. Retry now instead of waiting for a
+      // future lifecycle event that may never arrive.
+      _retryScanWhenResumed = false;
       _isBluetoothPromptVisible = false;
-      final openSystemSettings = widget.onOpenSystemSettings;
-      if (openSystemSettings != null) {
-        await openSystemSettings();
-      }
+      await _startScanning();
       return;
     }
     final result = await widget.bluetoothEnableGateway.requestEnable();

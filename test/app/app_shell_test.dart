@@ -95,6 +95,56 @@ void main() {
   );
 
   testWidgets(
+    'automatically reconnects a remembered device while EVT advertisement filtering is relaxed',
+    (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final transport = FakeBleTransport.withGattReadyProfile();
+      final appLogStore = FileAppLogStore(enabled: false);
+      final candidate = FakeBleTransport.matchingCandidate.copyWith(
+        serviceUuids: const <String>[],
+      );
+      final history = _MemoryConnectionHistory(<RememberedDevice>[
+        RememberedDevice(
+          connectionId: candidate.connectionId,
+          physicalMacAddress: candidate.physicalDeviceId,
+          displayName: candidate.name,
+          lastConnectedAt: DateTime.utc(2026, 9, 4, 10),
+        ),
+      ]);
+      addTearDown(transport.dispose);
+      addTearDown(appLogStore.dispose);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            onboardingStoreProvider.overrideWithValue(
+              FakeOnboardingStore(completed: true),
+            ),
+            bleTransportProvider.overrideWithValue(transport),
+            deviceConnectionHistoryRepositoryProvider.overrideWithValue(
+              history,
+            ),
+            appLogStoreProvider.overrideWithValue(appLogStore),
+          ],
+          child: const EvtApp(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      transport.emitCandidate(candidate);
+      await tester.pump();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 350)),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      expect(transport.discoveryRequests, <String>[candidate.connectionId]);
+    },
+  );
+
+  testWidgets(
     'lists a named non-EVT advertisement for a manual connection attempt',
     (tester) async {
       SharedPreferences.setMockInitialValues(<String, Object>{});

@@ -166,6 +166,33 @@ void main() {
       1,
     );
 
+    expect(
+      () => DeviceProtocolRepository.decodeDeviceInfo(
+        EvtFrame(
+          command: 0x81,
+          // V1.5 defines AudioStream as 0=off and non-zero=on. Do not
+          // reject a firmware-specific non-zero enabled value.
+          content: Uint8List.fromList(_deviceInfoContent(audioStream: 2)),
+        ),
+      ),
+      returnsNormally,
+    );
+
+    final activeWithAlternateRecordParameters = _deviceInfoContent(
+      recordStatus: 2,
+      recordType: 1,
+      denoise: 1,
+    );
+    expect(
+      DeviceProtocolRepository.decodeDeviceInfo(
+        EvtFrame(
+          command: 0x81,
+          content: Uint8List.fromList(activeWithAlternateRecordParameters),
+        ),
+      ).recordStatus,
+      2,
+    );
+
     final compatibilityLayout = _deviceInfoContent(
       reservedFeatureStatus: 1,
       recordStatus: 2,
@@ -196,6 +223,14 @@ void main() {
     final invalidBuzzer = _deviceInfoContent()..[86] = 2;
     final invalidPowerOff = _deviceInfoContent()..[87] = 2;
     final invalidChargingMode = _deviceInfoContent()..[88] = 2;
+    final invalidActiveRecordType = _deviceInfoContent(
+      recordStatus: 1,
+      recordType: 0,
+    );
+    final invalidActiveDenoise = _deviceInfoContent(
+      recordStatus: 1,
+      denoise: 2,
+    );
 
     for (final content in [
       extraByte,
@@ -206,6 +241,8 @@ void main() {
       invalidBuzzer,
       invalidPowerOff,
       invalidChargingMode,
+      invalidActiveRecordType,
+      invalidActiveDenoise,
     ]) {
       expect(
         () => DeviceProtocolRepository.decodeDeviceInfo(
@@ -303,7 +340,7 @@ void main() {
     }
   });
 
-  test('validates 0x87 state-dependent lengths and enums', () {
+  test('validates 0x87 state-dependent lengths and active-record enums', () {
     expect(
       () => DeviceProtocolRepository.validateRecordState(
         EvtFrame(command: 0x87, content: Uint8List.fromList([0])),
@@ -319,12 +356,23 @@ void main() {
       ),
       returnsNormally,
     );
+    expect(
+      () => DeviceProtocolRepository.validateRecordState(
+        EvtFrame(
+          command: 0x87,
+          content: Uint8List.fromList([2, 8, 7, 0, 0, 1, 1, 1]),
+        ),
+      ),
+      returnsNormally,
+    );
 
     for (final content in [
       <int>[],
       <int>[4],
       <int>[0, 0],
       <int>[1],
+      <int>[1, 8, 7, 0, 0, 1, 0, 0],
+      <int>[1, 8, 7, 0, 0, 1, 2, 2],
     ]) {
       expect(
         () => DeviceProtocolRepository.validateRecordState(
@@ -764,7 +812,7 @@ void main() {
     },
   );
 
-  test('rejects a malformed 0x87 record-action response', () async {
+  test('ignores a malformed matching 0x87 record-state event', () async {
     final transport = FakeBleTransport();
     final client = EvtCommandClient(
       transport: transport,
@@ -780,12 +828,56 @@ void main() {
     );
 
     final operation = repository.setRecordAction(1);
+    var completed = false;
+    operation.then((_) => completed = true);
     await Future<void>.delayed(Duration.zero);
-    transport.emitSubscriptionBytes(codec.encodeRequest(0x87, const [1]));
+    transport.emitSubscriptionBytes(
+      codec.encodeRequest(0x87, const [1, 8, 7, 0, 0, 1, 9, 0]),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(completed, isFalse);
 
-    await expectLater(operation, throwsA(isA<FormatException>()));
+    transport.emitSubscriptionBytes(
+      codec.encodeRequest(0x87, const [1, 8, 7, 0, 0, 1, 2, 0]),
+    );
+    expect((await operation).content.first, 1);
     await client.close();
   });
+
+  test(
+    'waits for the requested 0x87 state instead of an unsolicited event',
+    () async {
+      final transport = FakeBleTransport();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
+      final repository = DeviceProtocolRepository(
+        deviceId: 'device-1',
+        profile: _profile,
+        transport: transport,
+        commands: client,
+        codec: codec,
+      );
+      final operation = repository.setRecordAction(1);
+      var completed = false;
+      operation.then((_) => completed = true);
+
+      await Future<void>.delayed(Duration.zero);
+      transport.emitSubscriptionBytes(codec.encodeRequest(0x87, const [0]));
+      await Future<void>.delayed(Duration.zero);
+      expect(completed, isFalse);
+
+      transport.emitSubscriptionBytes(
+        codec.encodeRequest(0x87, const [1, 8, 7, 0, 0, 1, 2, 0]),
+      );
+      final response = await operation;
+      expect(response.content.first, 1);
+      expect(completed, isTrue);
+      await client.close();
+    },
+  );
 }
 
 final _profile = DeviceProfile(
@@ -832,6 +924,9 @@ BleEndpoint _endpoint(
 List<int> _deviceInfoContent({
   int reservedFeatureStatus = 0,
   int recordStatus = 0,
+  int recordType = 2,
+  int denoise = 0,
+  int audioStream = 0,
 }) {
   final content = <int>[
     3,
@@ -859,8 +954,8 @@ List<int> _deviceInfoContent({
   }
   content.add(recordStatus);
   if (recordStatus != 0) {
-    content.addAll(const [8, 7, 0, 0, 1, 2, 0]);
+    content.addAll([8, 7, 0, 0, 1, recordType, denoise]);
   }
-  content.addAll(const [80, 1, 0, 0, 0, 0]);
+  content.addAll([80, 1, 0, 0, 0, audioStream]);
   return content;
 }

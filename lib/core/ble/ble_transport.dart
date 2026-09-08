@@ -8,6 +8,15 @@ abstract interface class BleTransport {
   Stream<DeviceCandidate> scan();
   Stream<BleConnectionState> connect(String deviceId);
   Future<List<BleService>> discoverServices(String deviceId);
+
+  /// Best-effort recovery for a connected device whose GATT attribute cache
+  /// may be stale after a firmware-side service layout update.
+  ///
+  /// Android can request a cache refresh through the platform plugin. iOS has
+  /// no equivalent public API, so callers must treat [unsupported] exactly as
+  /// a normal reconnect requirement. A completed request never means that the
+  /// current GATT session remains usable.
+  Future<BleGattCacheClearResult> clearGattCache(String deviceId);
   Future<int> requestMtu(String deviceId, {required int preferredMtu});
   Stream<Uint8List> subscribe(BleCharacteristic characteristic);
 
@@ -25,6 +34,8 @@ abstract interface class BleTransport {
   );
   Future<void> disconnect(String deviceId);
 }
+
+enum BleGattCacheClearResult { cleared, unsupported, failed }
 
 enum BleTransportIssue { bluetoothOff }
 

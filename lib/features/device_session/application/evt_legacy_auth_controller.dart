@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_session/domain/device_auth_state.dart';
 import 'package:aipin/features/device_session/domain/device_permission.dart';
 import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
@@ -15,15 +16,19 @@ class EvtLegacyAuthController extends ChangeNotifier
     this.authenticationWindow = const Duration(seconds: 60),
     Timer Function(Duration delay, void Function() callback)?
     authenticationExpiryTimer,
+    SafeAppLogger? logger,
   }) : _authenticationExpiryTimerFactory =
-           authenticationExpiryTimer ?? Timer.new;
+           authenticationExpiryTimer ?? Timer.new,
+       _logger = logger ?? const DebugSafeAppLogger(scope: 'AUTH');
 
   final Duration authenticationWindow;
   final Timer Function(Duration delay, void Function() callback)
   _authenticationExpiryTimerFactory;
+  final SafeAppLogger _logger;
   DeviceAuthState _state = DeviceAuthState.unknown;
   Object? _error;
   Timer? _authenticationExpiryTimer;
+  EvtLegacySecurityAction? _activeAction;
 
   DeviceAuthState get state => _state;
   Object? get error => _error;
@@ -82,30 +87,73 @@ class EvtLegacyAuthController extends ChangeNotifier
     required bool completesAuthenticated,
   }) async {
     if (_state == DeviceAuthState.authenticating) {
+      _logWarning(
+        'legacy_authentication_rejected_busy',
+        action: action,
+        result: 'failed',
+      );
       throw const EvtLegacyAuthenticationException('认证操作正在进行。');
     }
+    _logInfo(
+      'legacy_authentication_requested',
+      action: action,
+      result: 'pending',
+      fields: {'length': securityCode.length, 'state': _state.name},
+    );
     _cancelAuthenticationExpiryTimer();
+    _activeAction = action;
     _state = DeviceAuthState.authenticating;
     _error = null;
     notifyListeners();
+    _logInfo(
+      'legacy_authentication_started',
+      action: action,
+      result: 'pending',
+      fields: {'state': _state.name},
+    );
     try {
+      _logInfo(
+        'legacy_authentication_protocol_dispatch',
+        action: action,
+        result: 'pending',
+      );
       final succeeded = await gateway.executeEvtLegacySecurity(
         EvtLegacySecurityRequest(action: action, securityCode: securityCode),
       );
       if (!succeeded) {
+        _logWarning(
+          'legacy_authentication_device_rejected',
+          action: action,
+          result: 'failed',
+        );
         throw const EvtLegacyAuthenticationException('设备拒绝认证码。');
       }
       if (completesAuthenticated) {
-        _markAuthenticated();
+        _markAuthenticated(action);
       } else {
         _state = DeviceAuthState.unbound;
       }
       notifyListeners();
+      _logInfo(
+        'legacy_authentication_completed',
+        action: action,
+        result: 'success',
+        fields: {'state': _state.name},
+      );
     } catch (error) {
       _cancelAuthenticationExpiryTimer();
       _state = DeviceAuthState.failed;
       _error = error;
       notifyListeners();
+      _logWarning(
+        'legacy_authentication_failed',
+        action: action,
+        result: 'failed',
+        fields: {
+          'error_type': error.runtimeType.toString(),
+          'state': _state.name,
+        },
+      );
       rethrow;
     }
   }
@@ -118,9 +166,16 @@ class EvtLegacyAuthController extends ChangeNotifier
     _state = DeviceAuthState.unbound;
     _error = null;
     notifyListeners();
+    _logInfo(
+      'legacy_authentication_revoked_connection_loss',
+      action: _activeAction,
+      result: 'cancelled',
+      fields: {'state': _state.name},
+    );
+    _activeAction = null;
   }
 
-  void _markAuthenticated() {
+  void _markAuthenticated(EvtLegacySecurityAction action) {
     _state = DeviceAuthState.authenticated;
     if (authenticationWindow <= Duration.zero) {
       _expireAuthentication();
@@ -129,6 +184,15 @@ class EvtLegacyAuthController extends ChangeNotifier
     _authenticationExpiryTimer = _authenticationExpiryTimerFactory(
       authenticationWindow,
       _expireAuthentication,
+    );
+    _logInfo(
+      'legacy_authentication_window_started',
+      action: action,
+      result: 'success',
+      fields: {
+        'state': _state.name,
+        'duration_ms': authenticationWindow.inMilliseconds,
+      },
     );
   }
 
@@ -140,11 +204,95 @@ class EvtLegacyAuthController extends ChangeNotifier
     _state = DeviceAuthState.unbound;
     _error = null;
     notifyListeners();
+    _logWarning(
+      'legacy_authentication_expired',
+      action: _activeAction,
+      result: 'cancelled',
+      fields: {'state': _state.name},
+    );
+    _activeAction = null;
   }
 
   void _cancelAuthenticationExpiryTimer() {
-    _authenticationExpiryTimer?.cancel();
+    final activeTimer = _authenticationExpiryTimer;
+    activeTimer?.cancel();
     _authenticationExpiryTimer = null;
+    if (activeTimer != null) {
+      _logInfo(
+        'legacy_authentication_window_cancelled',
+        action: _activeAction,
+        result: 'cancelled',
+        fields: {'state': _state.name},
+      );
+    }
+  }
+
+  void _logInfo(
+    String event, {
+    EvtLegacySecurityAction? action,
+    String? result,
+    Map<String, Object?> fields = const {},
+  }) {
+    _log(
+      event,
+      level: _AuthLogLevel.info,
+      action: action,
+      result: result,
+      fields: fields,
+    );
+  }
+
+  void _logWarning(
+    String event, {
+    EvtLegacySecurityAction? action,
+    String? result,
+    Map<String, Object?> fields = const {},
+  }) {
+    _log(
+      event,
+      level: _AuthLogLevel.warning,
+      action: action,
+      result: result,
+      fields: fields,
+    );
+  }
+
+  void _log(
+    String event, {
+    required _AuthLogLevel level,
+    EvtLegacySecurityAction? action,
+    String? result,
+    required Map<String, Object?> fields,
+  }) {
+    final actionFields = <String, Object?>{
+      if (action != null) 'action': action.name,
+      ...fields,
+    };
+    final operation = action == EvtLegacySecurityAction.bind
+        ? 'device_bind'
+        : 'device_authenticate';
+    try {
+      switch (level) {
+        case _AuthLogLevel.info:
+          _logger.info(
+            event,
+            operation: operation,
+            stage: 'challenge',
+            result: result,
+            fields: actionFields,
+          );
+        case _AuthLogLevel.warning:
+          _logger.warning(
+            event,
+            operation: operation,
+            stage: 'challenge',
+            result: result,
+            fields: actionFields,
+          );
+      }
+    } catch (_) {
+      // Diagnostics must never interrupt an authentication exchange.
+    }
   }
 
   @override
@@ -153,6 +301,8 @@ class EvtLegacyAuthController extends ChangeNotifier
     super.dispose();
   }
 }
+
+enum _AuthLogLevel { info, warning }
 
 class EvtLegacyAuthenticationException implements Exception {
   const EvtLegacyAuthenticationException(this.message);

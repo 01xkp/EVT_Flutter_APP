@@ -133,7 +133,7 @@
         <table>
           <thead><tr><th>功能</th><th>App 入口</th><th>前置条件</th><th>结果</th></tr></thead>
           <tbody>
-            <tr><td>扫描设备</td><td>首页设备卡片 → 连接设备</td><td>系统蓝牙开启，附近设备权限可用</td><td>当前实时显示所有名称非空的 BLE 广播；严格 EVT 身份检查保留给自动回连</td></tr>
+            <tr><td>扫描设备</td><td>首页设备卡片 → 连接设备</td><td>系统蓝牙开启，附近设备权限可用</td><td>当前实时显示所有名称非空的 BLE 广播；连接后再严格校验 EVT GATT 合约</td></tr>
             <tr><td>连接设备</td><td>选中设备 → 连接设备</td><td>名称非空；连接后九个必需 EVT 特征均有效</td><td>连接、服务发现、校验 GATT 合约并订阅必需 EVT 通道；有 <code>FF11</code> 时追加可选订阅</td></tr>
             <tr><td>认证设备</td><td>设备详情 → 认证设备</td><td>九个必需 EVT 特征和 CCC 均已就绪</td><td>获得 60 秒状态、配置和文件权限</td></tr>
             <tr><td>首次绑定</td><td>设备详情 → 首次绑定设备</td><td>设备接受初始认证码</td><td>向设备写入新的六字节认证码</td></tr>
@@ -150,7 +150,7 @@
     </section>
 
     <section id="scan">
-      <div class="section-head"><h2>扫描附近设备</h2><p>扫描只负责发现；真正连接前还会校验设备身份数据。</p></div>
+      <div class="section-head"><h2>扫描附近设备</h2><p>扫描只负责发现；用户主动连接后通过 EVT GATT 合约校验设备是否可联调。</p></div>
       <article class="card feature">
         <div class="feature-title"><h3>操作流程</h3><span class="status ok">已开放</span></div>
         <div class="feature-body">
@@ -170,8 +170,8 @@
               <li>相同连接 ID 只保留一条，后续广播更新 RSSI 和最后出现时间。</li>
               <li>列表按 RSSI 从强到弱排序。</li>
               <li>约 5 秒未收到新广播的设备从列表移除。</li>
-              <li>当前 EVT 调试构建只要求名称非空即可展示并允许手动连接；没有名称的设备不显示。</li>
-              <li>手动连接后才校验九个必需 EVT GATT 特征及属性；不符合 GATT 合约的设备不会进入认证。<code>AIPIN_XXXX</code>、<code>A3 89 + 6B</code>、<code>AF30</code> 仍是自动回连的严格身份合同。</li>
+              <li>当前 EVT 调试构建的手动扫描不以名称格式、厂商数据和服务 UUID 三要素作为准入条件；名称非空即可展示并允许手动连接。</li>
+              <li>手动连接后才校验九个必需 EVT GATT 特征及属性；不符合 GATT 合约的设备不会进入认证。自动回连也不要求扫描结果同时具备三要素，只匹配本地已记录的同一设备，优先用 <code>A3 89 + 6B</code> 中的物理地址，缺失时回退平台连接 ID。</li>
             </ul>
           </div>
         </div>
@@ -391,14 +391,14 @@
             <li>设备详情右上角点击“实时日志”。</li>
             <li>支持自动跟随、暂停跟随、清空当前视图。</li>
             <li>记录扫描、连接状态、服务发现、订阅、收发命令、认证、状态读取、文件导入、断连和回连。</li>
-            <li>日志会过滤音频正文、转写正文、完整 BLE 原始载荷和敏感路径。</li>
+            <li>当前 EVT Debug 包在 <code>raw_packet_hex</code> 中保留完整 BLE 原始收发字节，可能包含认证码、文件名和音频数据；仅可用于受控联调，不得对外分享。</li>
           </ul>
         </article>
         <article class="card">
           <span class="status ok">Android Debug 文件</span>
           <h3>日志位置</h3>
           <pre><code>Download/AIPIN/logs/aipin-YYYY-MM-DD.log</code></pre>
-          <p>主日志在 App 私有 Support 目录的 <code>logs</code> 下；单文件约 5 MB 自动轮转，最多保留 7 个文件。Android Debug 成功镜像后可从公共下载目录取得文件。</p>
+          <p>主日志在 App 私有 Support 目录的 <code>logs</code> 下；单文件约 20 MB 自动轮转，最多保留 8 个文件。文件导入中的大量数据包最多每 200 ms 批量落盘，公共下载目录最多每 10 秒同步一次；导出、关闭和退出会强制写完并同步。Android Debug 成功镜像后可从公共下载目录取得文件。</p>
         </article>
       </div>
       <div class="notice warn" style="margin-top:16px">
@@ -438,7 +438,7 @@
         <table>
           <thead><tr><th>问题</th><th>App 当前处理</th><th>联调先检查</th></tr></thead>
           <tbody>
-            <tr><td>扫描不到设备</td><td>不显示无名称设备；有名称设备可手动尝试连接，之后由 GATT 合约决定是否可用。</td><td>蓝牙、权限、设备是否提供本地名称；自动回连再检查名称、<code>A3 89</code> 厂商数据和 6B 地址。</td></tr>
+            <tr><td>扫描不到设备</td><td>不显示无名称设备；有名称设备可手动尝试连接，之后由 GATT 合约决定是否可用。</td><td>蓝牙、权限、设备是否提供本地名称；自动回连只匹配本地记录的同一设备，优先用 <code>A3 89</code> 厂商数据中的 6B 地址，缺失时回退平台连接 ID。</td></tr>
             <tr><td>连接后无法认证</td><td>任一必需 EVT 端点缺失、属性不符或 CCC 订阅失败时中断；<code>FF11</code> 不阻断认证。</td><td>九个必需 GATT 特征的属性、CCC、系统配对/加密状态、<code>0x09</code> 和 <code>0x89</code> 抓包。</td></tr>
             <tr><td>认证后功能不可点</td><td>60 秒授权到期或连接中断时锁定功能。</td><td>认证时间、是否断连和完整 EVT GATT 合同是否仍保持有效。</td></tr>
             <tr><td>文件导入失败</td><td>offset 不连续、长度越界、无 EOF 或 15 秒无下一帧时失败。</td><td>文件列表、FF13 通知顺序、offset、数据长度和零长度 EOF。</td></tr>

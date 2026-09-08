@@ -34,6 +34,22 @@ import java.util.concurrent.TimeUnit
 import kotlin.collections.component1
 import kotlin.collections.component2
 
+/**
+ * EVT response characteristics use indications for request/result ordering.
+ *
+ * Some firmware revisions expose both the Notify and Indicate property bits.
+ * RxAndroidBle requires the App to choose one CCC value; most EVT response
+ * characteristics use Indicate, while the V1.5 FF13 file stream must use
+ * Notify even when a firmware advertises both bits.
+ */
+@VisibleForTesting
+internal fun shouldPreferIndication(characteristicId: UUID, properties: Int): Boolean =
+    characteristicId != EVT_FILE_TRANSFER_CHARACTERISTIC_UUID &&
+        (properties and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
+
+private val EVT_FILE_TRANSFER_CHARACTERISTIC_UUID: UUID =
+    UUID.fromString("0000ff13-1212-efde-1523-785feabcd123")
+
 @Suppress("TooManyFunctions")
 open class ReactiveBleClient(private val context: Context) : BleClient {
     private val connectionQueue = ConnectionQueue()
@@ -145,13 +161,25 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
         )
     }
 
-    override fun disconnectDevice(deviceId: String) {
-        activeConnections[deviceId]?.disconnectDevice(deviceId)
-        activeConnections.remove(deviceId)
+    override fun disconnectDevice(deviceId: String): Completable {
+        val connector = activeConnections[deviceId] ?: return Completable.complete()
+        return connector.disconnectDevice(deviceId)
+            .doOnComplete {
+                // A later connect may have installed a new connector for the
+                // same device while an earlier cleanup completed. Only remove
+                // the connector this operation actually terminated.
+                if (activeConnections[deviceId] === connector) {
+                    activeConnections.remove(deviceId)
+                }
+            }
     }
 
     override fun disconnectAllDevices() {
-        activeConnections.forEach { (device, connector) -> connector.disconnectDevice(device) }
+        val connectors = activeConnections.toMap()
+        activeConnections.clear()
+        connectors.forEach { (device, connector) ->
+            connector.disconnectDevice(device).subscribe()
+        }
         allConnections.dispose()
     }
 
@@ -349,13 +377,16 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
                                 NotificationSetupMode.DEFAULT
                             }
 
-                        if ((characteristic.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY) > 0) {
-                            deviceConnection.rxConnection.setupNotification(
+                        if (shouldPreferIndication(characteristic.uuid, characteristic.properties)) {
+                            deviceConnection.rxConnection.setupIndication(
                                 characteristic,
                                 mode,
                             )
                         } else {
-                            deviceConnection.rxConnection.setupIndication(characteristic, mode)
+                            deviceConnection.rxConnection.setupNotification(
+                                characteristic,
+                                mode,
+                            )
                         }
                     }
                 }

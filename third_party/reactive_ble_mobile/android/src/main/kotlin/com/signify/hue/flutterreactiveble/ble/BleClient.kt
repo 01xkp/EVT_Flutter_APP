@@ -27,7 +27,14 @@ interface BleClient {
         timeout: Duration,
     )
 
-    fun disconnectDevice(deviceId: String)
+    /**
+     * Completes only after the native connection has actually been released.
+     *
+     * Android can require a short delay before disconnecting a freshly
+     * established GATT link. Propagating that completion to Dart prevents a
+     * reconnect for the same device from receiving an old disconnected event.
+     */
+    fun disconnectDevice(deviceId: String): Completable
 
     fun disconnectAllDevices()
 

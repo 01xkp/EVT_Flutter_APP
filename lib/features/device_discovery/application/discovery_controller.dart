@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/diagnostics/evt_failure.dart';
+import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_discovery/application/discovery_state.dart';
 import 'package:aipin/features/device_discovery/domain/advertisement_filter.dart';
 import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
@@ -11,16 +12,18 @@ class DiscoveryController extends ChangeNotifier {
   DiscoveryController(
     this._transport,
     this._filter, {
+    SafeAppLogger? logger,
     this.filterByV15Advertisement = true,
     this.staleDeviceTimeout = _defaultStaleDeviceTimeout,
     this.expiryCheckInterval = _defaultExpiryCheckInterval,
-  });
+  }) : _logger = logger ?? const DebugSafeAppLogger(scope: 'BLE');
 
   static const _defaultStaleDeviceTimeout = Duration(seconds: 5);
   static const _defaultExpiryCheckInterval = Duration(seconds: 1);
 
   final BleTransport _transport;
   final AdvertisementFilter _filter;
+  final SafeAppLogger _logger;
   final bool filterByV15Advertisement;
   final Duration staleDeviceTimeout;
   final Duration expiryCheckInterval;
@@ -35,10 +38,36 @@ class DiscoveryController extends ChangeNotifier {
   DiscoveryState get state => _state;
 
   void start() {
-    if (_isDisposed || _state.isScanning) {
+    if (_isDisposed) {
+      _logWarning(
+        'scan_start_ignored',
+        reason: '扫描请求已忽略：发现控制器已经释放。',
+        stage: 'idle',
+        result: 'cancelled',
+      );
+      return;
+    }
+    if (_state.isScanning) {
+      _logInfo(
+        'scan_start_ignored',
+        reason: '扫描请求已忽略：当前扫描任务仍在运行。',
+        stage: 'scanning',
+        result: 'pending',
+        fields: {
+          'action': 'already_scanning',
+          'length': _state.candidates.length,
+        },
+      );
       return;
     }
     final generation = ++_scanGeneration;
+    _logInfo(
+      'scan_start_requested',
+      reason: '收到设备扫描请求，准备清空旧结果并订阅系统蓝牙扫描流。',
+      stage: 'scanning',
+      result: 'pending',
+      fields: {'action': 'start', 'length': _state.candidates.length},
+    );
     _state = _state.copyWith(
       isScanning: true,
       candidates: const [],
@@ -49,27 +78,36 @@ class DiscoveryController extends ChangeNotifier {
     _advertisementFragments.clear();
     notifyListeners();
     _startExpiryTimer(generation);
-    final subscription = _transport.scan().listen(
-      (candidate) => _onCandidate(candidate, generation),
-      onError: (Object error, StackTrace stackTrace) =>
-          _onScanError(error, stackTrace, generation),
-      onDone: () {
-        if (!_isCurrentScan(generation)) {
-          return;
-        }
-        _stopExpiryTimer();
-        if (_state.isScanning) {
-          _state = _state.copyWith(isScanning: false);
-          notifyListeners();
-        }
-      },
-    );
+    late final StreamSubscription<DeviceCandidate> subscription;
+    try {
+      subscription = _transport.scan().listen(
+        (candidate) => _onCandidate(candidate, generation),
+        onError: (Object error, StackTrace stackTrace) =>
+            _onScanError(error, stackTrace, generation),
+        onDone: () => _onScanDone(generation),
+      );
+    } catch (error, stackTrace) {
+      _onScanError(error, stackTrace, generation);
+      return;
+    }
     // A synchronous platform stream can report an error while listen() is
     // being installed. Do not retain that stale subscription as the active
     // scanner after its callback has already invalidated this generation.
     if (_isCurrentScan(generation)) {
       _scanSubscription = subscription;
+      _logInfo(
+        'scan_stream_subscribed',
+        reason: '系统蓝牙扫描流已订阅，等待附近设备广播。',
+        stage: 'scanning',
+        result: 'pending',
+      );
     } else {
+      _logInfo(
+        'scan_stream_subscription_cancelled',
+        reason: '扫描流建立后已失效，取消保留的订阅。',
+        stage: 'idle',
+        result: 'cancelled',
+      );
       unawaited(subscription.cancel());
     }
   }
@@ -78,10 +116,24 @@ class DiscoveryController extends ChangeNotifier {
     if (!_state.candidates.any(
       (item) => item.connectionId == candidate.connectionId,
     )) {
+      _logInfo(
+        'scan_candidate_selection_ignored',
+        reason: '选择设备请求已忽略：该设备不在当前实时扫描列表中。',
+        stage: _scanStage,
+        result: 'cancelled',
+        fields: _candidateLogFields(candidate),
+      );
       return;
     }
     _state = _state.copyWith(selected: candidate);
     notifyListeners();
+    _logInfo(
+      'scan_candidate_selected',
+      reason: '用户已从实时扫描列表选择设备，允许进入连接流程。',
+      stage: _scanStage,
+      result: 'accepted',
+      fields: _candidateLogFields(candidate),
+    );
   }
 
   void setExcludedDeviceIds(Iterable<String> deviceIds) {
@@ -89,6 +141,13 @@ class DiscoveryController extends ChangeNotifier {
       deviceIds.where((id) => id.isNotEmpty),
     );
     if (setEquals(_excludedDeviceIds, excludedDeviceIds)) {
+      _logInfo(
+        'scan_exclusion_unchanged',
+        reason: '已连接设备排除列表没有变化，保留当前扫描结果。',
+        stage: _scanStage,
+        result: 'completed',
+        fields: {'length': _excludedDeviceIds.length},
+      );
       return;
     }
     _excludedDeviceIds = excludedDeviceIds;
@@ -106,9 +165,26 @@ class DiscoveryController extends ChangeNotifier {
           : selected,
     );
     notifyListeners();
+    _logInfo(
+      'scan_exclusion_updated',
+      reason: '已更新已连接设备排除列表，避免在扫描列表中重复显示。',
+      stage: _scanStage,
+      result: 'completed',
+      fields: {
+        'length': _excludedDeviceIds.length,
+        'previous_state': selected == null ? 'unselected' : 'selected',
+      },
+    );
   }
 
   Future<void> stop() async {
+    _logInfo(
+      'scan_stop_requested',
+      reason: '收到停止扫描请求，取消系统扫描订阅并停止设备过期检查。',
+      stage: _scanStage,
+      result: 'pending',
+      fields: {'length': _state.candidates.length},
+    );
     ++_scanGeneration;
     _stopExpiryTimer();
     final subscription = _scanSubscription;
@@ -117,14 +193,54 @@ class DiscoveryController extends ChangeNotifier {
       _state = _state.copyWith(isScanning: false);
       notifyListeners();
     }
-    await subscription?.cancel();
+    try {
+      await subscription?.cancel();
+      _logInfo(
+        'scan_stopped',
+        reason: '设备扫描已停止，当前扫描会话已结束。',
+        stage: 'idle',
+        result: 'completed',
+      );
+    } catch (error) {
+      _logWarning(
+        'scan_stop_failed',
+        reason: '停止设备扫描时系统返回异常，需要等待下一次扫描请求恢复。',
+        stage: 'idle',
+        result: 'failed',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
+      rethrow;
+    }
   }
 
   void _onCandidate(DeviceCandidate candidate, int generation) {
-    if (!_isCurrentScan(generation) ||
-        _excludedDeviceIds.contains(candidate.connectionId)) {
+    if (!_isCurrentScan(generation)) {
+      _logInfo(
+        'scan_result_ignored',
+        reason: '忽略已结束或已替换扫描会话返回的设备广播。',
+        stage: 'idle',
+        result: 'cancelled',
+        fields: _candidateLogFields(candidate),
+      );
       return;
     }
+    if (_excludedDeviceIds.contains(candidate.connectionId)) {
+      _logInfo(
+        'scan_result_ignored',
+        reason: '忽略已连接设备的广播，避免设备列表重复展示。',
+        stage: 'scanning',
+        result: 'cancelled',
+        fields: _candidateLogFields(candidate),
+      );
+      return;
+    }
+    _logInfo(
+      'scan_result_received',
+      reason: '收到一条蓝牙广播，开始合并广告与扫描响应字段。',
+      stage: 'scanning',
+      result: 'pending',
+      fields: _candidateLogFields(candidate),
+    );
     final now = DateTime.now();
     final previous = _advertisementFragments[candidate.connectionId];
     final fragment =
@@ -134,10 +250,29 @@ class DiscoveryController extends ChangeNotifier {
         : previous.merge(candidate, now);
     _advertisementFragments[candidate.connectionId] = fragment;
     final freshCandidate = fragment.toCandidate(candidate.connectionId);
-    if (freshCandidate.name.trim().isEmpty ||
-        (filterByV15Advertisement && !_filter.matches(freshCandidate))) {
+    if (freshCandidate.name.trim().isEmpty) {
+      _logInfo(
+        'scan_result_ignored',
+        reason: '忽略没有设备名称的蓝牙广播，无法向用户安全展示。',
+        stage: 'scanning',
+        result: 'cancelled',
+        fields: _candidateLogFields(freshCandidate),
+      );
       return;
     }
+    if (filterByV15Advertisement && !_filter.matches(freshCandidate)) {
+      _logInfo(
+        'scan_result_ignored',
+        reason: '忽略不符合 EVT 广播约定的设备，保留当前扫描列表。',
+        stage: 'scanning',
+        result: 'cancelled',
+        fields: _candidateLogFields(freshCandidate),
+      );
+      return;
+    }
+    final wasKnown = _state.candidates.any(
+      (item) => item.connectionId == freshCandidate.connectionId,
+    );
     final candidates = [
       for (final existing in _state.candidates)
         if (existing.connectionId != freshCandidate.connectionId) existing,
@@ -152,10 +287,28 @@ class DiscoveryController extends ChangeNotifier {
       selected: selected,
     );
     notifyListeners();
+    _logInfo(
+      'scan_result_accepted',
+      reason: wasKnown ? '已刷新扫描列表中的设备信号与广告字段。' : '已将符合条件的设备加入实时扫描列表。',
+      stage: 'scanning',
+      result: 'accepted',
+      fields: {
+        ..._candidateLogFields(freshCandidate),
+        'action': wasKnown ? 'update' : 'add',
+        'length': candidates.length,
+      },
+    );
   }
 
   void _onScanError(Object error, StackTrace stackTrace, int generation) {
     if (!_isCurrentScan(generation)) {
+      _logInfo(
+        'scan_error_ignored',
+        reason: '忽略已结束扫描会话的系统错误回调。',
+        stage: 'idle',
+        result: 'cancelled',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
       return;
     }
     ++_scanGeneration;
@@ -175,6 +328,44 @@ class DiscoveryController extends ChangeNotifier {
     _scanSubscription = null;
     unawaited(subscription?.cancel());
     notifyListeners();
+    final bluetoothOff =
+        error is BleTransportException &&
+        error.issue == BleTransportIssue.bluetoothOff;
+    _logWarning(
+      bluetoothOff ? 'scan_bluetooth_off' : 'scan_stream_failed',
+      reason: bluetoothOff
+          ? '系统蓝牙未开启，已停止扫描并等待用户开启蓝牙后重试。'
+          : '扫描流发生异常，已停止扫描并等待用户手动重试。',
+      stage: 'idle',
+      result: 'failed',
+      fields: {
+        'error_type': error.runtimeType.toString(),
+        'failure_kind': failure.kind.name,
+      },
+    );
+  }
+
+  void _onScanDone(int generation) {
+    if (!_isCurrentScan(generation)) {
+      _logInfo(
+        'scan_stream_completion_ignored',
+        reason: '忽略已替换扫描会话的结束回调。',
+        stage: 'idle',
+        result: 'cancelled',
+      );
+      return;
+    }
+    _stopExpiryTimer();
+    if (_state.isScanning) {
+      _state = _state.copyWith(isScanning: false);
+      notifyListeners();
+    }
+    _logInfo(
+      'scan_stream_completed',
+      reason: '系统蓝牙扫描流已自然结束，设备扫描已停止。',
+      stage: 'idle',
+      result: 'completed',
+    );
   }
 
   void _startExpiryTimer(int generation) {
@@ -196,6 +387,7 @@ class DiscoveryController extends ChangeNotifier {
       return;
     }
     final now = DateTime.now();
+    final candidateCountBefore = _state.candidates.length;
     _advertisementFragments.removeWhere(
       (_, fragment) => now.difference(fragment.updatedAt) >= staleDeviceTimeout,
     );
@@ -220,10 +412,123 @@ class DiscoveryController extends ChangeNotifier {
           : selected,
     );
     notifyListeners();
+    _logInfo(
+      'scan_stale_results_removed',
+      reason: '超过实时广播有效期的设备已从扫描列表移除。',
+      stage: 'scanning',
+      result: 'completed',
+      fields: {
+        'action': 'expire',
+        'length': candidates.length,
+        'previous_state': candidateCountBefore == 0
+            ? 'candidates_empty'
+            : 'candidates_present',
+      },
+    );
   }
 
   bool _isCurrentScan(int generation) =>
       !_isDisposed && _state.isScanning && generation == _scanGeneration;
+
+  String get _scanStage => _state.isScanning ? 'scanning' : 'idle';
+
+  Map<String, Object?> _candidateLogFields(DeviceCandidate candidate) {
+    final evaluation = _filter.evaluate(candidate);
+    final expectedManufacturerPrefix = _filter.manufacturerPrefix;
+    return {
+      'rssi': candidate.rssi,
+      'has_name': candidate.name.trim().isNotEmpty,
+      'manufacturer_data_length': candidate.manufacturerData.length,
+      'manufacturer_prefix':
+          expectedManufacturerPrefix.length == 2 &&
+          candidate.manufacturerData.length >= 2 &&
+          candidate.manufacturerData[0] == expectedManufacturerPrefix.first &&
+          candidate.manufacturerData[1] == expectedManufacturerPrefix.last,
+      'service_count': candidate.serviceUuids.length,
+      'service_uuid_present': !evaluation.reasons.contains('service_uuid'),
+      'name_format_valid': !evaluation.reasons.contains('name_format'),
+      'device_suffix': _deviceSuffix(candidate),
+    };
+  }
+
+  String? _deviceSuffix(DeviceCandidate candidate) {
+    final physicalDeviceId = candidate.physicalDeviceId;
+    if (physicalDeviceId == null) {
+      return null;
+    }
+    final compact = physicalDeviceId.replaceAll(':', '');
+    if (!RegExp(r'^[A-F0-9]{12}$').hasMatch(compact)) {
+      return null;
+    }
+    return '...${compact.substring(compact.length - 4)}';
+  }
+
+  void _logInfo(
+    String event, {
+    required String reason,
+    required String stage,
+    required String result,
+    Map<String, Object?> fields = const {},
+  }) {
+    _log(
+      event,
+      level: _DiscoveryLogLevel.info,
+      reason: reason,
+      stage: stage,
+      result: result,
+      fields: fields,
+    );
+  }
+
+  void _logWarning(
+    String event, {
+    required String reason,
+    required String stage,
+    required String result,
+    Map<String, Object?> fields = const {},
+  }) {
+    _log(
+      event,
+      level: _DiscoveryLogLevel.warning,
+      reason: reason,
+      stage: stage,
+      result: result,
+      fields: fields,
+    );
+  }
+
+  void _log(
+    String event, {
+    required _DiscoveryLogLevel level,
+    required String reason,
+    required String stage,
+    required String result,
+    required Map<String, Object?> fields,
+  }) {
+    final safeFields = <String, Object?>{'reason': reason, ...fields};
+    try {
+      switch (level) {
+        case _DiscoveryLogLevel.info:
+          _logger.info(
+            event,
+            operation: 'device_scan',
+            stage: stage,
+            result: result,
+            fields: safeFields,
+          );
+        case _DiscoveryLogLevel.warning:
+          _logger.warning(
+            event,
+            operation: 'device_scan',
+            stage: stage,
+            result: result,
+            fields: safeFields,
+          );
+      }
+    } catch (_) {
+      // Diagnostics must never interrupt the platform scan stream.
+    }
+  }
 
   @override
   void dispose() {
@@ -232,9 +537,17 @@ class DiscoveryController extends ChangeNotifier {
     _stopExpiryTimer();
     _advertisementFragments.clear();
     unawaited(_scanSubscription?.cancel());
+    _logInfo(
+      'scan_controller_disposed',
+      reason: '设备发现控制器已释放，已取消剩余扫描订阅。',
+      stage: 'idle',
+      result: 'completed',
+    );
     super.dispose();
   }
 }
+
+enum _DiscoveryLogLevel { info, warning }
 
 /// Android can expose the V1.5 primary advertisement and scan response as
 /// separate scan callbacks. The protocol distributes manufacturer data in the

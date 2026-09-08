@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:aipin/core/ble/device_profile.dart';
 import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/ble/ble_transport.dart';
+import 'package:aipin/core/diagnostics/diagnostic_trace.dart';
+import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/protocol/evt_command_client.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
@@ -11,11 +13,61 @@ import 'package:aipin/features/device_session/domain/device_permission.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
 import 'package:aipin/features/device_session/domain/session_phase.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_ble_transport.dart';
 
 void main() {
+  test('records safe, Chinese-marked EVT session setup milestones', () async {
+    final profile = _profileWithDeviceInfo();
+    final transport = FakeBleTransport(
+      profile: profile,
+      deferRead: true,
+      services: _servicesFor(profile),
+    );
+    final logger = _CapturingLogger();
+    final candidate = FakeBleTransport.matchingCandidate.copyWith(
+      connectionId: '11:22:33:44:55:66',
+      name: 'Sensitive EVT Device Name',
+    );
+    final controller = SessionController(
+      transport,
+      profile,
+      EvtProtocolCodec(),
+      logger: logger,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.connect(candidate);
+    await controller.disconnect();
+
+    expect(
+      logger.events,
+      containsAll(<String>[
+        'session_open_requested',
+        'gatt_connection_stream_requested',
+        'gatt_service_discovery_requested',
+        'evt_gatt_contract_checked',
+        'evt_subscription_setup_requested',
+        'session_authentication_ready',
+        'disconnect_started',
+        'transport_cleanup_started',
+        'disconnect_completed',
+      ]),
+    );
+    final open = logger.calls.firstWhere(
+      (call) => call.event == 'session_open_requested',
+    );
+    expect(open.fields['reason'], startsWith('【会话连接】'));
+    expect(open.fields['device_suffix'], '...5566');
+    expect(logger.flattenedFields, isNot(contains('11:22:33:44:55:66')));
+    expect(
+      logger.flattenedFields,
+      isNot(contains('Sensitive EVT Device Name')),
+    );
+  });
+
   test(
     'subscribes available EVT endpoints before V1 authentication and performs no protected reads',
     () async {
@@ -308,6 +360,159 @@ void main() {
         throwsA(isA<StateError>()),
       );
       expect(transport.writes, hasLength(1));
+    },
+  );
+
+  test(
+    'refreshes an Android GATT cache once before disconnecting after a V1 response timeout',
+    () async {
+      final profile = _profileWithDeviceInfo();
+      final transport = FakeBleTransport(
+        profile: profile,
+        deferRead: true,
+        services: _servicesFor(profile),
+        gattCacheClearResult: BleGattCacheClearResult.cleared,
+      );
+      final controller = SessionController(
+        transport,
+        profile,
+        EvtProtocolCodec(),
+        legacySecurityResponseTimeout: const Duration(milliseconds: 10),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await expectLater(
+        controller.executeEvtLegacySecurity(
+          EvtLegacySecurityRequest(
+            action: EvtLegacySecurityAction.authenticate,
+            securityCode: '123456',
+          ),
+        ),
+        throwsA(isA<EvtCommandTimeoutException>()),
+      );
+
+      expect(transport.gattCacheClearDeviceIds, <String>[
+        FakeBleTransport.matchingCandidate.connectionId,
+      ]);
+      expect(transport.connectionOperations, <String>[
+        'clear_gatt_cache',
+        'disconnect',
+      ]);
+      expect(transport.writes, hasLength(1));
+      expect(controller.state.phase, SessionPhase.interrupted);
+    },
+  );
+
+  test(
+    'keeps the original V1 timeout and disconnects when GATT cache recovery is unsupported or fails',
+    () async {
+      for (final scenario
+          in <({String name, BleGattCacheClearResult result, Object? error})>[
+            (
+              name: 'unsupported',
+              result: BleGattCacheClearResult.unsupported,
+              error: null,
+            ),
+            (
+              name: 'failed result',
+              result: BleGattCacheClearResult.failed,
+              error: null,
+            ),
+            (
+              name: 'transport error',
+              result: BleGattCacheClearResult.failed,
+              error: StateError('GATT cache refresh unavailable'),
+            ),
+          ]) {
+        final profile = _profileWithDeviceInfo();
+        final transport = FakeBleTransport(
+          profile: profile,
+          deferRead: true,
+          services: _servicesFor(profile),
+          gattCacheClearResult: scenario.result,
+          gattCacheClearError: scenario.error,
+        );
+        final logger = _CapturingLogger();
+        final controller = SessionController(
+          transport,
+          profile,
+          EvtProtocolCodec(),
+          logger: logger,
+          legacySecurityResponseTimeout: const Duration(milliseconds: 10),
+        );
+        addTearDown(controller.dispose);
+        addTearDown(transport.dispose);
+
+        await controller.connect(FakeBleTransport.matchingCandidate);
+        await expectLater(
+          controller.executeEvtLegacySecurity(
+            EvtLegacySecurityRequest(
+              action: EvtLegacySecurityAction.authenticate,
+              securityCode: '123456',
+            ),
+          ),
+          throwsA(isA<EvtCommandTimeoutException>()),
+          reason: scenario.name,
+        );
+
+        expect(transport.gattCacheClearDeviceIds, <String>[
+          FakeBleTransport.matchingCandidate.connectionId,
+        ], reason: scenario.name);
+        expect(transport.connectionOperations, <String>[
+          'clear_gatt_cache',
+          'disconnect',
+        ], reason: scenario.name);
+        expect(transport.writes, hasLength(1), reason: scenario.name);
+        expect(
+          controller.state.phase,
+          SessionPhase.interrupted,
+          reason: scenario.name,
+        );
+
+        if (scenario.result == BleGattCacheClearResult.unsupported &&
+            scenario.error == null) {
+          final recovery = logger.calls.firstWhere(
+            (call) => call.event == 'legacy_security_gatt_recovery_completed',
+          );
+          expect(recovery.result, isNot('success'));
+          expect(
+            recovery.fields['gatt_cache_refresh_result'],
+            BleGattCacheClearResult.unsupported.name,
+          );
+        }
+      }
+    },
+  );
+
+  test(
+    'does not request a GATT cache refresh for a malformed V1 security response',
+    () async {
+      final profile = _profileWithDeviceInfo();
+      final codec = EvtProtocolCodec();
+      final transport = FakeBleTransport(
+        profile: profile,
+        deferRead: true,
+        services: _servicesFor(profile),
+      );
+      final controller = SessionController(transport, profile, codec);
+      addTearDown(controller.dispose);
+
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      final authentication = controller.executeEvtLegacySecurity(
+        EvtLegacySecurityRequest(
+          action: EvtLegacySecurityAction.authenticate,
+          securityCode: '123456',
+        ),
+      );
+      await _waitForCommand(transport, codec, command: 0x09);
+      transport.emitSubscriptionBytes(codec.encodeRequest(0x89, const [2]));
+
+      await expectLater(authentication, throwsA(isA<FormatException>()));
+      expect(transport.gattCacheClearDeviceIds, isEmpty);
+      expect(transport.connectionOperations, <String>['disconnect']);
+      expect(transport.writes, hasLength(1));
+      expect(controller.state.phase, SessionPhase.interrupted);
     },
   );
 
@@ -823,6 +1028,48 @@ void main() {
 
       await controller.connect(FakeBleTransport.matchingCandidate);
       await _completeAuthenticatedSession(controller, transport);
+
+      final status = controller.readStatus();
+      await _respondToCommand(
+        transport,
+        codec,
+        command: 0x06,
+        subCommand: 0x01,
+        response: codec.encodeRequest(0x86, const [0x01, 0, 5, 0, 0, 0, 1, 0]),
+      );
+
+      expect((await status).recordConsent, isTrue);
+    },
+  );
+
+  test(
+    'allows queued status reads when only the EVT status permission remains',
+    () async {
+      final profile = _profileWithAuthoritativeStatusEndpoints();
+      final codec = EvtProtocolCodec();
+      final transport = FakeBleTransport(
+        profile: profile,
+        deferRead: true,
+        services: _servicesFor(profile),
+      );
+      final permissionGate = _SelectivePermissionGate(
+        allowed: const {
+          DevicePermission.status,
+          DevicePermission.configuration,
+          DevicePermission.files,
+        },
+      );
+      final controller = SessionController(
+        transport,
+        profile,
+        codec,
+        permissionGate: permissionGate,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await _completeAuthenticatedSession(controller, transport);
+      permissionGate.allowed = const {DevicePermission.status};
 
       final status = controller.readStatus();
       await _respondToCommand(
@@ -1446,6 +1693,49 @@ void main() {
     },
   );
 
+  test(
+    'on iOS rejects a required EVT characteristic with both CCC modes before subscribing',
+    () async {
+      final previousPlatform = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = previousPlatform;
+      });
+      final profile = _profileWithDeviceInfo();
+      final transport = FakeBleTransport(
+        profile: profile,
+        deferRead: true,
+        services: _servicesFor(
+          profile,
+          operationOverrides: const {
+            BleLogicalEndpoint.fa10Fa19: {
+              BleOperation.write,
+              BleOperation.indicate,
+              BleOperation.notify,
+            },
+          },
+        ),
+      );
+      final controller = SessionController(
+        transport,
+        profile,
+        EvtProtocolCodec(),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.connect(FakeBleTransport.matchingCandidate);
+
+      expect(controller.state.phase, SessionPhase.interrupted);
+      expect(controller.state.failure?.kind.name, 'access');
+      expect(controller.state.failure?.detail, contains('fa10Fa19.notify'));
+      expect(transport.subscribedCharacteristics, isEmpty);
+      expect(
+        transport.disconnectedDeviceIds,
+        contains(FakeBleTransport.matchingCandidate.connectionId),
+      );
+    },
+  );
+
   test('releases the link when the notification stream fails', () async {
     final transport = FakeBleTransport.withGattReadyProfile();
     final controller = SessionController(
@@ -1773,6 +2063,15 @@ class _MutablePermissionGate implements DevicePermissionGate {
   bool allows(DevicePermission permission) => allowed;
 }
 
+class _SelectivePermissionGate implements DevicePermissionGate {
+  _SelectivePermissionGate({required this.allowed});
+
+  Set<DevicePermission> allowed;
+
+  @override
+  bool allows(DevicePermission permission) => allowed.contains(permission);
+}
+
 List<int> _deviceInfoFrame({
   required int protocolVersion,
   int powerOff = 0,
@@ -1865,4 +2164,56 @@ Future<void> _respondToCommand(
     subCommand: subCommand,
   );
   transport.emitSubscriptionBytes(response);
+}
+
+class _CapturingLogger implements SafeAppLogger {
+  final calls = <_LogCall>[];
+
+  Iterable<String> get events => calls.map((call) => call.event);
+
+  String get flattenedFields => calls
+      .expand((call) => call.fields.entries)
+      .map((entry) => '${entry.key}=${entry.value}')
+      .join(' ');
+
+  @override
+  void error(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) => calls.add(_LogCall(event, fields, result: result));
+
+  @override
+  void info(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) => calls.add(_LogCall(event, fields, result: result));
+
+  @override
+  void warning(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) => calls.add(_LogCall(event, fields, result: result));
+}
+
+class _LogCall {
+  const _LogCall(this.event, this.fields, {this.result});
+
+  final String event;
+  final Map<String, Object?> fields;
+  final String? result;
 }

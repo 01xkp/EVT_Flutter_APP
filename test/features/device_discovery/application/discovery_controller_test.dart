@@ -1,5 +1,7 @@
 import 'package:aipin/features/device_discovery/application/discovery_controller.dart';
 import 'package:aipin/features/device_discovery/domain/advertisement_filter.dart';
+import 'package:aipin/core/diagnostics/diagnostic_trace.dart';
+import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_ble_transport.dart';
@@ -269,4 +271,129 @@ void main() {
     expect(controller.state.candidates, isEmpty);
     expect(controller.state.selected, isNull);
   });
+
+  test('emits detailed, redacted diagnostics for a scan lifecycle', () async {
+    final transport = FakeBleTransport();
+    final logger = _CapturingLogger();
+    final controller = DiscoveryController(
+      transport,
+      const AdvertisementFilter(),
+      logger: logger,
+    );
+    addTearDown(controller.dispose);
+
+    controller.start();
+    transport.emitCandidate(
+      FakeBleTransport.matchingCandidate.copyWith(
+        connectionId: 'raw-platform-device-id',
+        name: 'Sensitive Device Name',
+        manufacturerData: const [],
+        serviceUuids: const [],
+      ),
+    );
+    transport.emitCandidate(FakeBleTransport.matchingCandidate);
+    await Future<void>.delayed(Duration.zero);
+    await controller.stop();
+
+    expect(
+      logger.events,
+      containsAll(<String>[
+        'scan_start_requested',
+        'scan_stream_subscribed',
+        'scan_result_received',
+        'scan_result_ignored',
+        'scan_result_accepted',
+        'scan_stop_requested',
+        'scan_stopped',
+      ]),
+    );
+    final accepted = logger.calls.firstWhere(
+      (call) => call.event == 'scan_result_accepted',
+    );
+    expect(accepted.operation, 'device_scan');
+    expect(accepted.stage, 'scanning');
+    expect(accepted.result, 'accepted');
+    expect(accepted.fields['reason'], contains('加入实时扫描列表'));
+    expect(accepted.fields['device_suffix'], '...8423');
+
+    final diagnosticText = logger.calls
+        .map((call) => '${call.event}|${call.fields}')
+        .join('\n');
+    expect(diagnosticText, isNot(contains('raw-platform-device-id')));
+    expect(diagnosticText, isNot(contains('Sensitive Device Name')));
+    expect(diagnosticText, isNot(contains('71:BF:E2:3B:84:23')));
+  });
+}
+
+class _ScanDiagnosticCall {
+  const _ScanDiagnosticCall({
+    required this.event,
+    required this.operation,
+    required this.stage,
+    required this.result,
+    required this.fields,
+  });
+
+  final String event;
+  final String? operation;
+  final String? stage;
+  final String? result;
+  final Map<String, Object?> fields;
+}
+
+class _CapturingLogger implements SafeAppLogger {
+  final List<_ScanDiagnosticCall> calls = <_ScanDiagnosticCall>[];
+
+  Iterable<String> get events => calls.map((call) => call.event);
+
+  @override
+  void error(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const <String, Object?>{},
+  }) => _record(event, operation, stage, result, fields);
+
+  @override
+  void info(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const <String, Object?>{},
+  }) => _record(event, operation, stage, result, fields);
+
+  @override
+  void warning(
+    String event, {
+    DiagnosticTrace? trace,
+    String? operation,
+    String? stage,
+    String? result,
+    Duration? elapsed,
+    Map<String, Object?> fields = const <String, Object?>{},
+  }) => _record(event, operation, stage, result, fields);
+
+  void _record(
+    String event,
+    String? operation,
+    String? stage,
+    String? result,
+    Map<String, Object?> fields,
+  ) {
+    calls.add(
+      _ScanDiagnosticCall(
+        event: event,
+        operation: operation,
+        stage: stage,
+        result: result,
+        fields: Map<String, Object?>.unmodifiable(fields),
+      ),
+    );
+  }
 }

@@ -89,6 +89,7 @@ class _AppShellState extends ConsumerState<AppShell>
     _discoveryController = DiscoveryController(
       ref.read(bleTransportProvider),
       _evtAdvertisementFilter,
+      logger: ref.read(scopedAppLoggerProvider('BLE')),
       filterByV15Advertisement: _useStrictEvtAdvertisementFilter,
     );
     _discoveryController.addListener(_onDiscoveryChanged);
@@ -101,6 +102,7 @@ class _AppShellState extends ConsumerState<AppShell>
       connect: _connectRememberedDevice,
       logger: ref.read(scopedAppLoggerProvider('RECONNECT')),
       advertisementFilter: _evtAdvertisementFilter,
+      filterByV15Advertisement: _useStrictEvtAdvertisementFilter,
     );
     _onboardingController = OnboardingController(
       ref.read(onboardingStoreProvider),
@@ -299,8 +301,6 @@ class _AppShellState extends ConsumerState<AppShell>
                 onStartScan: _startExplicitConnectionJourney,
                 onStopScan: _stopConnectionJourneyScan,
                 onSettings: _openSettings,
-                onOpenSystemSettings: () =>
-                    ref.read(appPermissionGatewayProvider).openSettings(),
                 bluetoothEnableGateway: ref.read(
                   bluetoothEnableGatewayProvider,
                 ),
@@ -596,9 +596,13 @@ class _AppShellState extends ConsumerState<AppShell>
     final logger = ref.read(scopedAppLoggerProvider('SESSION_FLOW'));
     // A user can manually try any named scan result during EVT. The GATT
     // contract remains the hard gate before an EVT session becomes usable.
-    // Automatic reconnect keeps strict matching because it must identify a
-    // remembered physical device without user confirmation.
-    if (automaticallyReconnect && !_evtAdvertisementFilter.matches(candidate)) {
+    // Automatic reconnect still requires a locally remembered-device match in
+    // DeviceReconnectController. During EVT, it follows the same relaxed
+    // advertisement policy as manual discovery, because the firmware's
+    // broadcast fields are still being aligned.
+    if (automaticallyReconnect &&
+        _useStrictEvtAdvertisementFilter &&
+        !_evtAdvertisementFilter.matches(candidate)) {
       logger.warning(
         'session_open_rejected_advertisement',
         fields: {'automatic': automaticallyReconnect},
@@ -682,12 +686,15 @@ class _AppShellState extends ConsumerState<AppShell>
         );
         return false;
       }
-      final authController = EvtLegacyAuthController();
+      final authController = EvtLegacyAuthController(
+        logger: ref.read(scopedAppLoggerProvider('AUTH')),
+      );
       final controller = SessionController(
         ref.read(bleTransportProvider),
         profile,
         EvtProtocolCodec(),
         logger: ref.read(scopedAppLoggerProvider('SESSION')),
+        commandLogger: ref.read(scopedAppLoggerProvider('CMD')),
         permissionGate: authController,
       );
       createdSession = controller;
@@ -1052,6 +1059,7 @@ class _AppShellState extends ConsumerState<AppShell>
     SessionController session,
     EvtLegacyAuthController auth,
   ) async {
+    _logSecurityUi('security_code_sheet_opened', action: 'authenticate');
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '认证设备',
@@ -1059,15 +1067,36 @@ class _AppShellState extends ConsumerState<AppShell>
       confirmLabel: '开始认证',
     );
     if (code == null || !mounted || !identical(_sessionController, session)) {
+      _logSecurityUi('security_code_sheet_cancelled', action: 'authenticate');
       return;
     }
+    _logSecurityUi(
+      'security_code_sheet_confirmed',
+      action: 'authenticate',
+      fields: {'length': code.length},
+    );
     try {
       await auth.authenticate(session, securityCode: code);
+      _logSecurityUi(
+        'security_post_auth_synchronization_started',
+        action: 'authenticate',
+      );
       await session.synchronizeAfterAuthentication(auth.grantedPermissions);
+      _logSecurityUi(
+        'security_ui_operation_completed',
+        action: 'authenticate',
+        result: 'success',
+      );
       if (mounted) {
         AppToast.show(context, message: '设备认证完成');
       }
     } catch (error) {
+      _logSecurityUi(
+        'security_ui_operation_failed',
+        action: 'authenticate',
+        result: 'failed',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
       if (mounted) {
         AppToast.show(context, message: '$error');
       }
@@ -1078,6 +1107,7 @@ class _AppShellState extends ConsumerState<AppShell>
     SessionController session,
     EvtLegacyAuthController auth,
   ) async {
+    _logSecurityUi('security_code_sheet_opened', action: 'bind');
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '首次绑定设备',
@@ -1085,15 +1115,36 @@ class _AppShellState extends ConsumerState<AppShell>
       confirmLabel: '确认绑定',
     );
     if (code == null || !mounted || !identical(_sessionController, session)) {
+      _logSecurityUi('security_code_sheet_cancelled', action: 'bind');
       return;
     }
+    _logSecurityUi(
+      'security_code_sheet_confirmed',
+      action: 'bind',
+      fields: {'length': code.length},
+    );
     try {
       await auth.bind(session, securityCode: code);
+      _logSecurityUi(
+        'security_post_auth_synchronization_started',
+        action: 'bind',
+      );
       await session.synchronizeAfterAuthentication(auth.grantedPermissions);
+      _logSecurityUi(
+        'security_ui_operation_completed',
+        action: 'bind',
+        result: 'success',
+      );
       if (mounted) {
         AppToast.show(context, message: '设备绑定完成');
       }
     } catch (error) {
+      _logSecurityUi(
+        'security_ui_operation_failed',
+        action: 'bind',
+        result: 'failed',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
       if (mounted) {
         AppToast.show(context, message: '$error');
       }
@@ -1104,6 +1155,7 @@ class _AppShellState extends ConsumerState<AppShell>
     SessionController session,
     EvtLegacyAuthController auth,
   ) async {
+    _logSecurityUi('security_code_sheet_opened', action: 'reset');
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '恢复初始认证码',
@@ -1111,10 +1163,21 @@ class _AppShellState extends ConsumerState<AppShell>
       confirmLabel: '确认恢复',
     );
     if (code == null || !mounted || !identical(_sessionController, session)) {
+      _logSecurityUi('security_code_sheet_cancelled', action: 'reset');
       return;
     }
+    _logSecurityUi(
+      'security_code_sheet_confirmed',
+      action: 'reset',
+      fields: {'length': code.length},
+    );
     try {
       await auth.reset(session, securityCode: code);
+      _logSecurityUi(
+        'security_ui_operation_completed',
+        action: 'reset',
+        result: 'success',
+      );
       final candidate = session.state.session?.candidate;
       final deviceId = candidate?.physicalDeviceId;
       if (deviceId != null) {
@@ -1135,10 +1198,33 @@ class _AppShellState extends ConsumerState<AppShell>
         AppToast.show(context, message: '设备已恢复初始认证码');
       }
     } catch (error) {
+      _logSecurityUi(
+        'security_ui_operation_failed',
+        action: 'reset',
+        result: 'failed',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
       if (mounted) {
         AppToast.show(context, message: '$error');
       }
     }
+  }
+
+  void _logSecurityUi(
+    String event, {
+    required String action,
+    String? result,
+    Map<String, Object?> fields = const {},
+  }) {
+    final logger = ref.read(scopedAppLoggerProvider('AUTH'));
+    final operation = action == 'bind' ? 'device_bind' : 'device_authenticate';
+    logger.info(
+      event,
+      operation: operation,
+      stage: 'challenge',
+      result: result,
+      fields: {'action': action, ...fields},
+    );
   }
 
   Future<void> _openDeviceFiles(SessionController session) async {
@@ -1158,6 +1244,7 @@ class _AppShellState extends ConsumerState<AppShell>
       files: ref.read(recordingFileStoreProvider),
       checkpoints: ref.read(deviceFileDownloadCheckpointRepositoryProvider),
       recordings: ref.read(localRecordingRepositoryProvider),
+      logger: ref.read(scopedAppLoggerProvider('FILE')),
     );
     await Navigator.of(context).push<void>(
       MaterialPageRoute(

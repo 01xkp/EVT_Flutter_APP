@@ -52,6 +52,48 @@ void main() {
     );
   });
 
+  test('retains complete packet hex only for Debug BLE and CMD logs', () {
+    const rawPacket = 'ED 0A 00 09 00 30 30 30 30 30 30 DF 91';
+    const debugSanitizer = DiagnosticSanitizer(allowDebugRawPacketHex: true);
+    const releaseSanitizer = DiagnosticSanitizer(allowDebugRawPacketHex: false);
+
+    expect(
+      debugSanitizer.sanitize(
+        scope: 'BLE',
+        fields: const {'raw_packet_hex': rawPacket},
+      ),
+      const {'raw_packet_hex': rawPacket},
+    );
+    expect(
+      debugSanitizer.sanitize(
+        scope: 'CMD',
+        fields: const {'raw_packet_hex': rawPacket},
+      ),
+      const {'raw_packet_hex': rawPacket},
+    );
+    expect(
+      releaseSanitizer.sanitize(
+        scope: 'BLE',
+        fields: const {'raw_packet_hex': rawPacket},
+      ),
+      isEmpty,
+    );
+    expect(
+      debugSanitizer.sanitize(
+        scope: 'AUTH',
+        fields: const {'raw_packet_hex': rawPacket},
+      ),
+      isEmpty,
+    );
+    expect(
+      debugSanitizer.sanitize(
+        scope: 'BLE',
+        fields: const {'raw_packet_hex': 'ED 0A raw data'},
+      ),
+      isEmpty,
+    );
+  });
+
   test(
     'recursively removes raw diagnostic data while retaining safe fields',
     () {
@@ -116,6 +158,64 @@ void main() {
           'accepted',
           <String, Object?>{'length': 3},
         ],
+      });
+    },
+  );
+
+  test(
+    'retains fixed EVT progress state without widening identity retention',
+    () {
+      final fields = const DiagnosticSanitizer().sanitize(
+        scope: 'SESSION',
+        fields: const <String, Object?>{
+          'authentication_ready': true,
+          'automatic': false,
+          'connection_attempt': 2,
+          'current_operation': 7,
+          'duration_code': 3,
+          'duration_seconds': 180,
+          'free_mb': 512,
+          'gatt_ready': true,
+          'granted': true,
+          'has_active_or_connecting_session': true,
+          'is_foreground': true,
+          'ios_ccc_mode_conflict_count': 1,
+          'mtu': 247,
+          'onboarding_complete': true,
+          'onboarding_loaded': true,
+          'permissions': <String>['status', 'configuration'],
+          'reconnect_paused_for_background': false,
+          'record_mode': 1,
+          'record_type': 2,
+          'reported_write_payload': 244,
+          'total_mb': 1024,
+          'device_id': 'AA:BB:CC:DD:EE:FF',
+          'payload': <int>[0xED, 0x04, 0x00, 0x07],
+        },
+      );
+
+      expect(fields, <String, Object?>{
+        'authentication_ready': true,
+        'automatic': false,
+        'connection_attempt': 2,
+        'current_operation': 7,
+        'duration_code': 3,
+        'duration_seconds': 180,
+        'free_mb': 512,
+        'gatt_ready': true,
+        'granted': true,
+        'has_active_or_connecting_session': true,
+        'is_foreground': true,
+        'ios_ccc_mode_conflict_count': 1,
+        'mtu': 247,
+        'onboarding_complete': true,
+        'onboarding_loaded': true,
+        'permissions': <Object?>['status', 'configuration'],
+        'reconnect_paused_for_background': false,
+        'record_mode': 1,
+        'record_type': 2,
+        'reported_write_payload': 244,
+        'total_mb': 1024,
       });
     },
   );
@@ -188,6 +288,7 @@ void main() {
 
       expect(
         line,
+        '【AIPIN联调】【认证】【信息】【阶段：认证挑战】【动作：命令写入开始】 '
         '2026-09-04T12:10:03.666Z | INFO | AUTH | 8fa2c1 | '
         'device_bind | challenge | command_write_started | pending | 92 | '
         'command=0x09',

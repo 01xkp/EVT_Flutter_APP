@@ -56,7 +56,7 @@ class DeviceConnectorTest {
 
     @AfterEach
     fun teardown() {
-        sut.disconnectDevice(deviceId)
+        sut.disconnectDevice(deviceId).blockingAwait()
     }
 
     @Nested
@@ -155,14 +155,44 @@ class DeviceConnectorTest {
     @Test
     @DisplayName("Dispose observable in case disconnecting")
     fun disposeOnDisconnect() {
-        every { device.connectionState }.returns(RxBleConnection.RxBleConnectionState.DISCONNECTED)
+        prepareActiveConnection()
 
-        sut.connection.test()
+        val connectionObserver = sut.connection.test()
+        assertThat(sut.connectionDisposable?.isDisposed).isFalse()
 
-        sut.disconnectDevice(deviceId)
+        sut.disconnectDevice(deviceId).blockingAwait()
 
         assertThat(sut.connectionDisposable?.isDisposed).isTrue()
+        connectionObserver.assertComplete()
 
         verify(exactly = 1) { updateListener.invoke(ConnectionUpdateSuccess(deviceId, ConnectionState.DISCONNECTED.code)) }
+    }
+
+    @Test
+    @DisplayName("Shares one cleanup when disconnect is requested repeatedly")
+    fun sharesCleanupForRepeatedDisconnects() {
+        prepareActiveConnection()
+        val connectionObserver = sut.connection.test()
+        assertThat(sut.connectionDisposable?.isDisposed).isFalse()
+
+        val first = sut.disconnectDevice(deviceId).test()
+        val second = sut.disconnectDevice(deviceId).test()
+
+        first.awaitDone(1, TimeUnit.SECONDS).assertComplete()
+        second.awaitDone(1, TimeUnit.SECONDS).assertComplete()
+
+        assertThat(sut.connectionDisposable?.isDisposed).isTrue()
+        connectionObserver.assertComplete()
+        verify(exactly = 1) {
+            updateListener.invoke(ConnectionUpdateSuccess(deviceId, ConnectionState.DISCONNECTED.code))
+        }
+    }
+
+    private fun prepareActiveConnection() {
+        every { device.connectionState }.returns(RxBleConnection.RxBleConnectionState.CONNECTED)
+        every { device.observeConnectionStateChanges() }.returns(Observable.never())
+        every { device.establishConnection(any()) }.returns(
+            Observable.just(connection).concatWith(Observable.never()),
+        )
     }
 }
