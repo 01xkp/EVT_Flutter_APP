@@ -4,13 +4,9 @@ import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
 import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
 import 'package:aipin/features/device_session/application/session_state.dart';
-import 'package:aipin/features/device_session/application/realtime_audio_controller.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/device_auth_state.dart';
-import 'package:aipin/features/device_session/domain/device_clear.dart';
 import 'package:aipin/features/device_session/domain/device_configuration.dart';
-import 'package:aipin/features/device_session/domain/realtime_audio_capture.dart';
-import 'package:aipin/features/device_session/presentation/realtime_audio_panel.dart';
 import 'package:aipin/features/device_session/presentation/device_status_view_model.dart';
 import 'package:aipin/features/device_session/presentation/session_failure_panel.dart';
 import 'package:flutter/material.dart';
@@ -31,18 +27,11 @@ class DeviceDetailPage extends StatelessWidget {
     this.authState = DeviceAuthState.unknown,
     this.onAuthenticate,
     this.onBind,
-    this.clearPreparation,
-    this.onPrepareClear,
-    this.onConfirmClear,
+    this.onResetAuthentication,
     this.canOpenFiles = false,
     this.canControlRecording = false,
     this.canConfigureDevice = false,
     this.canRefreshDeviceDetails = false,
-    this.onOpenFirmwareUpdate,
-    this.canUpdateFirmware = false,
-    this.realtimeAudioController,
-    this.canCaptureRealtimeAudio = false,
-    this.onExportRealtimeAudio,
   });
 
   final SessionState state;
@@ -58,19 +47,11 @@ class DeviceDetailPage extends StatelessWidget {
   final DeviceAuthState authState;
   final VoidCallback? onAuthenticate;
   final VoidCallback? onBind;
-  final DeviceClearPreparation? clearPreparation;
-  final Future<void> Function()? onPrepareClear;
-  final Future<void> Function()? onConfirmClear;
+  final VoidCallback? onResetAuthentication;
   final bool canOpenFiles;
   final bool canControlRecording;
   final bool canConfigureDevice;
   final bool canRefreshDeviceDetails;
-  final VoidCallback? onOpenFirmwareUpdate;
-  final bool canUpdateFirmware;
-  final RealtimeAudioController? realtimeAudioController;
-  final bool canCaptureRealtimeAudio;
-  final Future<void> Function(RealtimeAudioCapture capture)?
-  onExportRealtimeAudio;
 
   @override
   Widget build(BuildContext context) {
@@ -162,20 +143,18 @@ class DeviceDetailPage extends StatelessWidget {
                       onRetry: onRetry,
                     ),
                   ],
-                   if (state.isAuthenticationReady) ...[
-                     const SizedBox(height: 16),
-                     _AuthenticationPanel(
-                       state: authState,
-                       onAuthenticate: onAuthenticate,
-                       onBind: onBind,
-                       clearPreparation: clearPreparation,
-                       onPrepareClear: onPrepareClear,
-                       onConfirmClear: onConfirmClear,
-                     ),
-                   ],
-                   if (state.isObservable) ...[
-                     const SizedBox(height: 16),
-                     _DeviceStatusPanel(
+                  if (state.isAuthenticationReady) ...[
+                    const SizedBox(height: 16),
+                    _AuthenticationPanel(
+                      state: authState,
+                      onAuthenticate: onAuthenticate,
+                      onBind: onBind,
+                      onResetAuthentication: onResetAuthentication,
+                    ),
+                  ],
+                  if (state.isObservable) ...[
+                    const SizedBox(height: 16),
+                    _DeviceStatusPanel(
                       state: state,
                       canConfigure: canConfigureDevice,
                       canRefresh: canRefreshDeviceDetails,
@@ -183,7 +162,7 @@ class DeviceDetailPage extends StatelessWidget {
                       onRecordConsentChanged: onRecordConsentChanged,
                       onPrivacyDurationChanged: onPrivacyDurationChanged,
                     ),
-                     const SizedBox(height: 16),
+                    const SizedBox(height: 16),
                     _RecordingControls(
                       state: state,
                       onAction: onRecordAction,
@@ -191,23 +170,6 @@ class DeviceDetailPage extends StatelessWidget {
                       canOpenFiles: canOpenFiles,
                       canControlRecording: canControlRecording,
                     ),
-                    if (canCaptureRealtimeAudio &&
-                        realtimeAudioController != null &&
-                        onExportRealtimeAudio != null) ...[
-                      const SizedBox(height: 16),
-                      RealtimeAudioPanel(
-                        controller: realtimeAudioController!,
-                        onExport: onExportRealtimeAudio!,
-                      ),
-                    ],
-                    if (canUpdateFirmware && onOpenFirmwareUpdate != null) ...[
-                      const SizedBox(height: 16),
-                      AppButton.secondary(
-                        label: '固件升级',
-                        icon: Icons.system_update_alt_outlined,
-                        onPressed: onOpenFirmwareUpdate,
-                      ),
-                    ],
                   ],
                   const SizedBox(height: 24),
                   if (state.isObservable) ...[
@@ -477,39 +439,28 @@ class _AuthenticationPanel extends StatelessWidget {
     required this.state,
     this.onAuthenticate,
     this.onBind,
-    this.clearPreparation,
-    this.onPrepareClear,
-    this.onConfirmClear,
+    this.onResetAuthentication,
   });
 
   final DeviceAuthState state;
   final VoidCallback? onAuthenticate;
   final VoidCallback? onBind;
-  final DeviceClearPreparation? clearPreparation;
-  final Future<void> Function()? onPrepareClear;
-  final Future<void> Function()? onConfirmClear;
+  final VoidCallback? onResetAuthentication;
 
   @override
   Widget build(BuildContext context) {
     final authenticated = state == DeviceAuthState.authenticated;
-    final confirmingClear = state == DeviceAuthState.clearConfirmationRequired;
-    final inFlight =
-        state == DeviceAuthState.authenticating ||
-        state == DeviceAuthState.clearPreparing ||
-        state == DeviceAuthState.clearing;
+    final inFlight = state == DeviceAuthState.authenticating;
     final label = switch (state) {
       DeviceAuthState.authenticated => '已认证',
       DeviceAuthState.authenticating => '正在认证',
-      DeviceAuthState.clearPreparing => '正在检查设备数据',
-      DeviceAuthState.clearConfirmationRequired => '待确认清除',
-      DeviceAuthState.clearing => '正在清除设备数据',
       _ => '未认证',
     };
     return AppSurfaceCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('设备认证', style: Theme.of(context).textTheme.titleMedium),
+          Text('设备认证（EVT）', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(label, style: Theme.of(context).textTheme.bodyMedium),
           if (!authenticated) ...[
@@ -529,31 +480,11 @@ class _AuthenticationPanel extends StatelessWidget {
           if (authenticated) ...[
             const SizedBox(height: 12),
             AppButton.destructive(
-              label: '解除绑定',
+              label: '恢复初始认证码',
               icon: Icons.link_off_outlined,
-              onPressed: onPrepareClear == null
+              onPressed: onResetAuthentication == null
                   ? null
-                  : () => unawaited(onPrepareClear!()),
-            ),
-          ],
-          if (confirmingClear && clearPreparation != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              '${clearPreparation!.pendingFiles} 个文件尚未归档',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '将永久清除设备中的录音、索引、密钥和绑定信息。',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            AppButton.destructive(
-              label: '确认清除设备',
-              icon: Icons.delete_forever_outlined,
-              onPressed: onConfirmClear == null
-                  ? null
-                  : () => unawaited(_confirmClear(context)),
+                  : () => unawaited(_confirmReset(context)),
             ),
           ],
         ],
@@ -561,16 +492,16 @@ class _AuthenticationPanel extends StatelessWidget {
     );
   }
 
-  Future<void> _confirmClear(BuildContext context) async {
+  Future<void> _confirmReset(BuildContext context) async {
     final confirmed = await AppConfirmationSheet.show(
       context,
-      title: '确认解除绑定？',
-      message: '设备数据将被永久清除，且不能恢复。',
-      confirmLabel: '确认清除',
+      title: '恢复初始认证码？',
+      message: 'EVT 固件会恢复初始认证码并格式化设备录音和配置，无法恢复。',
+      confirmLabel: '继续恢复',
       variant: AppConfirmationVariant.destructive,
     );
     if (confirmed) {
-      await onConfirmClear?.call();
+      onResetAuthentication?.call();
     }
   }
 }

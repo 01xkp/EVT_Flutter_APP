@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:aipin/core/persistence/app_database.dart';
 import 'package:aipin/features/device_session/data/drift_device_file_download_checkpoint_repository.dart';
@@ -74,6 +75,30 @@ void main() {
       await repository.find(deviceId: 'device-2', nameSlot: const [1, 0]),
       isNotNull,
     );
+  });
+
+  test('treats legacy non-EVT phase rows as resumable downloads', () async {
+    final checkpoint = _checkpoint(
+      deviceId: 'device-1',
+      nameSlot: const [1, 0],
+    );
+    await repository.save(checkpoint);
+    await (database.update(
+      database.deviceFileDownloadCheckpoints,
+    )..where((table) => table.id.equals(checkpoint.id))).write(
+      const DeviceFileDownloadCheckpointsCompanion(
+        phase: Value('readyForArchive'),
+      ),
+    );
+
+    final active = await repository.allDownloading();
+
+    expect(active.map((item) => item.id), [checkpoint.id]);
+    await repository.save(active.single);
+    final normalized = await (database.select(
+      database.deviceFileDownloadCheckpoints,
+    )..where((table) => table.id.equals(checkpoint.id))).getSingle();
+    expect(normalized.phase, 'downloading');
   });
 
   test(

@@ -9,6 +9,13 @@ import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 typedef EvtResponseMatcher = bool Function(EvtFrame frame);
 typedef EvtStreamTerminalMatcher = bool Function(EvtFrame frame);
 
+/// Synchronously admits a command immediately before it is written to BLE.
+///
+/// Throwing from this callback aborts the queued command without writing any
+/// bytes. It deliberately stays synchronous so an authorization decision
+/// cannot become stale in an await gap between the check and the write.
+typedef EvtCommandWriteAdmission = void Function(EvtCommandRequest request);
+
 class EvtCommandRequest {
   const EvtCommandRequest({
     required this.command,
@@ -58,6 +65,7 @@ class EvtCommandClient {
     required this._transport,
     required this._codec,
     required Stream<Uint8List> responses,
+    this._beforeWrite,
   }) {
     _responseSubscription = responses.listen(
       _onBytes,
@@ -67,6 +75,7 @@ class EvtCommandClient {
 
   final BleTransport _transport;
   final EvtProtocolCodec _codec;
+  final EvtCommandWriteAdmission? _beforeWrite;
   final StreamController<EvtFrame> _events =
       StreamController<EvtFrame>.broadcast();
   StreamSubscription<Uint8List>? _responseSubscription;
@@ -101,19 +110,18 @@ class EvtCommandClient {
     controller = StreamController<EvtFrame>(
       onListen: () {
         final scheduled = _queue.then((_) async {
-          if (_closed) {
-            throw StateError('命令客户端已关闭。');
-          }
-          final pending = _PendingStreamingCommand(
-            request: request,
-            controller: controller,
-            isTerminal: isTerminal,
-            idleTimeout: idleTimeout,
-          );
-          active = pending;
-          _pending = pending;
-          pending.start();
+          _PendingStreamingCommand? pending;
           try {
+            _admitWrite(request);
+            pending = _PendingStreamingCommand(
+              request: request,
+              controller: controller,
+              isTerminal: isTerminal,
+              idleTimeout: idleTimeout,
+            );
+            active = pending;
+            _pending = pending;
+            pending.start();
             await _transport.write(
               request.writeCharacteristic,
               _codec.encodeRequest(request.command, request.content),
@@ -124,10 +132,10 @@ class EvtCommandClient {
               controller.addError(error, stackTrace);
             }
           } finally {
-            if (identical(_pending, pending)) {
+            if (pending != null && identical(_pending, pending)) {
               _pending = null;
             }
-            pending.dispose();
+            pending?.dispose();
             if (!controller.isClosed) {
               await controller.close();
             }
@@ -155,9 +163,7 @@ class EvtCommandClient {
     final attempts = request.maxRetries < 0 ? 0 : request.maxRetries;
     Object? lastError;
     for (var retry = 0; retry <= attempts; retry += 1) {
-      if (_closed) {
-        throw StateError('命令客户端已关闭。');
-      }
+      _admitWrite(request);
       final pending = _PendingCommand(
         command: expectedCommand,
         subCommand: request.expectedSubCommand,
@@ -185,6 +191,16 @@ class EvtCommandClient {
     }
     throw lastError ??
         EvtCommandTimeoutException(request.command, attempts + 1);
+  }
+
+  void _admitWrite(EvtCommandRequest request) {
+    if (_closed) {
+      throw StateError('命令客户端已关闭。');
+    }
+    _beforeWrite?.call(request);
+    if (_closed) {
+      throw StateError('命令客户端已关闭。');
+    }
   }
 
   void _onBytes(Uint8List bytes) {

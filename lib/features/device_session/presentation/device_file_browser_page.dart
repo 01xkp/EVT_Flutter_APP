@@ -2,9 +2,8 @@ import 'dart:async';
 
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
-import 'package:aipin/features/device_session/data/device_file_import_service.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
-import 'package:aipin/features/device_session/domain/archive_gateway.dart';
+import 'package:aipin/features/device_session/domain/device_file_import_progress.dart';
 import 'package:aipin/features/local_recording/domain/local_recording.dart';
 import 'package:flutter/material.dart';
 
@@ -24,10 +23,12 @@ class DeviceFileBrowserPage extends StatefulWidget {
     super.key,
     required this.onListFiles,
     required this.onImport,
+    this.onOpenSavedRecordings,
   });
 
   final DeviceFilePageLoader onListFiles;
   final DeviceFilePageImporter onImport;
+  final Future<void> Function()? onOpenSavedRecordings;
 
   @override
   State<DeviceFileBrowserPage> createState() => _DeviceFileBrowserPageState();
@@ -52,6 +53,12 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
       appBar: AppBar(
         title: const Text('设备录音文件'),
         actions: [
+          if (widget.onOpenSavedRecordings case final openSaved?)
+            IconButton(
+              tooltip: '查看已保存录音',
+              onPressed: () => unawaited(openSaved()),
+              icon: const Icon(Icons.folder_open_outlined),
+            ),
           IconButton(
             tooltip: '刷新文件列表',
             onPressed: _loading ? null : () => unawaited(_load()),
@@ -157,19 +164,13 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('设备录音已导入记录')));
-      }
-    } on ArchiveGatewayUnavailableException {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('云端归档服务未配置，设备文件已保留')));
+        ).showSnackBar(const SnackBar(content: Text('设备录音已保存到 App')));
       }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('导入失败，文件校验未通过，请重试')));
+        ).showSnackBar(const SnackBar(content: Text('设备文件导入失败，请重试')));
       }
     } finally {
       if (mounted) {
@@ -218,7 +219,7 @@ class _DeviceFileTile extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           AppButton.secondary(
-            label: isImporting ? '正在导入' : '导入到记录',
+            label: isImporting ? '正在保存' : '保存到 App',
             icon: isImporting
                 ? Icons.downloading_outlined
                 : Icons.download_outlined,

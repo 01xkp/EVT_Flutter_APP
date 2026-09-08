@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
+import 'package:aipin/features/device_discovery/domain/advertisement_filter.dart';
 import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:aipin/features/device_session/application/device_reconnect_state.dart';
 import 'package:aipin/features/device_session/domain/device_connection_history_repository.dart';
@@ -17,6 +18,7 @@ class DeviceReconnectController extends ChangeNotifier {
     required Future<void> Function() stopScan,
     required Future<bool> Function(DeviceCandidate candidate) connect,
     required SafeAppLogger logger,
+    AdvertisementFilter advertisementFilter = const AdvertisementFilter(),
     Future<void> Function(Duration duration)? waitForRetry,
     DateTime Function()? now,
   }) {
@@ -26,6 +28,7 @@ class DeviceReconnectController extends ChangeNotifier {
       stopScan,
       connect,
       logger,
+      advertisementFilter,
       waitForRetry ?? Future<void>.delayed,
       now ?? DateTime.now,
     );
@@ -37,6 +40,7 @@ class DeviceReconnectController extends ChangeNotifier {
     this._stopScan,
     this._connect,
     this._logger,
+    this._advertisementFilter,
     this._waitForRetry,
     this._now,
   );
@@ -50,6 +54,7 @@ class DeviceReconnectController extends ChangeNotifier {
   final Future<void> Function() _stopScan;
   final Future<bool> Function(DeviceCandidate candidate) _connect;
   final SafeAppLogger _logger;
+  final AdvertisementFilter _advertisementFilter;
   final Future<void> Function(Duration duration) _waitForRetry;
   final DateTime Function() _now;
 
@@ -85,6 +90,7 @@ class DeviceReconnectController extends ChangeNotifier {
         _pausedForBackground ||
         _state.phase != DeviceReconnectPhase.scanning ||
         remembered == null ||
+        !_advertisementFilter.matches(candidate) ||
         !remembered.matches(candidate)) {
       return;
     }
@@ -174,18 +180,29 @@ class DeviceReconnectController extends ChangeNotifier {
 
   /// Cancels transient foreground work while the app is backgrounded.
   ///
-  /// A subsequent [restoreAndStart] is allowed to reconnect again.
+  /// A user-requested disconnect remains suppressed after foreground restore;
+  /// only [startExplicitCycle] or a new manual connection may clear it.
   Future<void> pauseForBackground() async {
     if (_isDisposed) {
       return;
     }
     final pausedCycle = ++_cycleId;
     _pausedForBackground = true;
-    _suppressedForForeground = false;
     await _stopScanSafely();
     if (!_isActive(pausedCycle) ||
         !_pausedForBackground ||
         _state.phase == DeviceReconnectPhase.connected) {
+      return;
+    }
+    if (_suppressedForForeground) {
+      _setState(
+        _state.copyWith(
+          phase: DeviceReconnectPhase.suppressed,
+          canRetry: false,
+          clearFailureCategory: true,
+        ),
+      );
+      _logInfo('reconnect_paused_while_suppressed');
       return;
     }
     _setState(

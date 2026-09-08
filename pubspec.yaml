@@ -36,16 +36,13 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_riverpod: ^2.6.1
   flutter_reactive_ble: ^5.5.0
+  reactive_ble_mobile: ^5.5.0
   drift: ^2.34.3
   drift_flutter: ^0.3.1
   permission_handler: ^13.0.1
   shared_preferences: ^2.5.5
-  record: 7.1.1
   just_audio: 0.10.6
   path_provider: 2.1.6
-  uuid: 4.6.0
-  flutter_foreground_task: 11.0.1
-  share_plus: ^13.3.0
   crypto: ^3.0.7
 
 dev_dependencies:
@@ -63,11 +60,24 @@ dev_dependencies:
   image: ^4.5.4
   sqlite3: 3.5.2
 
+# EVT hardware advertises through the legacy BLE advertising format. The
+# upstream Android implementation fixes the scanner to extended advertising,
+# so use the versioned local patch described in third_party/reactive_ble_mobile.
+dependency_overrides:
+  reactive_ble_mobile:
+    path: third_party/reactive_ble_mobile
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
 # The following section is specific to Flutter packages.
 flutter:
+
+  # The iOS project uses Flutter's Swift Package Manager integration for its
+  # native BLE plugin. Keep that choice in the project, not only in a
+  # developer's global Flutter configuration.
+  config:
+    enable-swift-package-manager: true
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

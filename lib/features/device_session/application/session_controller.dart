@@ -8,64 +8,101 @@ import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/protocol/device_event.dart';
 import 'package:aipin/core/protocol/evt_command_client.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
+import 'package:aipin/core/protocol/evt_protocol_contract.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
-import 'package:aipin/core/protocol/wqota_client.dart';
-import 'package:aipin/core/protocol/wqota_codec.dart';
 import 'package:aipin/features/device_session/data/device_protocol_repository.dart';
-import 'package:aipin/features/device_session/application/device_auth_controller.dart';
 import 'package:aipin/features/device_session/domain/device_configuration.dart';
+import 'package:aipin/features/device_session/domain/device_permission.dart';
+import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
-import 'package:aipin/features/device_session/domain/device_file_gateway.dart';
+import 'package:aipin/features/device_session/domain/device_file_transfer_gateway.dart';
 import 'package:aipin/features/device_session/domain/device_info.dart';
 import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:aipin/features/device_session/application/session_state.dart';
 import 'package:aipin/features/device_session/domain/device_session.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
-import 'package:aipin/features/device_session/domain/device_security_gateway.dart';
-import 'package:aipin/features/device_session/domain/realtime_audio_gateway.dart';
 import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:flutter/foundation.dart';
 
 class SessionController extends ChangeNotifier
-    implements RealtimeAudioGateway, DeviceFileGateway, DeviceSecurityGateway {
+    implements DeviceFileTransferGateway, EvtLegacySecurityGateway {
   SessionController(
     this._transport,
     this._profile,
     this._codec, {
     SafeAppLogger? logger,
-    this._subscriptionSettleDelay = const Duration(milliseconds: 250),
+    this._legacySecurityResponseTimeout = const Duration(seconds: 2),
+    this._fileListResponseTimeout = const Duration(seconds: 2),
+    this._fileTransferIdleTimeout = const Duration(seconds: 15),
+    this._permissionGate,
   }) : _logger = logger ?? const DebugSafeAppLogger(scope: 'SESSION');
 
   static const _connectionSetupTimeout = Duration(seconds: 15);
   static const _operationTimeout = Duration(seconds: 15);
+  static const _notificationSetupTimeout = Duration(seconds: 8);
   // The largest legal 0x81 indication is 133 bytes, plus the ATT header.
   static const _v3AdmissionMinimumAttMtu = 136;
+  static const _evtResponseCommandByEndpoint = <BleLogicalEndpoint, int>{
+    BleLogicalEndpoint.fa10Fa11: 0x81,
+    BleLogicalEndpoint.fa10Fa12: 0x82,
+    BleLogicalEndpoint.fa10Fa15: 0x85,
+    BleLogicalEndpoint.fa10Fa16: 0x86,
+    BleLogicalEndpoint.fa10Fa17: 0x87,
+    BleLogicalEndpoint.fa10Fa19: 0x89,
+    BleLogicalEndpoint.fb10Fb11: 0x91,
+    BleLogicalEndpoint.ff10Ff11: 0xA1,
+    BleLogicalEndpoint.ff10Ff12: 0xA2,
+    BleLogicalEndpoint.ff10Ff13: 0x23,
+  };
 
   final BleTransport _transport;
   final DeviceProfile _profile;
   final EvtProtocolCodec _codec;
   final SafeAppLogger _logger;
-  final Duration _subscriptionSettleDelay;
+  final Duration _legacySecurityResponseTimeout;
+  final Duration _fileListResponseTimeout;
+  final Duration _fileTransferIdleTimeout;
+  final DevicePermissionGate? _permissionGate;
   StreamSubscription<BleConnectionState>? _connectionSubscription;
   final List<StreamSubscription<Uint8List>> _notificationSubscriptions = [];
-  final List<WqotaClient> _wqotaClients = <WqotaClient>[];
-  StreamSubscription<Uint8List>? _realtimeAudioSubscription;
-  StreamController<Uint8List>? _realtimeAudioController;
+  final Set<String> _subscribedEndpointKeys = <String>{};
+  final Map<String, Future<void>> _subscriptionReadiness =
+      <String, Future<void>>{};
   StreamController<Uint8List>? _responseController;
   EvtCommandClient? _commandClient;
   DeviceProtocolRepository? _protocolRepository;
   Future<void>? _deviceDetailsRefresh;
-  DeviceConfiguration? _configurationTemplate;
+  Future<void>? _closeFuture;
+  Future<void>? _transportCloseFuture;
   int? _attMtu;
+  int _connectionAttempt = 0;
+  var _isDisposed = false;
+  var _changeNotifierDisposed = false;
   SessionState _state = const SessionState(
     phase: SessionPhase.environmentReady,
   );
 
   SessionState get state => _state;
 
-  DeviceProtocolRepository? get protocolRepository => _protocolRepository;
-
-  Future<DeviceInfo> readDeviceInfo() => _requireProtocol().readDeviceInfo();
+  Future<DeviceInfo> readDeviceInfo() async {
+    _requireDevicePermission(DevicePermission.status);
+    _requireAuthenticationReadyEndpoint(
+      BleLogicalEndpoint.fa10Fa11,
+      BleOperation.write,
+    );
+    _requireAuthenticationReadyEndpoint(
+      BleLogicalEndpoint.fa10Fa11,
+      BleOperation.indicate,
+    );
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.fa10Fa11,
+      critical: true,
+    );
+    // CCC registration can outlive the V1 authentication window. Recheck
+    // immediately before scheduling the protected device-info request.
+    _requireDevicePermission(DevicePermission.status);
+    return _requireProtocol().readDeviceInfo();
+  }
 
   Future<void> writeConfiguration(DeviceConfiguration configuration) =>
       _writeConfiguration(configuration);
@@ -74,7 +111,13 @@ class SessionController extends ChangeNotifier
     DeviceConfiguration configuration, {
     bool refreshDetails = true,
   }) async {
+    _requireDevicePermission(DevicePermission.configuration);
     _requireCommandEndpoint(BleLogicalEndpoint.fa10Fa12, BleOperation.indicate);
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.fa10Fa12,
+      critical: true,
+    );
+    _requireDevicePermission(DevicePermission.configuration);
     await _requireProtocol().writeConfiguration(configuration);
     _cacheConfigurationTemplate(configuration);
     if (refreshDetails) {
@@ -85,6 +128,7 @@ class SessionController extends ChangeNotifier
   Future<void> _writeAuthenticationConfiguration(
     DeviceConfiguration configuration,
   ) async {
+    _requireDevicePermission(DevicePermission.configuration);
     _requireAuthenticationReadyEndpoint(
       BleLogicalEndpoint.fa10Fa12,
       BleOperation.write,
@@ -93,44 +137,82 @@ class SessionController extends ChangeNotifier
       BleLogicalEndpoint.fa10Fa12,
       BleOperation.indicate,
     );
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.fa10Fa12,
+      critical: true,
+    );
+    _requireDevicePermission(DevicePermission.configuration);
     await _requireProtocol().writeConfiguration(configuration);
     _cacheConfigurationTemplate(configuration);
   }
 
   void _cacheConfigurationTemplate(DeviceConfiguration configuration) {
-    _configurationTemplate = configuration;
     _logger.info(
-      'configuration_template_updated',
+      'configuration_applied',
       fields: {
         'duration_seconds': configuration.recordDurationSeconds,
         'record_mode': configuration.recordMode,
         'record_type': configuration.recordType,
-        'audio_stream': configuration.audioStreamEnabled,
       },
     );
   }
 
   Future<DeviceStatus> readStatus() async {
+    _requireDevicePermission(DevicePermission.status);
     _requireCommandEndpoint(BleLogicalEndpoint.fa10Fa16, BleOperation.indicate);
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.fa10Fa16,
+      critical: true,
+    );
+    _requireDevicePermission(DevicePermission.status);
     final status = await _requireProtocol().readStatus();
     _updateDeviceDetails(deviceStatus: status);
     return status;
   }
 
   Future<void> setRecordConsent(bool granted) async {
+    _requireDevicePermission(DevicePermission.configuration);
     _requireCommandEndpoint(BleLogicalEndpoint.fa10Fa16, BleOperation.indicate);
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.fa10Fa16,
+      critical: true,
+    );
+    _requireDevicePermission(DevicePermission.configuration);
     await _requireProtocol().setRecordConsent(granted);
-    await refreshDeviceDetails(const {DevicePermission.configuration});
+    final actual = await readStatus();
+    if (actual.recordConsent != granted) {
+      throw StateError('设备录音授权状态未按请求更新。');
+    }
+    _logger.info('record_consent_verified', fields: {'granted': granted});
   }
 
   Future<void> setPrivacyDuration(int durationCode) async {
+    _requireDevicePermission(DevicePermission.configuration);
     _requireCommandEndpoint(BleLogicalEndpoint.fa10Fa16, BleOperation.indicate);
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.fa10Fa16,
+      critical: true,
+    );
+    _requireDevicePermission(DevicePermission.configuration);
     await _requireProtocol().setPrivacyDuration(durationCode);
-    await refreshDeviceDetails(const {DevicePermission.configuration});
+    final actual = await readPrivacyDuration();
+    if (actual != durationCode) {
+      throw StateError('设备隐私时长未按请求更新。');
+    }
+    _logger.info(
+      'privacy_duration_verified',
+      fields: {'duration_code': actual},
+    );
   }
 
   Future<int> readPrivacyDuration() async {
+    _requireDevicePermission(DevicePermission.configuration);
     _requireCommandEndpoint(BleLogicalEndpoint.fa10Fa16, BleOperation.indicate);
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.fa10Fa16,
+      critical: true,
+    );
+    _requireDevicePermission(DevicePermission.configuration);
     final durationCode = await _requireProtocol().readPrivacyDuration();
     _updateDeviceDetails(privacyDurationCode: durationCode);
     return durationCode;
@@ -141,7 +223,11 @@ class SessionController extends ChangeNotifier
     if (pending != null) {
       return pending;
     }
-    final work = _refreshDeviceDetails(permissions);
+    final authorizedPermissions = _authorizedPermissions(permissions);
+    if (authorizedPermissions.isEmpty) {
+      return Future<void>.value();
+    }
+    final work = _refreshDeviceDetails(authorizedPermissions);
     _deviceDetailsRefresh = work;
     return work.whenComplete(() {
       if (identical(_deviceDetailsRefresh, work)) {
@@ -150,116 +236,60 @@ class SessionController extends ChangeNotifier
     });
   }
 
-  Future<EvtFrame> setRecordAction(int action) {
+  Future<EvtFrame> setRecordAction(int action) async {
+    _requireDevicePermission(DevicePermission.configuration);
     _requireCommandEndpoint(BleLogicalEndpoint.fa10Fa17, BleOperation.indicate);
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.fa10Fa17,
+      critical: true,
+    );
+    _requireDevicePermission(DevicePermission.configuration);
     return _setRecordAction(action);
   }
 
-  WqotaClient openWqotaClient(WqotaCodec codec) {
-    _requireObservableEndpoint(
-      BleLogicalEndpoint.wqota2001,
-      BleOperation.writeWithoutResponse,
-    );
-    _requireObservableEndpoint(
-      BleLogicalEndpoint.wqota2002,
-      BleOperation.notify,
-    );
-    final deviceId = _state.session!.candidate.connectionId;
-    final client = WqotaClient(
-      transport: _transport,
-      writeCharacteristic: _characteristic(
-        deviceId,
-        _profile.endpoint(BleLogicalEndpoint.wqota2001),
-      ),
-      notifications: _transport.subscribe(
-        _characteristic(
-          deviceId,
-          _profile.endpoint(BleLogicalEndpoint.wqota2002),
-        ),
-      ),
-      codec: codec,
-    );
-    _wqotaClients.add(client);
-    _logger.info('wqota_subscribed');
-    return client;
-  }
-
-  Future<int> requestWqotaMtu() async {
-    _requireObservableEndpoint(
-      BleLogicalEndpoint.wqota2001,
-      BleOperation.writeWithoutResponse,
-    );
-    final mtu = await _ensureAttMtu(30);
-    _logger.info('wqota_mtu_ready', fields: {'mtu': mtu});
-    return mtu;
-  }
-
-  Future<void> closeWqotaClient(WqotaClient client) async {
-    if (_wqotaClients.remove(client)) {
-      await client.close();
-    }
-  }
-
   @override
-  Stream<Uint8List> subscribeRealtimeAudio() {
-    _requireObservableEndpoint(
-      BleLogicalEndpoint.fa10Fa18,
-      BleOperation.notify,
+  Future<bool> executeEvtLegacySecurity(
+    EvtLegacySecurityRequest request,
+  ) async {
+    _requireAuthenticationReadyEndpoint(
+      BleLogicalEndpoint.fa10Fa19,
+      BleOperation.write,
     );
-    final existing = _realtimeAudioController;
-    if (existing != null && !existing.isClosed) {
-      return existing.stream;
+    _requireAuthenticationReadyEndpoint(
+      BleLogicalEndpoint.fa10Fa19,
+      BleOperation.indicate,
+    );
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.fa10Fa19,
+      critical: true,
+    );
+    try {
+      return await _requireProtocol().executeEvtLegacySecurity(request);
+    } catch (error, stackTrace) {
+      // V1 only returns BindResult. Without an action or transaction id, a
+      // late response cannot be distinguished from the next 0x09 operation.
+      await _invalidateSessionForAmbiguousProtocolResult(
+        event: 'legacy_security_result_uncertain',
+        message: '设备认证结果未确认，已断开连接，请重新连接后重试。',
+        fields: {
+          'action': request.action.name,
+          'error': error.runtimeType.toString(),
+        },
+      );
+      Error.throwWithStackTrace(error, stackTrace);
     }
-    final deviceId = _state.session!.candidate.connectionId;
-    final endpoint = _profile.endpoint(BleLogicalEndpoint.fa10Fa18);
-    late final StreamController<Uint8List> controller;
-    controller = StreamController<Uint8List>.broadcast(
-      onListen: () {
-        final subscription = _transport
-            .subscribe(_characteristic(deviceId, endpoint))
-            .listen(
-              controller.add,
-              onError: controller.addError,
-              onDone: () {
-                _realtimeAudioSubscription = null;
-              },
-            );
-        _realtimeAudioSubscription = subscription;
-        _logger.info(
-          'realtime_audio_subscribed',
-          fields: {'characteristic': endpoint.characteristicUuid},
-        );
-      },
-      onCancel: _cancelRealtimeAudioSubscription,
-    );
-    _realtimeAudioController = controller;
-    return controller.stream;
-  }
-
-  @override
-  Future<void> setAudioStreamEnabled(bool enabled) async {
-    _requireCommandEndpoint(BleLogicalEndpoint.fa10Fa12, BleOperation.indicate);
-    final template = _configurationTemplate;
-    if (template == null) {
-      throw StateError('请先完成设备认证和配置同步，再开启实时音频。');
-    }
-    final chargingMode = _state.deviceBattery?.chargingMode;
-    await writeConfiguration(
-      template.copyWith(
-        systemTime: DateTime.now(),
-        chargingMode: chargingMode ?? template.chargingMode,
-        audioStreamEnabled: enabled,
-      ),
-    );
   }
 
   Future<void> synchronizeAfterAuthentication(
     Set<DevicePermission> permissions,
   ) async {
+    final connectionAttempt = _connectionAttempt;
     if (_state.isObservable) {
       await refreshDeviceDetails(permissions);
       return;
     }
+    _requireDevicePermission(DevicePermission.status);
+    _requireDevicePermission(DevicePermission.configuration);
     _requireAuthenticationReadyEndpoint(
       BleLogicalEndpoint.fa10Fa11,
       BleOperation.write,
@@ -274,7 +304,15 @@ class SessionController extends ChangeNotifier
     late final DeviceInfo info;
     late final DeviceConfiguration configuration;
     try {
+      await _ensureResponseSubscription(
+        BleLogicalEndpoint.fa10Fa11,
+        critical: true,
+      );
+      _requireDevicePermission(DevicePermission.status);
       mtu = await _ensureV3AdmissionAttMtu();
+      // The V1 authentication window can end while CCC/MTU setup is pending.
+      // Recheck immediately before the protected 0x01 command is scheduled.
+      _requireDevicePermission(DevicePermission.status);
       info = await repository.readDeviceInfo();
       if (info.capabilities.protocolVersion != 3) {
         throw BleTransportException(
@@ -288,19 +326,30 @@ class SessionController extends ChangeNotifier
       configuration = _baselineConfigurationFor(info);
       await _writeAuthenticationConfiguration(configuration);
     } catch (error) {
-      _fail(_failureFor(error, fallback: '认证后的设备信息或配置同步失败。'), interrupt: true);
-      if (deviceId != null) {
-        await _closeTransport(deviceId);
+      if (_isCurrentConnectionAttempt(connectionAttempt) &&
+          _state.phase == SessionPhase.authenticationReady) {
+        _fail(
+          _failureFor(error, fallback: '认证后的设备信息或配置同步失败。'),
+          interrupt: true,
+        );
+        if (deviceId != null) {
+          await _closeTransport(
+            deviceId,
+            expectedConnectionAttempt: connectionAttempt,
+          );
+        }
       }
       rethrow;
     }
-    if (_state.phase == SessionPhase.authenticationReady) {
-      _transition(
-        SessionPhase.observable,
-        session: _state.session!.copyWith(observableAt: DateTime.now()),
-        latestSnapshot: _snapshotFromDeviceInfo(info),
-      );
+    if (!_isCurrentConnectionAttempt(connectionAttempt) ||
+        _state.phase != SessionPhase.authenticationReady) {
+      return;
     }
+    _transition(
+      SessionPhase.observable,
+      session: _state.session!.copyWith(observableAt: DateTime.now()),
+      latestSnapshot: _snapshotFromDeviceInfo(info),
+    );
     _state = _state.copyWith(deviceInfo: info);
     notifyListeners();
     _logger.info(
@@ -324,16 +373,7 @@ class SessionController extends ChangeNotifier
       denoise: false,
       powerOff: info.powerOff,
       chargingMode: info.chargingMode,
-      // A previous app process can die before it disables the volatile stream.
-      // Each authenticated session starts with the V1.5 stream gate closed.
-      audioStreamEnabled: false,
     );
-  }
-
-  @override
-  Future<void> setRealtimeRecording(bool active) async {
-    _requireCommandEndpoint(BleLogicalEndpoint.fa10Fa17, BleOperation.indicate);
-    await setRecordAction(active ? 1 : 0);
   }
 
   Future<EvtFrame> _setRecordAction(int action) async {
@@ -366,101 +406,259 @@ class SessionController extends ChangeNotifier
     int offset = 0,
     int pageSize = 10,
   }) async {
+    _requireDevicePermission(DevicePermission.files);
     _requireCommandEndpoint(BleLogicalEndpoint.ff10Ff12, BleOperation.indicate);
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.ff10Ff12,
+      critical: true,
+    );
+    _requireDevicePermission(DevicePermission.files);
     final mtu = await _ensureAttMtu(31);
+    // The V1 authentication window can expire while CCC or MTU work is
+    // pending. Check again immediately before the 0x22 command is written.
+    _requireDevicePermission(DevicePermission.files);
     final supportedPageSize = max(1, min(20, (mtu - 10) ~/ 21));
-    return _requireProtocol().listFiles(
-      offset: offset,
-      pageSize: min(pageSize, supportedPageSize),
-    );
+    try {
+      return await _requireProtocol().listFiles(
+        offset: offset,
+        pageSize: min(pageSize, supportedPageSize),
+      );
+    } catch (error, stackTrace) {
+      // V1.5 0xA2 does not carry the requested page offset. A late indication
+      // therefore cannot be safely distinguished from a later 0x22 request.
+      // Reset the BLE session after any dispatched 0x22 failure before a new
+      // listing can begin. That also covers an ambiguous GATT write failure.
+      final timeoutError = error is EvtCommandTimeoutException ? error : null;
+      final timedOut = timeoutError != null;
+      await _invalidateSessionForAmbiguousProtocolResult(
+        event: timedOut
+            ? 'file_list_response_timeout_requires_reconnect'
+            : 'file_list_response_uncertain_requires_reconnect',
+        message: timedOut
+            ? '设备文件列表响应超时，已断开连接以避免使用迟到数据。'
+            : '设备文件列表响应异常，已断开连接以避免使用迟到数据。',
+        fields: {
+          'offset': offset,
+          'error': error.runtimeType.toString(),
+          if (timeoutError != null) 'attempts': timeoutError.attempts,
+        },
+      );
+      Error.throwWithStackTrace(
+        StateError(
+          timedOut ? '设备文件列表响应超时，请重新连接设备后刷新。' : '设备文件列表响应异常，请重新连接设备后刷新。',
+        ),
+        stackTrace,
+      );
+    }
   }
 
   @override
-  Future<DeviceFileMetadata> readFileMetadata(List<int> nameSlot) async {
-    _requireCommandEndpoint(BleLogicalEndpoint.ff10Ff16, BleOperation.indicate);
-    await _ensureAttMtu(57);
-    return _requireProtocol().readFileMetadata(nameSlot);
-  }
-
-  @override
-  Stream<Uint8List> downloadFile({
+  Stream<EvtDeviceFileTransferEvent> downloadEvtFile({
     required List<int> nameSlot,
     int startOffset = 0,
     int chunkSize = 0,
+  }) {
+    // An async* wrapper does not propagate a caller's cancellation through an
+    // await-for until its child stream resumes. A silent 0x23 transfer can
+    // therefore wait for the 15-second idle timer after the file screen has
+    // gone away. Keep a direct subscription here so caller cancellation can
+    // close the ambiguous V1.5 transfer session immediately while this layer
+    // remains available to absorb the resulting source-stream error.
+    late final StreamController<EvtDeviceFileTransferEvent> controller;
+    StreamSubscription<EvtDeviceFileTransferEvent>? transferSubscription;
+    var transferStarted = false;
+    var terminalReceived = false;
+    var callerCancelled = false;
+    Future<void>? incompleteTransferReset;
+
+    Future<void> resetIncompleteTransfer({
+      required String event,
+      required String message,
+      required Object error,
+    }) {
+      if (!transferStarted || terminalReceived) {
+        return Future<void>.value();
+      }
+      return incompleteTransferReset ??=
+          _invalidateSessionForAmbiguousProtocolResult(
+            event: event,
+            message: message,
+            fields: {
+              'offset': startOffset,
+              'error': error.runtimeType.toString(),
+            },
+          );
+    }
+
+    Future<void> cancelSource(
+      StreamSubscription<EvtDeviceFileTransferEvent> subscription,
+    ) async {
+      try {
+        await subscription.cancel();
+      } catch (error) {
+        // The transport-close error is expected after the caller leaves an
+        // active stream. It has already been converted into session state by
+        // resetIncompleteTransfer, so do not leak it as an unhandled zone
+        // error after the consumer has cancelled.
+        _logger.info(
+          'file_transfer_source_cancelled',
+          fields: {'error': error.runtimeType.toString()},
+        );
+      }
+    }
+
+    void startSource() {
+      transferSubscription =
+          _downloadEvtFileInternal(
+            nameSlot: nameSlot,
+            startOffset: startOffset,
+            chunkSize: chunkSize,
+            onTransferStarted: () => transferStarted = true,
+            onTerminalReceived: () => terminalReceived = true,
+            isCallerCancelled: () => callerCancelled,
+            onIncompleteTransfer: (error) => resetIncompleteTransfer(
+              event: 'file_transfer_requires_reconnect',
+              message: '设备文件传输中断，已断开连接以避免接收旧数据。',
+              error: error,
+            ),
+          ).listen(
+            (event) {
+              // Set this before forwarding: a listener can cancel from onData.
+              if (event.isTerminal) {
+                terminalReceived = true;
+              }
+              if (!callerCancelled && !controller.isClosed) {
+                controller.add(event);
+              }
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              if (!callerCancelled && !controller.isClosed) {
+                controller.addError(error, stackTrace);
+              }
+            },
+            onDone: () {
+              if (!controller.isClosed) {
+                unawaited(controller.close());
+              }
+            },
+          );
+    }
+
+    controller = StreamController<EvtDeviceFileTransferEvent>(
+      onListen: startSource,
+      onCancel: () async {
+        callerCancelled = true;
+        // Do not await the source cancellation. Its async* body can be
+        // waiting for the next Notify, while the V1.5 session must be reset
+        // now to stop a late frame entering a later transfer.
+        final subscription = transferSubscription;
+        if (subscription != null) {
+          unawaited(cancelSource(subscription));
+        }
+        await resetIncompleteTransfer(
+          event: 'file_transfer_cancelled_requires_reconnect',
+          message: '已取消设备文件传输，已断开连接以避免接收旧数据。',
+          error: StateError('连续文件传输已取消。'),
+        );
+      },
+    );
+    return controller.stream;
+  }
+
+  Stream<EvtDeviceFileTransferEvent> _downloadEvtFileInternal({
+    required List<int> nameSlot,
+    required int startOffset,
+    required int chunkSize,
+    required VoidCallback onTransferStarted,
+    required VoidCallback onTerminalReceived,
+    required bool Function() isCallerCancelled,
+    required Future<void> Function(Object error) onIncompleteTransfer,
   }) async* {
+    void requireActiveCaller() {
+      if (isCallerCancelled()) {
+        throw StateError('设备文件传输已取消。');
+      }
+    }
+
+    _requireDevicePermission(DevicePermission.files);
     _requireCommandEndpoint(BleLogicalEndpoint.ff10Ff13, BleOperation.notify);
+    await _ensureResponseSubscription(
+      BleLogicalEndpoint.ff10Ff13,
+      critical: true,
+    );
+    requireActiveCaller();
+    _requireDevicePermission(DevicePermission.files);
     await _ensureAttMtu(
       _requiredFileTransferMtu(startOffset: startOffset, chunkSize: chunkSize),
     );
-    yield* _requireProtocol().downloadFile(
-      nameSlot: nameSlot,
-      startOffset: startOffset,
-      chunkSize: chunkSize,
-    );
-  }
+    requireActiveCaller();
+    // Do not let an expired V1 window reach the 0x23 write after an awaited
+    // setup step. The per-event check below also stops an active transfer.
+    _requireDevicePermission(DevicePermission.files);
+    var terminalReceived = false;
 
-  @override
-  Future<Uint8List> readFileChunk({
-    required List<int> nameSlot,
-    int startOffset = 0,
-    int chunkSize = 0,
-  }) async {
-    _requireCommandEndpoint(BleLogicalEndpoint.ff10Ff13, BleOperation.notify);
-    await _ensureAttMtu(
-      _requiredFileTransferMtu(startOffset: startOffset, chunkSize: chunkSize),
-    );
-    return _requireProtocol().readFileChunk(
-      nameSlot: nameSlot,
-      startOffset: startOffset,
-      chunkSize: chunkSize,
-    );
-  }
-
-  @override
-  Future<int> confirmArchive({
-    required List<int> nameSlot,
-    required int fileSize,
-    required int crc32,
-  }) async {
-    _requireCommandEndpoint(BleLogicalEndpoint.ff10Ff16, BleOperation.indicate);
-    await _ensureAttMtu(37);
-    return _requireProtocol().confirmArchive(
-      nameSlot: nameSlot,
-      fileSize: fileSize,
-      crc32: crc32,
-    );
-  }
-
-  @override
-  Future<DeviceSecurityResponse> execute(DeviceSecurityRequest request) async {
-    _requireAuthenticationReadyEndpoint(
-      BleLogicalEndpoint.fa10Fa19,
-      BleOperation.write,
-    );
-    _requireAuthenticationReadyEndpoint(
-      BleLogicalEndpoint.fa10Fa19,
-      BleOperation.indicate,
-    );
-    await _ensureAttMtu(17 + request.data.length);
-    return _requireProtocol().execute(request);
+    try {
+      final transfer = _requireProtocol().downloadEvtFile(
+        nameSlot: nameSlot,
+        startOffset: startOffset,
+        chunkSize: chunkSize,
+      );
+      onTransferStarted();
+      await for (final event in transfer) {
+        // The permission is checked immediately before the one and only 0x23
+        // Write. Once the device has accepted that write, every following
+        // Notify belongs to the same continuous transfer. A V1 auth window
+        // expiring while a large file is in flight must block a later command,
+        // not discard already-authorized bytes and force a needless restart.
+        if (event.isTerminal) {
+          terminalReceived = true;
+          onTerminalReceived();
+        }
+        yield event;
+      }
+      if (!terminalReceived) {
+        throw StateError('设备文件传输未返回结束帧。');
+      }
+    } catch (error, stackTrace) {
+      await onIncompleteTransfer(error);
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      await onIncompleteTransfer(StateError('连续文件传输已取消。'));
+    }
   }
 
   Future<void> connect(DeviceCandidate candidate) async {
+    if (_isDisposed) {
+      throw StateError('设备会话已关闭。');
+    }
+    final connectionAttempt = ++_connectionAttempt;
     final previousDeviceId = _state.session?.candidate.connectionId;
     await _connectionSubscription?.cancel();
+    if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+      return;
+    }
     _connectionSubscription = null;
-    await _closeWqotaClients();
-    await _closeRealtimeAudioStream();
     await _cancelNotificationSubscriptions();
+    if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+      return;
+    }
     await _commandClient?.close();
+    if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+      return;
+    }
     _commandClient = null;
     await _responseController?.close();
+    if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+      return;
+    }
     _responseController = null;
     _protocolRepository = null;
-    _configurationTemplate = null;
     _attMtu = null;
     if (previousDeviceId != null) {
       await _transport.disconnect(previousDeviceId);
+      if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+        return;
+      }
     }
     _state = const SessionState(phase: SessionPhase.environmentReady);
     _transition(SessionPhase.discovered);
@@ -488,6 +686,9 @@ class SessionController extends ChangeNotifier
         .connect(candidate.connectionId)
         .listen(
           (connection) {
+            if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+              return;
+            }
             _logger.info(
               'connection_state',
               fields: {
@@ -517,10 +718,18 @@ class SessionController extends ChangeNotifier
                   EvtFailure.transport(message: '蓝牙连接已断开。'),
                 ),
               );
-              unawaited(_closeTransport(candidate.connectionId));
+              unawaited(
+                _closeTransport(
+                  candidate.connectionId,
+                  expectedConnectionAttempt: connectionAttempt,
+                ),
+              );
             }
           },
           onError: (Object error, StackTrace stackTrace) {
+            if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+              return;
+            }
             _logger.info(
               'connection_stream_error',
               fields: {
@@ -532,10 +741,18 @@ class SessionController extends ChangeNotifier
               connected.completeError(error, stackTrace);
             } else if (_state.phase != SessionPhase.interrupted) {
               _interrupt(error);
-              unawaited(_closeTransport(candidate.connectionId));
+              unawaited(
+                _closeTransport(
+                  candidate.connectionId,
+                  expectedConnectionAttempt: connectionAttempt,
+                ),
+              );
             }
           },
           onDone: () {
+            if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+              return;
+            }
             _logger.info(
               'connection_stream_done',
               fields: {'device': _redactDeviceId(candidate.connectionId)},
@@ -553,14 +770,20 @@ class SessionController extends ChangeNotifier
                   EvtFailure.transport(message: '蓝牙连接流已结束。'),
                 ),
               );
-              unawaited(_closeTransport(candidate.connectionId));
+              unawaited(
+                _closeTransport(
+                  candidate.connectionId,
+                  expectedConnectionAttempt: connectionAttempt,
+                ),
+              );
             }
           },
         );
 
     try {
       await connected.future.timeout(_connectionSetupTimeout);
-      if (_state.phase != SessionPhase.connecting) {
+      if (!_isCurrentConnectionAttempt(connectionAttempt) ||
+          _state.phase != SessionPhase.connecting) {
         return;
       }
       _transition(
@@ -570,9 +793,29 @@ class SessionController extends ChangeNotifier
       final services = await _transport
           .discoverServices(candidate.connectionId)
           .timeout(_operationTimeout);
-      if (!_hasRequiredEndpoints(services)) {
-        _fail(EvtFailure.access(message: '设备缺少所需的状态读取或订阅特征。'), interrupt: true);
-        await _closeTransport(candidate.connectionId);
+      if (!_isCurrentConnectionAttempt(connectionAttempt) ||
+          _state.phase != SessionPhase.servicesDiscovered) {
+        return;
+      }
+      final missingEndpointOperations = _missingRequiredEndpointOperations(
+        services,
+      );
+      if (missingEndpointOperations.isNotEmpty) {
+        _logger.info(
+          'evt_gatt_contract_mismatch',
+          fields: {'missing': missingEndpointOperations.join(',')},
+        );
+        _fail(
+          EvtFailure.access(
+            message: '设备 GATT 不符合 EVT V1.5 联调要求。',
+            detail: '缺少或不支持：${missingEndpointOperations.join('、')}。',
+          ),
+          interrupt: true,
+        );
+        await _closeTransport(
+          candidate.connectionId,
+          expectedConnectionAttempt: connectionAttempt,
+        );
         return;
       }
       _state = _state.copyWith(
@@ -586,6 +829,7 @@ class SessionController extends ChangeNotifier
         transport: _transport,
         codec: _codec,
         responses: _responseController!.stream,
+        beforeWrite: _admitEvtCommandWrite,
       );
       _protocolRepository = DeviceProtocolRepository(
         deviceId: candidate.connectionId,
@@ -593,20 +837,26 @@ class SessionController extends ChangeNotifier
         transport: _transport,
         commands: _commandClient!,
         codec: _codec,
+        legacySecurityResponseTimeout: _legacySecurityResponseTimeout,
+        fileListResponseTimeout: _fileListResponseTimeout,
+        fileTransferIdleTimeout: _fileTransferIdleTimeout,
       );
-      await _subscribeConfiguredEndpoints(candidate.connectionId, services);
-      if (_subscriptionSettleDelay > Duration.zero) {
-        _logger.info(
-          'notification_subscription_settling',
-          fields: {'milliseconds': _subscriptionSettleDelay.inMilliseconds},
-        );
-        await Future<void>.delayed(_subscriptionSettleDelay);
+      await _subscribeEvtEndpointsBeforeAuthentication();
+      if (!_isCurrentConnectionAttempt(connectionAttempt) ||
+          _state.phase != SessionPhase.subscribing) {
+        return;
       }
       _transition(SessionPhase.authenticationReady);
-      _logger.info('session_authentication_ready');
+      _logger.info('session_authentication_ready', fields: {'stage': 'evt_v1'});
     } catch (error) {
+      if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+        return;
+      }
       _interrupt(error);
-      await _closeTransport(candidate.connectionId);
+      await _closeTransport(
+        candidate.connectionId,
+        expectedConnectionAttempt: connectionAttempt,
+      );
     }
   }
 
@@ -631,12 +881,21 @@ class SessionController extends ChangeNotifier
 
   Future<void> _loadDeviceStatus(DeviceProtocolRepository repository) async {
     if (!_state.supportsEndpoint(
-      BleLogicalEndpoint.fa10Fa16,
-      BleOperation.write,
-    )) {
+          BleLogicalEndpoint.fa10Fa16,
+          BleOperation.write,
+        ) ||
+        !_state.supportsEndpoint(
+          BleLogicalEndpoint.fa10Fa16,
+          BleOperation.indicate,
+        )) {
       return;
     }
     try {
+      await _ensureResponseSubscription(
+        BleLogicalEndpoint.fa10Fa16,
+        critical: false,
+      );
+      _requireDevicePermission(DevicePermission.status);
       final status = await repository.readStatus();
       _updateDeviceDetails(deviceStatus: status, repository: repository);
       _logger.info('device_status_loaded');
@@ -653,6 +912,7 @@ class SessionController extends ChangeNotifier
       return;
     }
     try {
+      _requireDevicePermission(DevicePermission.status);
       final battery = await repository.readBattery();
       _updateDeviceDetails(deviceBattery: battery, repository: repository);
       _logger.info(
@@ -666,12 +926,21 @@ class SessionController extends ChangeNotifier
 
   Future<void> _loadPrivacyDuration(DeviceProtocolRepository repository) async {
     if (!_state.supportsEndpoint(
-      BleLogicalEndpoint.fa10Fa16,
-      BleOperation.write,
-    )) {
+          BleLogicalEndpoint.fa10Fa16,
+          BleOperation.write,
+        ) ||
+        !_state.supportsEndpoint(
+          BleLogicalEndpoint.fa10Fa16,
+          BleOperation.indicate,
+        )) {
       return;
     }
     try {
+      await _ensureResponseSubscription(
+        BleLogicalEndpoint.fa10Fa16,
+        critical: false,
+      );
+      _requireDevicePermission(DevicePermission.configuration);
       final durationCode = await repository.readPrivacyDuration();
       _updateDeviceDetails(
         privacyDurationCode: durationCode,
@@ -690,16 +959,13 @@ class SessionController extends ChangeNotifier
     DeviceProtocolRepository repository,
   ) async {
     if (!_state.supportsEndpoint(
-          BleLogicalEndpoint.fa10Fa12,
-          BleOperation.write,
-        ) ||
-        !_state.supportsEndpoint(
-          BleLogicalEndpoint.fa10Fa12,
-          BleOperation.indicate,
-        )) {
+      BleLogicalEndpoint.fa10Fa12,
+      BleOperation.read,
+    )) {
       return;
     }
     try {
+      _requireDevicePermission(DevicePermission.configuration);
       final time = await repository.readConfigurationTime();
       _logger.info(
         'device_configuration_time_loaded',
@@ -718,6 +984,7 @@ class SessionController extends ChangeNotifier
       return;
     }
     try {
+      _requireDevicePermission(DevicePermission.status);
       final storage = await repository.readStorage();
       _updateDeviceDetails(deviceStorage: storage, repository: repository);
       _logger.info(
@@ -740,6 +1007,7 @@ class SessionController extends ChangeNotifier
       return;
     }
     try {
+      _requireDevicePermission(DevicePermission.files);
       final count = await repository.readFileCount();
       _updateDeviceDetails(fileCount: count, repository: repository);
       _logger.info('device_file_count_loaded', fields: {'count': count});
@@ -775,9 +1043,13 @@ class SessionController extends ChangeNotifier
   }
 
   Future<void> disconnect() async {
+    final connectionAttempt = ++_connectionAttempt;
     final session = _state.session;
     if (session != null) {
-      await _closeTransport(session.candidate.connectionId);
+      await _closeTransport(
+        session.candidate.connectionId,
+        expectedConnectionAttempt: connectionAttempt,
+      );
     } else {
       await _cancelNotificationSubscriptions();
       await _commandClient?.close();
@@ -810,6 +1082,9 @@ class SessionController extends ChangeNotifier
     final frame = result.value!;
     final event = DeviceEvent.fromFrame(frame, source: '状态订阅');
     final status = _statusFromNotification(frame);
+    final battery = _batteryFromNotification(frame);
+    final storage = _storageFromNotification(frame);
+    final fileCount = _fileCountFromNotification(frame);
     final snapshot = _snapshotFromFrame(
       frame,
       source: '状态订阅 0x${frame.command.toRadixString(16).toUpperCase()}',
@@ -818,6 +1093,9 @@ class SessionController extends ChangeNotifier
       events: List.unmodifiable([..._state.events, event]),
       latestSnapshot: snapshot ?? _state.latestSnapshot,
       deviceStatus: status ?? _state.deviceStatus,
+      deviceBattery: battery ?? _state.deviceBattery,
+      deviceStorage: storage ?? _state.deviceStorage,
+      fileCount: fileCount ?? _state.fileCount,
     );
     notifyListeners();
     _logger.info(
@@ -844,84 +1122,288 @@ class SessionController extends ChangeNotifier
     }
   }
 
-  void _onTransportError(Object error, StackTrace stackTrace) {
-    _interrupt(error);
-    final deviceId = _state.session?.candidate.connectionId;
-    if (deviceId != null) {
-      unawaited(_closeTransport(deviceId));
+  DeviceBattery? _batteryFromNotification(EvtFrame frame) {
+    if (frame.command != 0x91) {
+      return null;
+    }
+    try {
+      return DeviceProtocolRepository.decodeBattery(frame);
+    } catch (error) {
+      _logger.info('battery_event_decode_failed', fields: {'error': '$error'});
+      return null;
     }
   }
 
-  Future<void> _subscribeConfiguredEndpoints(
-    String deviceId,
-    List<BleService> services,
-  ) async {
+  DeviceStorage? _storageFromNotification(EvtFrame frame) {
+    if (frame.command != 0x85) {
+      return null;
+    }
+    try {
+      return DeviceProtocolRepository.decodeStorage(frame);
+    } catch (error) {
+      _logger.info('storage_event_decode_failed', fields: {'error': '$error'});
+      return null;
+    }
+  }
+
+  int? _fileCountFromNotification(EvtFrame frame) {
+    if (frame.command != 0xA1) {
+      return null;
+    }
+    try {
+      return DeviceProtocolRepository.decodeFileCount(frame);
+    } catch (error) {
+      _logger.info(
+        'file_count_event_decode_failed',
+        fields: {'error': '$error'},
+      );
+      return null;
+    }
+  }
+
+  void _onTransportError(
+    Object error,
+    StackTrace stackTrace, {
+    int? expectedConnectionAttempt,
+  }) {
+    final connectionAttempt = expectedConnectionAttempt ?? _connectionAttempt;
+    if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+      return;
+    }
+    _interrupt(error);
+    final deviceId = _state.session?.candidate.connectionId;
+    if (deviceId != null) {
+      unawaited(
+        _closeTransport(deviceId, expectedConnectionAttempt: connectionAttempt),
+      );
+    }
+  }
+
+  /// Registers one GATT response stream before the matching command is sent.
+  Future<void> _ensureResponseSubscription(
+    BleLogicalEndpoint logicalEndpoint, {
+    required bool critical,
+  }) async {
     final responseController = _responseController;
     if (responseController == null) {
       throw StateError('协议响应通道尚未初始化。');
     }
-    final notifyEndpoint = _profile.notifyEndpoint;
-    final endpoints = <String, BleEndpoint>{};
-    void addEndpoint(BleEndpoint endpoint) {
-      endpoints['${endpoint.serviceUuid}|${endpoint.characteristicUuid}'] =
-          endpoint;
+    if (!EvtProtocolContract.subscriptionEndpoints.contains(logicalEndpoint)) {
+      EvtProtocolContract.rejectUnavailableCapability(
+        '特征 ${logicalEndpoint.name} 的通知订阅',
+      );
     }
-
-    addEndpoint(
-      BleEndpoint(
-        serviceUuid: notifyEndpoint.serviceUuid,
-        characteristicUuid: notifyEndpoint.characteristicUuid,
-        operations: const {BleOperation.indicate},
-      ),
+    final session = _state.session;
+    if (session == null || !_state.hasActiveBleConnection) {
+      throw StateError('设备尚未完成连接，无法订阅协议响应。');
+    }
+    final connectionAttempt = _connectionAttempt;
+    final supportsIndication = _state.supportsEndpoint(
+      logicalEndpoint,
+      BleOperation.indicate,
     );
-    for (final entry in _profile.endpoints.entries) {
-      if (entry.key == BleLogicalEndpoint.fa10Fa18 ||
-          entry.key == BleLogicalEndpoint.wqota2001 ||
-          entry.key == BleLogicalEndpoint.wqota2002) {
-        continue;
+    final supportsNotification = _state.supportsEndpoint(
+      logicalEndpoint,
+      BleOperation.notify,
+    );
+    if (!supportsIndication && !supportsNotification) {
+      if (critical) {
+        throw StateError('设备未提供 ${logicalEndpoint.name} 的通知或指示能力。');
       }
-      addEndpoint(entry.value);
-    }
-    for (final endpoint in endpoints.values) {
-      final subscribable =
-          endpoint.operations.contains(BleOperation.notify) ||
-          endpoint.operations.contains(BleOperation.indicate);
-      if (!subscribable || !_hasSubscriptionEndpoint(services, endpoint)) {
-        continue;
-      }
-      final characteristic = BleCharacteristic(
-        deviceId: deviceId,
-        serviceUuid: endpoint.serviceUuid,
-        characteristicUuid: endpoint.characteristicUuid,
-      );
-      final subscription = _transport.subscribe(characteristic).listen((bytes) {
-        responseController.add(bytes);
-        _onNotification(bytes);
-      }, onError: _onTransportError);
-      _notificationSubscriptions.add(subscription);
       _logger.info(
-        'notification_subscribed',
-        fields: {'characteristic': endpoint.characteristicUuid},
+        'notification_subscription_skipped',
+        fields: {'endpoint': logicalEndpoint.name, 'reason': 'unsupported'},
       );
+      return;
+    }
+    final endpoint = _profile.endpoint(logicalEndpoint);
+    final key = '${endpoint.serviceUuid}|${endpoint.characteristicUuid}';
+    final existingReadiness = _subscriptionReadiness[key];
+    if (existingReadiness != null) {
+      await _awaitResponseSubscriptionReadiness(
+        existingReadiness,
+        logicalEndpoint: logicalEndpoint,
+        critical: critical,
+        connectionAttempt: connectionAttempt,
+      );
+      return;
+    }
+    if (_subscribedEndpointKeys.contains(key)) {
+      return;
+    }
+    _subscribedEndpointKeys.add(key);
+    late final StreamSubscription<Uint8List> subscription;
+    subscription = _transport
+        .subscribe(_characteristic(session.candidate.connectionId, endpoint))
+        .listen(
+          (bytes) {
+            if (!_isCurrentConnectionAttempt(connectionAttempt) ||
+                responseController.isClosed) {
+              return;
+            }
+            final decoded = _codec.decode(bytes);
+            if (!decoded.isSuccess) {
+              _onNotification(bytes);
+              return;
+            }
+            final frame = decoded.value!;
+            if (!_isExpectedResponseForEndpoint(logicalEndpoint, frame)) {
+              _logger.info(
+                'notification_endpoint_mismatch',
+                fields: {
+                  'endpoint': logicalEndpoint.name,
+                  'command':
+                      '0x${frame.command.toRadixString(16).padLeft(2, '0')}',
+                },
+              );
+              return;
+            }
+            responseController.add(bytes);
+            if (logicalEndpoint == BleLogicalEndpoint.ff10Ff13) {
+              // File payloads are consumed by the active 0x23 transfer only.
+              // Retaining every chunk as a session event would duplicate audio
+              // bytes, rebuild listeners per packet, and grow memory with the
+              // full device file.
+              return;
+            }
+            _onNotification(bytes);
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+              return;
+            }
+            _subscribedEndpointKeys.remove(key);
+            _subscriptionReadiness.remove(key);
+            _notificationSubscriptions.remove(subscription);
+            _logger.info(
+              'notification_subscription_failed',
+              fields: {'endpoint': logicalEndpoint.name, 'critical': critical},
+            );
+            if (critical) {
+              _onTransportError(
+                error,
+                stackTrace,
+                expectedConnectionAttempt: connectionAttempt,
+              );
+            }
+          },
+          onDone: () {
+            if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+              return;
+            }
+            _subscribedEndpointKeys.remove(key);
+            _subscriptionReadiness.remove(key);
+            _notificationSubscriptions.remove(subscription);
+            _logger.info(
+              'notification_subscription_closed',
+              fields: {'endpoint': logicalEndpoint.name, 'critical': critical},
+            );
+            if (critical && _state.hasActiveBleConnection) {
+              _onTransportError(
+                StateError('关键响应特征 ${logicalEndpoint.name} 的通知通道已关闭。'),
+                StackTrace.current,
+                expectedConnectionAttempt: connectionAttempt,
+              );
+            }
+          },
+        );
+    _notificationSubscriptions.add(subscription);
+    final readiness = _transport
+        .awaitSubscriptionReady(
+          _characteristic(session.candidate.connectionId, endpoint),
+        )
+        .timeout(_notificationSetupTimeout);
+    _subscriptionReadiness[key] = readiness;
+    _logger.info(
+      'notification_subscribed',
+      fields: {
+        'endpoint': logicalEndpoint.name,
+        'mode': supportsIndication ? 'indicate' : 'notify',
+        'critical': critical,
+      },
+    );
+    await _awaitResponseSubscriptionReadiness(
+      readiness,
+      logicalEndpoint: logicalEndpoint,
+      critical: critical,
+      subscription: subscription,
+      key: key,
+      connectionAttempt: connectionAttempt,
+    );
+  }
+
+  Future<void> _awaitResponseSubscriptionReadiness(
+    Future<void> readiness, {
+    required BleLogicalEndpoint logicalEndpoint,
+    required bool critical,
+    required int connectionAttempt,
+    StreamSubscription<Uint8List>? subscription,
+    String? key,
+  }) async {
+    try {
+      await readiness;
+      if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+        throw StateError('蓝牙连接已切换，通知订阅结果已失效。');
+      }
+      _logger.info(
+        'notification_subscription_confirmed',
+        fields: {'endpoint': logicalEndpoint.name, 'critical': critical},
+      );
+    } catch (error, stackTrace) {
+      if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+        Error.throwWithStackTrace(StateError('蓝牙连接已切换，通知订阅结果已失效。'), stackTrace);
+      }
+      if (key != null && identical(_subscriptionReadiness[key], readiness)) {
+        _subscriptionReadiness.remove(key);
+        _subscribedEndpointKeys.remove(key);
+      }
+      if (subscription != null) {
+        _notificationSubscriptions.remove(subscription);
+        await subscription.cancel();
+      }
+      _logger.info(
+        'notification_subscription_confirmation_failed',
+        fields: {
+          'endpoint': logicalEndpoint.name,
+          'critical': critical,
+          'error': error.runtimeType.toString(),
+        },
+      );
+      if (critical) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+    }
+  }
+
+  static bool _isExpectedResponseForEndpoint(
+    BleLogicalEndpoint endpoint,
+    EvtFrame frame,
+  ) => _evtResponseCommandByEndpoint[endpoint] == frame.command;
+
+  /// Establishes required EVT CCCs before V1 `0x09` is sent.
+  ///
+  /// `FF11 / 0x21` is a compatibility-only file-count summary. It is
+  /// subscribed when present, but cannot block authentication because `0x22`
+  /// supplies the required file-list synchronization path.
+  Future<void> _subscribeEvtEndpointsBeforeAuthentication() async {
+    for (final endpoint in EvtProtocolContract.requiredSubscriptionOrder) {
+      await _ensureResponseSubscription(endpoint, critical: true);
+    }
+    for (final endpoint in EvtProtocolContract.optionalSubscriptionOrder) {
+      await _ensureResponseSubscription(endpoint, critical: false);
     }
   }
 
   DeviceSnapshot? _snapshotFromFrame(EvtFrame frame, {required String source}) {
     switch (frame.command) {
-      case 0x91:
-        if (frame.content.length < 2) {
-          return null;
-        }
-        final charging = frame.content[1] == 1;
-        return DeviceSnapshot(
-          state: charging ? DeviceState.charging : DeviceState.unknown,
-          observedAt: DateTime.now(),
-          source: source,
-          batteryPercent: frame.content[0],
-          isCharging: charging,
-        );
       case 0x87:
-        if (frame.content.isEmpty) {
+        try {
+          DeviceProtocolRepository.validateRecordState(frame);
+        } catch (error) {
+          _logger.info(
+            'record_state_event_decode_failed',
+            fields: {'error': '$error'},
+          );
           return null;
         }
         return DeviceSnapshot(
@@ -950,43 +1432,14 @@ class SessionController extends ChangeNotifier
     isCharging: info.charging != 0,
   );
 
-  bool _hasRequiredEndpoints(List<BleService> services) {
-    return _hasEndpoint(services, _profile.readEndpoint, BleOperation.read) &&
-        _hasEndpoint(
-          services,
-          _profile.notifyEndpoint,
-          BleOperation.indicate,
-        ) &&
-        _hasEndpoint(
-          services,
-          _profile.endpoint(BleLogicalEndpoint.fa10Fa11),
-          BleOperation.write,
-        ) &&
-        _hasEndpoint(
-          services,
-          _profile.endpoint(BleLogicalEndpoint.fa10Fa11),
-          BleOperation.indicate,
-        ) &&
-        _hasEndpoint(
-          services,
-          _profile.endpoint(BleLogicalEndpoint.fa10Fa19),
-          BleOperation.write,
-        ) &&
-        _hasEndpoint(
-          services,
-          _profile.endpoint(BleLogicalEndpoint.fa10Fa19),
-          BleOperation.indicate,
-        ) &&
-        _hasEndpoint(
-          services,
-          _profile.endpoint(BleLogicalEndpoint.fa10Fa12),
-          BleOperation.write,
-        ) &&
-        _hasEndpoint(
-          services,
-          _profile.endpoint(BleLogicalEndpoint.fa10Fa12),
-          BleOperation.indicate,
-        );
+  List<String> _missingRequiredEndpointOperations(List<BleService> services) {
+    return [
+      for (final entry
+          in DeviceProfile.evtV15RequiredEndpointOperations.entries)
+        for (final operation in entry.value)
+          if (!_hasEndpoint(services, _profile.endpoint(entry.key), operation))
+            '${entry.key.name}.${operation.name}',
+    ];
   }
 
   bool _hasEndpoint(
@@ -996,18 +1449,6 @@ class SessionController extends ChangeNotifier
   ) {
     final characteristic = _discoveredCharacteristic(services, endpoint);
     return characteristic?.operations.contains(operation) ?? false;
-  }
-
-  bool _hasSubscriptionEndpoint(
-    List<BleService> services,
-    BleEndpoint endpoint,
-  ) {
-    final operations = _discoveredCharacteristic(
-      services,
-      endpoint,
-    )?.operations;
-    return operations?.contains(BleOperation.notify) == true ||
-        operations?.contains(BleOperation.indicate) == true;
   }
 
   BleDiscoveredCharacteristic? _discoveredCharacteristic(
@@ -1088,17 +1529,82 @@ class SessionController extends ChangeNotifier
     notifyListeners();
   }
 
-  Future<void> _closeTransport(String deviceId) async {
-    await _closeWqotaClients();
-    await _closeRealtimeAudioStream();
+  /// Clears a GATT session when V1.5 cannot correlate a delayed response or
+  /// an old continuous file stream with a future request.
+  Future<void> _invalidateSessionForAmbiguousProtocolResult({
+    required String event,
+    required String message,
+    required Map<String, Object?> fields,
+  }) async {
+    final connectionAttempt = _connectionAttempt;
+    final deviceId = _state.session?.candidate.connectionId;
+    _logger.info(event, fields: fields);
+    if (deviceId == null || !_state.hasActiveBleConnection) {
+      return;
+    }
+    _fail(EvtFailure.transport(message: message), interrupt: true);
+    await _closeTransport(
+      deviceId,
+      expectedConnectionAttempt: connectionAttempt,
+    );
+  }
+
+  Future<void> _closeTransport(
+    String deviceId, {
+    int? expectedConnectionAttempt,
+  }) {
+    final pending = _transportCloseFuture;
+    if (pending != null) {
+      return pending;
+    }
+    if (!_ownsConnectionForCleanup(expectedConnectionAttempt)) {
+      return Future<void>.value();
+    }
+    late final Future<void> closing;
+    closing =
+        _closeTransportInternal(
+          deviceId,
+          expectedConnectionAttempt: expectedConnectionAttempt,
+        ).whenComplete(() {
+          if (identical(_transportCloseFuture, closing)) {
+            _transportCloseFuture = null;
+          }
+        });
+    _transportCloseFuture = closing;
+    return closing;
+  }
+
+  Future<void> _closeTransportInternal(
+    String deviceId, {
+    int? expectedConnectionAttempt,
+  }) async {
+    if (!_ownsConnectionForCleanup(expectedConnectionAttempt)) {
+      return;
+    }
     await _cancelNotificationSubscriptions();
-    await _commandClient?.close();
+    if (!_ownsConnectionForCleanup(expectedConnectionAttempt)) {
+      return;
+    }
+    final commandClient = _commandClient;
     _commandClient = null;
-    await _responseController?.close();
+    await commandClient?.close();
+    if (!_ownsConnectionForCleanup(expectedConnectionAttempt)) {
+      return;
+    }
+    final responseController = _responseController;
     _responseController = null;
+    await responseController?.close();
+    if (!_ownsConnectionForCleanup(expectedConnectionAttempt)) {
+      return;
+    }
     _protocolRepository = null;
-    await _connectionSubscription?.cancel();
+    _attMtu = null;
+    final connectionSubscription = _connectionSubscription;
     _connectionSubscription = null;
+    await connectionSubscription?.cancel();
+    if (!_ownsConnectionForCleanup(expectedConnectionAttempt)) {
+      return;
+    }
     await _transport.disconnect(deviceId);
     _logger.info(
       'transport_closed',
@@ -1108,35 +1614,80 @@ class SessionController extends ChangeNotifier
 
   Future<void> _cancelNotificationSubscriptions() async {
     if (_notificationSubscriptions.isEmpty) {
+      _subscribedEndpointKeys.clear();
+      _subscriptionReadiness.clear();
       return;
     }
     final subscriptions = List<StreamSubscription<Uint8List>>.of(
       _notificationSubscriptions,
     );
     _notificationSubscriptions.clear();
+    _subscribedEndpointKeys.clear();
+    _subscriptionReadiness.clear();
     for (final subscription in subscriptions) {
       await subscription.cancel();
     }
   }
 
-  Future<void> _cancelRealtimeAudioSubscription() async {
-    final subscription = _realtimeAudioSubscription;
-    _realtimeAudioSubscription = null;
-    await subscription?.cancel();
+  bool _isCurrentConnectionAttempt(int connectionAttempt) =>
+      !_isDisposed && connectionAttempt == _connectionAttempt;
+
+  bool _ownsConnectionForCleanup(int? expectedConnectionAttempt) =>
+      expectedConnectionAttempt == null ||
+      expectedConnectionAttempt == _connectionAttempt;
+
+  Set<DevicePermission> _authorizedPermissions(
+    Set<DevicePermission> permissions,
+  ) {
+    return {
+      for (final permission in permissions)
+        if (_hasDevicePermission(permission)) permission,
+    };
   }
 
-  Future<void> _closeRealtimeAudioStream() async {
-    await _cancelRealtimeAudioSubscription();
-    final controller = _realtimeAudioController;
-    _realtimeAudioController = null;
-    await controller?.close();
+  bool _hasDevicePermission(DevicePermission permission) {
+    final gate = _permissionGate;
+    return gate == null || gate.allows(permission);
   }
 
-  Future<void> _closeWqotaClients() async {
-    final clients = List<WqotaClient>.of(_wqotaClients);
-    _wqotaClients.clear();
-    for (final client in clients) {
-      await client.close();
+  void _requireDevicePermission(DevicePermission permission) {
+    if (!_hasDevicePermission(permission)) {
+      throw StateError('当前认证未授予设备${permission.name}权限，请重新认证设备。');
+    }
+  }
+
+  /// Rechecks the V1 authorization window when a queued EVT command reaches
+  /// the head of the BLE write queue. Initial UI checks alone are not enough:
+  /// a command can wait behind a long-running request until the 60-second
+  /// window has expired.
+  void _admitEvtCommandWrite(EvtCommandRequest request) {
+    switch (request.command) {
+      case 0x01:
+        _requireDevicePermission(DevicePermission.status);
+        return;
+      case 0x02:
+      case 0x06:
+      case 0x07:
+        _requireDevicePermission(DevicePermission.configuration);
+        return;
+      case 0x22:
+      case 0x23:
+        _requireDevicePermission(DevicePermission.files);
+        return;
+      case 0x09:
+        // V1 code authentication must remain callable before authentication
+        // has granted any scoped permissions. The V2 envelope is DVT-only,
+        // so keep its marker and variable-length payload out of EVT even if
+        // a future caller bypasses the repository boundary.
+        if (request.content.length != 7 || request.content.first > 2) {
+          throw StateError('EVT 阶段只允许 V1 认证码格式的 0x09 命令。');
+        }
+        return;
+      default:
+        throw StateError(
+          'EVT 阶段不允许发送未声明授权范围的设备命令 '
+          '0x${request.command.toRadixString(16).padLeft(2, '0').toUpperCase()}。',
+        );
     }
   }
 
@@ -1241,16 +1792,44 @@ class SessionController extends ChangeNotifier
         : EvtFailure.transport(message: fallback, detail: '$error');
   }
 
+  /// Stops the current transport and waits until its native disconnect call
+  /// has completed. AppShell uses this before replacing a session so an old
+  /// controller cannot disconnect a newer connection to the same device.
+  Future<void> close() {
+    final pending = _closeFuture;
+    if (pending != null) {
+      return pending;
+    }
+    _isDisposed = true;
+    final deviceId = _state.session?.candidate.connectionId;
+    final closing = _closeResources(deviceId);
+    _closeFuture = closing;
+    return closing;
+  }
+
+  Future<void> _closeResources(String? deviceId) async {
+    if (deviceId != null) {
+      await _closeTransport(deviceId);
+      return;
+    }
+    await _connectionSubscription?.cancel();
+    _connectionSubscription = null;
+    await _cancelNotificationSubscriptions();
+    await _commandClient?.close();
+    _commandClient = null;
+    await _responseController?.close();
+    _responseController = null;
+    _protocolRepository = null;
+    _attMtu = null;
+  }
+
   @override
   void dispose() {
-    final deviceId = _state.session?.candidate.connectionId;
-    if (deviceId != null) {
-      unawaited(_closeTransport(deviceId));
+    if (_changeNotifierDisposed) {
+      return;
     }
-    unawaited(_connectionSubscription?.cancel());
-    unawaited(_cancelNotificationSubscriptions());
-    unawaited(_closeRealtimeAudioStream());
-    unawaited(_closeWqotaClients());
+    _changeNotifierDisposed = true;
+    unawaited(close());
     super.dispose();
   }
 

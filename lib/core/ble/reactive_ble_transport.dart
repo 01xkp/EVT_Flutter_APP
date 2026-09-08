@@ -12,9 +12,16 @@ import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart' as reactive;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:reactive_ble_mobile/reactive_ble_mobile.dart' as mobile;
 
 class ReactiveBleTransport implements BleTransport {
   static const _pairingRequiredMessage = '设备需要完成系统配对。';
+  // flutter_reactive_ble installs its Dart value listener from the
+  // readNotifications method-result continuation. Native code releases the
+  // CCC barrier on the following platform event-loop turn; one short Dart
+  // turn closes the remaining cross-thread handoff before an EVT command is
+  // allowed to provoke an immediate Indicate response.
+  static const _notificationListenerSettleDelay = Duration(milliseconds: 16);
 
   ReactiveBleTransport({
     reactive.FlutterReactiveBle? ble,
@@ -60,8 +67,14 @@ class ReactiveBleTransport implements BleTransport {
           'scan_result',
           fields: {
             'device': _redactDeviceId(device.id),
-            'hasName': device.name.trim().isNotEmpty,
+            'has_name': device.name.trim().isNotEmpty,
             'rssi': device.rssi,
+            'manufacturer_data_length': device.manufacturerData.length,
+            'manufacturer_prefix': _manufacturerPrefix(device.manufacturerData),
+            'service_uuid_present': _hasV15AdvertisementService(
+              device.serviceUuids,
+            ),
+            'name_format_valid': _hasV15AdvertisementName(device.name),
           },
         );
         yield DeviceCandidate(
@@ -208,13 +221,13 @@ class ReactiveBleTransport implements BleTransport {
         'service_discovery_success',
         fields: {
           'device': _redactDeviceId(deviceId),
-          'serviceCount': discoveredServices.length,
-          'services': discoveredServices
-              .map(
-                (service) =>
-                    '${service.uuid}[${service.characteristicUuids.join(',')}]',
-              )
-              .join(';'),
+          // UUIDs are not retained in diagnostics. Counts prove that service
+          // discovery completed while keeping the debug log non-identifying.
+          'service_count': discoveredServices.length,
+          'characteristic_count': discoveredServices.fold<int>(
+            0,
+            (total, service) => total + service.characteristics.length,
+          ),
         },
       );
       return List.unmodifiable(discoveredServices);
@@ -301,6 +314,76 @@ class ReactiveBleTransport implements BleTransport {
         },
       );
       Error.throwWithStackTrace(BleTransportException(failure), stackTrace);
+    }
+  }
+
+  @override
+  Future<void> awaitSubscriptionReady(BleCharacteristic characteristic) async {
+    try {
+      await const mobile.ReactiveBleNotificationSetup()
+          .awaitNotificationSetup(
+            deviceId: characteristic.deviceId,
+            characteristicUuid: characteristic.characteristicUuid,
+          )
+          .timeout(const Duration(seconds: 8));
+      await Future<void>.delayed(_notificationListenerSettleDelay);
+      _logger.info(
+        'notification_subscription_ready',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'characteristic': characteristic.characteristicUuid,
+        },
+      );
+    } on mobile.ReactiveBleNotificationSetupException catch (
+      error,
+      stackTrace
+    ) {
+      _logger.info(
+        'notification_subscription_ready_failure',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'characteristic': characteristic.characteristicUuid,
+          'code': error.code,
+        },
+      );
+      Error.throwWithStackTrace(
+        BleTransportException(
+          EvtFailure.transport(
+            message: '设备通知订阅未就绪。',
+            detail: '${error.code}: ${error.message}',
+          ),
+        ),
+        stackTrace,
+      );
+    } on TimeoutException catch (error, stackTrace) {
+      _logger.info(
+        'notification_subscription_ready_timeout',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'characteristic': characteristic.characteristicUuid,
+        },
+      );
+      Error.throwWithStackTrace(
+        BleTransportException(
+          EvtFailure.transport(message: '设备通知订阅超时。', detail: '$error'),
+        ),
+        stackTrace,
+      );
+    } catch (error, stackTrace) {
+      _logger.info(
+        'notification_subscription_ready_failure',
+        fields: {
+          'device': _redactDeviceId(characteristic.deviceId),
+          'characteristic': characteristic.characteristicUuid,
+          'error': '$error',
+        },
+      );
+      Error.throwWithStackTrace(
+        BleTransportException(
+          EvtFailure.transport(message: '设备通知订阅失败。', detail: '$error'),
+        ),
+        stackTrace,
+      );
     }
   }
 
@@ -438,6 +521,27 @@ class ReactiveBleTransport implements BleTransport {
     }
     return '...${deviceId.substring(deviceId.length - 4)}';
   }
+
+  static String _manufacturerPrefix(List<int> data) {
+    if (data.length < 2) {
+      return 'none';
+    }
+    return data
+        .take(2)
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0').toUpperCase())
+        .join();
+  }
+
+  static bool _hasV15AdvertisementService(List<reactive.Uuid> serviceUuids) =>
+      serviceUuids.any((uuid) {
+        final value = uuid.toString().toUpperCase();
+        return value == '0000AF30-0000-1000-8000-00805F9B34FB' ||
+            value == 'AF30' ||
+            value == '0XAF30';
+      });
+
+  static bool _hasV15AdvertisementName(String name) =>
+      RegExp(r'^AIPIN_[0-9A-F]{4}$').hasMatch(name.trim().toUpperCase());
 
   /// Android reports ATT MTU directly. On iOS the plugin reports CoreBluetooth's
   /// maximum Write Without Response value length, which excludes the ATT header.

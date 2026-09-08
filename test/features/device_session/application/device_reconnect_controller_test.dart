@@ -14,7 +14,7 @@ void main() {
 
   DeviceCandidate candidateFor({
     String connectionId = 'android-transport-id',
-    String name = 'AIPIN',
+    String name = 'AIPIN_EEFF',
     List<int> manufacturerData = const <int>[
       0xA3,
       0x89,
@@ -30,7 +30,7 @@ void main() {
       connectionId: connectionId,
       name: name,
       manufacturerData: manufacturerData,
-      serviceUuids: const <String>[],
+      serviceUuids: const <String>['0000AF30-0000-1000-8000-00805F9B34FB'],
       rssi: -55,
       discoveredAt: connectedAt,
     );
@@ -97,6 +97,35 @@ void main() {
     expect(connected, hasLength(1));
     expect(controller.state.phase, DeviceReconnectPhase.connected);
   });
+
+  test(
+    'does not reconnect when a remembered device has an invalid broadcast',
+    () async {
+      var connectCalls = 0;
+      var stopScanCalls = 0;
+      final controller = DeviceReconnectController(
+        history: _InMemoryHistory(<RememberedDevice>[rememberedFor()]),
+        startScan: () async {},
+        stopScan: () async {
+          stopScanCalls += 1;
+        },
+        connect: (_) async {
+          connectCalls += 1;
+          return true;
+        },
+        logger: _CapturingLogger(),
+        waitForRetry: (_) async {},
+      );
+      addTearDown(controller.dispose);
+
+      await controller.restoreAndStart();
+      await controller.considerCandidate(candidateFor(name: 'OTHER_EEFF'));
+
+      expect(connectCalls, 0);
+      expect(stopScanCalls, 0);
+      expect(controller.state.phase, DeviceReconnectPhase.scanning);
+    },
+  );
 
   test(
     'does not duplicate an in-flight connection for the same candidate',
@@ -233,6 +262,45 @@ void main() {
       expect(scanCalls, 2);
       expect(controller.state.phase, DeviceReconnectPhase.scanning);
       expect(controller.state.attempt, 0);
+    },
+  );
+
+  test(
+    'manual disconnect suppression survives background and foreground restore',
+    () async {
+      var scanCalls = 0;
+      var connectCalls = 0;
+      final controller = DeviceReconnectController(
+        history: _InMemoryHistory(<RememberedDevice>[rememberedFor()]),
+        startScan: () async {
+          scanCalls += 1;
+        },
+        stopScan: () async {},
+        connect: (_) async {
+          connectCalls += 1;
+          return true;
+        },
+        logger: _CapturingLogger(),
+        waitForRetry: (_) async {},
+      );
+      addTearDown(controller.dispose);
+
+      await controller.restoreAndStart();
+      await controller.suppressForForeground();
+      await controller.pauseForBackground();
+      await controller.restoreAndStart();
+      await controller.considerCandidate(candidateFor());
+
+      expect(scanCalls, 1);
+      expect(connectCalls, 0);
+      expect(controller.state.phase, DeviceReconnectPhase.suppressed);
+
+      await controller.startExplicitCycle();
+      await controller.considerCandidate(candidateFor());
+
+      expect(scanCalls, 2);
+      expect(connectCalls, 1);
+      expect(controller.state.phase, DeviceReconnectPhase.connected);
     },
   );
 

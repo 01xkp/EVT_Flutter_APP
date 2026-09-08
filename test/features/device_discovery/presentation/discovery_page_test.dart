@@ -178,6 +178,89 @@ void main() {
     expect(find.byType(AnimatedSwitcher), findsNothing);
   });
 
+  testWidgets(
+    'keeps the discovery page open and shows a retryable error when connection fails',
+    (tester) async {
+      final transport = FakeBleTransport();
+      final controller = DiscoveryController(
+        transport,
+        const AdvertisementFilter(),
+      );
+      var attempts = 0;
+      addTearDown(() async {
+        controller.dispose();
+        await transport.dispose();
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DiscoveryPage(
+            controller: controller,
+            onConnect: (_) async {
+              attempts += 1;
+              return false;
+            },
+          ),
+        ),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, '查找附近设备'));
+      transport.emitCandidate(FakeBleTransport.matchingCandidate);
+      await tester.pump();
+      await tester.tap(find.text(FakeBleTransport.matchingCandidate.name));
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, '连接设备'));
+      await tester.pump();
+
+      expect(attempts, 1);
+      expect(find.byType(DiscoveryPage), findsOneWidget);
+      expect(find.text('连接失败，请确认设备状态后重试'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, '连接设备'), findsOneWidget);
+    },
+  );
+
+  testWidgets('does not start a duplicate connection while one is pending', (
+    tester,
+  ) async {
+    final transport = FakeBleTransport();
+    final controller = DiscoveryController(
+      transport,
+      const AdvertisementFilter(),
+    );
+    final connection = Completer<bool>();
+    var attempts = 0;
+    addTearDown(() async {
+      controller.dispose();
+      await transport.dispose();
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DiscoveryPage(
+          controller: controller,
+          onConnect: (_) {
+            attempts += 1;
+            return connection.future;
+          },
+        ),
+      ),
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '查找附近设备'));
+    transport.emitCandidate(FakeBleTransport.matchingCandidate);
+    await tester.pump();
+    await tester.tap(find.text(FakeBleTransport.matchingCandidate.name));
+    await tester.pump();
+
+    final connectButton = find.widgetWithText(FilledButton, '连接设备');
+    await tester.tap(connectButton);
+    await tester.tap(connectButton);
+    await tester.pump();
+
+    expect(attempts, 1);
+    expect(find.widgetWithText(FilledButton, '正在连接'), findsOneWidget);
+    connection.complete(false);
+    await tester.pump();
+  });
+
   testWidgets('bluetooth-off scan failure asks the user to enable bluetooth', (
     tester,
   ) async {
@@ -252,7 +335,7 @@ void main() {
   );
 
   testWidgets(
-    'iOS guidance identifies App Settings instead of a system Bluetooth page',
+    'iOS guidance opens App Settings and retries after the app resumes',
     (tester) async {
       final transport = FakeBleTransport();
       final controller = DiscoveryController(
@@ -260,7 +343,7 @@ void main() {
         const AdvertisementFilter(),
       );
       final bluetooth = _FakeBluetoothEnableGateway(canRequestEnable: false);
-      var settingsOpenCount = 0;
+      var openedSystemSettings = 0;
       addTearDown(() async {
         controller.dispose();
         await transport.dispose();
@@ -271,7 +354,10 @@ void main() {
           home: DiscoveryPage(
             controller: controller,
             bluetoothEnableGateway: bluetooth,
-            onOpenBluetoothSettings: () async => settingsOpenCount += 1,
+            onOpenSystemSettings: () async {
+              openedSystemSettings += 1;
+              return true;
+            },
           ),
         ),
       );
@@ -285,13 +371,16 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('请开启蓝牙'), findsOneWidget);
-      expect(find.text('请在系统设置或控制中心开启蓝牙后，返回 App 重新查找设备。'), findsOneWidget);
-      expect(find.text('打开 App 设置'), findsOneWidget);
-      await tester.tap(find.text('打开 App 设置'));
+      expect(
+        find.text('iPhone 不允许 App 直接开启蓝牙。请在控制中心或系统设置中打开蓝牙后返回。'),
+        findsOneWidget,
+      );
+      expect(find.text('打开设置'), findsOneWidget);
+      await tester.tap(find.text('打开设置'));
       await tester.pumpAndSettle();
 
-      expect(settingsOpenCount, 1);
       expect(bluetooth.requestCount, 0);
+      expect(openedSystemSettings, 1);
       expect(transport.scanCallCount, 1);
 
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);

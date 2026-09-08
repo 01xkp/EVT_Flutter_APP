@@ -73,14 +73,12 @@ class HomePage extends StatelessWidget {
     super.key,
     required this.device,
     required this.onConnectDevice,
-    required this.onStartLocalRecording,
     required this.onOpenSettings,
     this.onOpenDevice,
   });
 
   final DeviceSummary device;
   final VoidCallback onConnectDevice;
-  final VoidCallback onStartLocalRecording;
   final VoidCallback onOpenSettings;
   final VoidCallback? onOpenDevice;
 
@@ -120,17 +118,7 @@ class HomePage extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 28),
-                  Text('录音', style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 12),
-                  AppSurfaceCard(
-                    onTap: onStartLocalRecording,
-                    child: const _ActionRow(
-                      icon: Icons.mic_none_outlined,
-                      title: '本机录音',
-                      detail: '无需连接设备',
-                      trailing: Icons.arrow_forward,
-                    ),
-                  ),
+                  Text('设备状态', style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 12),
                   AppSurfaceCard(
                     child: _ActionRow(
@@ -216,13 +204,11 @@ class _ActionRow extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.detail,
-    this.trailing,
   });
 
   final IconData icon;
   final String title;
   final String detail;
-  final IconData? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -240,7 +226,6 @@ class _ActionRow extends StatelessWidget {
             ],
           ),
         ),
-        if (trailing case final icon?) Icon(icon, size: 18),
       ],
     );
   }

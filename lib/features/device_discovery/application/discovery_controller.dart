@@ -11,7 +11,7 @@ class DiscoveryController extends ChangeNotifier {
   DiscoveryController(
     this._transport,
     this._filter, {
-    this.filterByV15Advertisement = false,
+    this.filterByV15Advertisement = true,
     this.staleDeviceTimeout = _defaultStaleDeviceTimeout,
     this.expiryCheckInterval = _defaultExpiryCheckInterval,
   });
@@ -26,15 +26,19 @@ class DiscoveryController extends ChangeNotifier {
   final Duration expiryCheckInterval;
   StreamSubscription<DeviceCandidate>? _scanSubscription;
   Timer? _expiryTimer;
+  int _scanGeneration = 0;
+  var _isDisposed = false;
   Set<String> _excludedDeviceIds = const {};
+  final Map<String, _AdvertisementFragment> _advertisementFragments = {};
   DiscoveryState _state = const DiscoveryState();
 
   DiscoveryState get state => _state;
 
   void start() {
-    if (_state.isScanning) {
+    if (_isDisposed || _state.isScanning) {
       return;
     }
+    final generation = ++_scanGeneration;
     _state = _state.copyWith(
       isScanning: true,
       candidates: const [],
@@ -42,12 +46,17 @@ class DiscoveryController extends ChangeNotifier {
       failure: null,
       isBluetoothOff: false,
     );
+    _advertisementFragments.clear();
     notifyListeners();
-    _startExpiryTimer();
-    _scanSubscription = _transport.scan().listen(
-      _onCandidate,
-      onError: _onScanError,
+    _startExpiryTimer(generation);
+    final subscription = _transport.scan().listen(
+      (candidate) => _onCandidate(candidate, generation),
+      onError: (Object error, StackTrace stackTrace) =>
+          _onScanError(error, stackTrace, generation),
       onDone: () {
+        if (!_isCurrentScan(generation)) {
+          return;
+        }
         _stopExpiryTimer();
         if (_state.isScanning) {
           _state = _state.copyWith(isScanning: false);
@@ -55,6 +64,14 @@ class DiscoveryController extends ChangeNotifier {
         }
       },
     );
+    // A synchronous platform stream can report an error while listen() is
+    // being installed. Do not retain that stale subscription as the active
+    // scanner after its callback has already invalidated this generation.
+    if (_isCurrentScan(generation)) {
+      _scanSubscription = subscription;
+    } else {
+      unawaited(subscription.cancel());
+    }
   }
 
   void select(DeviceCandidate candidate) {
@@ -92,22 +109,35 @@ class DiscoveryController extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    ++_scanGeneration;
     _stopExpiryTimer();
-    await _scanSubscription?.cancel();
+    final subscription = _scanSubscription;
     _scanSubscription = null;
     if (_state.isScanning) {
       _state = _state.copyWith(isScanning: false);
       notifyListeners();
     }
+    await subscription?.cancel();
   }
 
-  void _onCandidate(DeviceCandidate candidate) {
-    if (candidate.name.trim().isEmpty ||
-        _excludedDeviceIds.contains(candidate.connectionId) ||
-        (filterByV15Advertisement && !_filter.matches(candidate))) {
+  void _onCandidate(DeviceCandidate candidate, int generation) {
+    if (!_isCurrentScan(generation) ||
+        _excludedDeviceIds.contains(candidate.connectionId)) {
       return;
     }
-    final freshCandidate = candidate.copyWith(discoveredAt: DateTime.now());
+    final now = DateTime.now();
+    final previous = _advertisementFragments[candidate.connectionId];
+    final fragment =
+        previous == null ||
+            now.difference(previous.updatedAt) >= staleDeviceTimeout
+        ? _AdvertisementFragment.fromCandidate(candidate, now)
+        : previous.merge(candidate, now);
+    _advertisementFragments[candidate.connectionId] = fragment;
+    final freshCandidate = fragment.toCandidate(candidate.connectionId);
+    if (freshCandidate.name.trim().isEmpty ||
+        (filterByV15Advertisement && !_filter.matches(freshCandidate))) {
+      return;
+    }
     final candidates = [
       for (final existing in _state.candidates)
         if (existing.connectionId != freshCandidate.connectionId) existing,
@@ -124,7 +154,11 @@ class DiscoveryController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _onScanError(Object error, StackTrace stackTrace) {
+  void _onScanError(Object error, StackTrace stackTrace, int generation) {
+    if (!_isCurrentScan(generation)) {
+      return;
+    }
+    ++_scanGeneration;
     final failure = error is BleTransportException
         ? error.failure
         : EvtFailure.environment(message: '扫描已中断。', detail: '$error');
@@ -137,17 +171,19 @@ class DiscoveryController extends ChangeNotifier {
           error.issue == BleTransportIssue.bluetoothOff,
     );
     _stopExpiryTimer();
-    unawaited(_scanSubscription?.cancel());
+    final subscription = _scanSubscription;
     _scanSubscription = null;
+    unawaited(subscription?.cancel());
     notifyListeners();
   }
 
-  void _startExpiryTimer() {
+  void _startExpiryTimer(int generation) {
     _stopExpiryTimer();
-    _expiryTimer = Timer.periodic(
-      expiryCheckInterval,
-      (_) => _removeStaleCandidates(),
-    );
+    _expiryTimer = Timer.periodic(expiryCheckInterval, (_) {
+      if (_isCurrentScan(generation)) {
+        _removeStaleCandidates();
+      }
+    });
   }
 
   void _stopExpiryTimer() {
@@ -160,6 +196,9 @@ class DiscoveryController extends ChangeNotifier {
       return;
     }
     final now = DateTime.now();
+    _advertisementFragments.removeWhere(
+      (_, fragment) => now.difference(fragment.updatedAt) >= staleDeviceTimeout,
+    );
     final candidates = _state.candidates
         .where(
           (candidate) =>
@@ -183,10 +222,69 @@ class DiscoveryController extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool _isCurrentScan(int generation) =>
+      !_isDisposed && _state.isScanning && generation == _scanGeneration;
+
   @override
   void dispose() {
+    _isDisposed = true;
+    ++_scanGeneration;
     _stopExpiryTimer();
+    _advertisementFragments.clear();
     unawaited(_scanSubscription?.cancel());
     super.dispose();
   }
+}
+
+/// Android can expose the V1.5 primary advertisement and scan response as
+/// separate scan callbacks. The protocol distributes manufacturer data in the
+/// former and service UUID plus local name in the latter, so preserve recent
+/// fields for the same advertiser before applying the strict EVT filter.
+class _AdvertisementFragment {
+  const _AdvertisementFragment({
+    required this.name,
+    required this.manufacturerData,
+    required this.serviceUuids,
+    required this.rssi,
+    required this.updatedAt,
+  });
+
+  factory _AdvertisementFragment.fromCandidate(
+    DeviceCandidate candidate,
+    DateTime updatedAt,
+  ) => _AdvertisementFragment(
+    name: candidate.name,
+    manufacturerData: candidate.manufacturerData,
+    serviceUuids: candidate.serviceUuids,
+    rssi: candidate.rssi,
+    updatedAt: updatedAt,
+  );
+
+  final String name;
+  final List<int> manufacturerData;
+  final List<String> serviceUuids;
+  final int rssi;
+  final DateTime updatedAt;
+
+  _AdvertisementFragment merge(DeviceCandidate candidate, DateTime now) =>
+      _AdvertisementFragment(
+        name: candidate.name.trim().isEmpty ? name : candidate.name,
+        manufacturerData: candidate.manufacturerData.isEmpty
+            ? manufacturerData
+            : candidate.manufacturerData,
+        serviceUuids: candidate.serviceUuids.isEmpty
+            ? serviceUuids
+            : candidate.serviceUuids,
+        rssi: candidate.rssi,
+        updatedAt: now,
+      );
+
+  DeviceCandidate toCandidate(String connectionId) => DeviceCandidate(
+    connectionId: connectionId,
+    name: name,
+    manufacturerData: manufacturerData,
+    serviceUuids: serviceUuids,
+    rssi: rssi,
+    discoveredAt: updatedAt,
+  );
 }

@@ -1,7 +1,6 @@
 import 'package:aipin/features/device_session/presentation/device_file_browser_page.dart';
-import 'package:aipin/features/device_session/data/device_file_import_service.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
-import 'package:aipin/features/device_session/domain/archive_gateway.dart';
+import 'package:aipin/features/device_session/domain/device_file_import_progress.dart';
 import 'package:aipin/features/local_recording/domain/local_recording.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -42,11 +41,33 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('capture.ogg'), findsOneWidget);
-    await tester.tap(find.text('导入到记录'));
+    await tester.tap(find.text('保存到 App'));
     await tester.pumpAndSettle();
 
     expect(imported, isTrue);
-    expect(find.text('设备录音已导入记录'), findsOneWidget);
+    expect(find.text('设备录音已保存到 App'), findsOneWidget);
+  });
+
+  testWidgets('opens the saved-device-recording library from the file page', (
+    tester,
+  ) async {
+    var opened = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceFileBrowserPage(
+          onListFiles: ({required offset, required pageSize}) async => const [],
+          onImport: (_, {onProgress}) => throw UnimplementedError(),
+          onOpenSavedRecordings: () async {
+            opened = true;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('查看已保存录音'));
+
+    expect(opened, isTrue);
   });
 
   testWidgets('continues pagination until the firmware returns Count zero', (
@@ -102,7 +123,7 @@ void main() {
   });
 
   testWidgets(
-    'reports archive configuration failure without claiming a checksum error',
+    'reports an EVT file-import failure without claiming a checksum error',
     (tester) async {
       var calls = 0;
       await tester.pumpWidget(
@@ -115,17 +136,17 @@ void main() {
                   ]
                 : const [],
             onImport: (file, {onProgress}) async {
-              throw const ArchiveGatewayUnavailableException();
+              throw StateError('device transfer interrupted');
             },
           ),
         ),
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('导入到记录'));
+      await tester.tap(find.text('保存到 App'));
       await tester.pumpAndSettle();
 
-      expect(find.text('云端归档服务未配置，设备文件已保留'), findsOneWidget);
+      expect(find.text('设备文件导入失败，请重试'), findsOneWidget);
       expect(find.text('导入失败，文件校验未通过，请重试'), findsNothing);
     },
   );

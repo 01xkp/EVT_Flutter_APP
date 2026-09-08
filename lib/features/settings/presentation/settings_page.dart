@@ -1,12 +1,10 @@
 import 'dart:async';
 
 import 'package:aipin/core/ble/device_profile.dart';
+import 'package:aipin/core/permissions/app_permission_gateway.dart';
 import 'package:aipin/core/design_system/widgets/permission_rationale_sheet.dart';
 import 'package:aipin/core/design_system/widgets/status_label.dart';
-import 'package:aipin/core/permissions/app_permission_gateway.dart';
 import 'package:aipin/features/settings/application/theme_mode_controller.dart';
-import 'package:aipin/features/research_beta/application/research_capture_processing_controller.dart';
-import 'package:aipin/core/design_system/widgets/app_dialog.dart';
 import 'package:flutter/material.dart';
 
 class SettingsPage extends StatelessWidget {
@@ -15,13 +13,11 @@ class SettingsPage extends StatelessWidget {
     required this.profile,
     this.themeController,
     this.permissions,
-    this.researchProcessing,
   });
 
   final DeviceProfile profile;
   final ThemeModeController? themeController;
   final AppPermissionGateway? permissions;
-  final ResearchCaptureProcessingController? researchProcessing;
 
   @override
   Widget build(BuildContext context) {
@@ -59,15 +55,6 @@ class SettingsPage extends StatelessWidget {
             )
           else
             const _StaticRow(label: '附近设备', value: '未检查'),
-          const SizedBox(height: 12),
-          if (permissions case final gateway?)
-            _PermissionRow(
-              title: '麦克风',
-              load: gateway.microphone,
-              onOpenSettings: gateway.openSettings,
-            )
-          else
-            const _StaticRow(label: '麦克风', value: '未检查'),
           const SizedBox(height: 28),
           Text('设备', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 12),
@@ -84,16 +71,6 @@ class SettingsPage extends StatelessWidget {
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 20),
-          if (researchProcessing case final processing?) ...[
-            const SizedBox(height: 28),
-            Text('研究数据', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () => _deleteResearchData(context, processing),
-              icon: const Icon(Icons.delete_outline),
-              label: const Text('删除全部研究数据'),
-            ),
-          ],
           const SizedBox(height: 28),
           Text('关于', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 12),
@@ -101,21 +78,6 @@ class SettingsPage extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  Future<void> _deleteResearchData(
-    BuildContext context,
-    ResearchCaptureProcessingController processing,
-  ) async {
-    final approved = await AppDialog.confirmDestructive(
-      context,
-      title: '删除全部研究数据？',
-      message: '将删除研究音频副本、转写和卡片，不会删除本机录音。',
-      confirmLabel: '删除',
-    );
-    if (approved) {
-      await processing.deleteAllResearchData();
-    }
   }
 }
 

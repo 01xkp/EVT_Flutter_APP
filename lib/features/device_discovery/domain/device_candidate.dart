@@ -23,7 +23,9 @@ class DeviceCandidate {
   /// [connectionId] must only be used by the BLE transport. iOS supplies a
   /// CoreBluetooth UUID rather than a MAC.
   String? get physicalDeviceId {
-    if (manufacturerData.length != 8) {
+    if (manufacturerData.length != 8 ||
+        manufacturerData[0] != 0xA3 ||
+        manufacturerData[1] != 0x89) {
       return null;
     }
     return manufacturerData

@@ -1,1 +1,1 @@
-enum AppDestination { home, recording, records }
+enum AppDestination { home, records }

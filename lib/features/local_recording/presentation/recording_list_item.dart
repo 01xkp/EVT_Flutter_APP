@@ -105,6 +105,9 @@ class RecordingListItem extends StatelessWidget {
       return '$created · ${_statusLabel()} · ${recording.failureReason ?? '录音不可播放'}';
     }
     final duration = recording.duration!;
+    if (duration == Duration.zero) {
+      return '$created · 时长未知 · ${_formatSize(recording.sizeBytes!)} · ${_statusLabel()}';
+    }
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$created · ${duration.inHours.toString().padLeft(2, '0')}:$minutes:$seconds · ${_formatSize(recording.sizeBytes!)} · ${_statusLabel()}';

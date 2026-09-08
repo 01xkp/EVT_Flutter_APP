@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('navigation has three consumer destinations', (tester) async {
+  testWidgets('navigation has only EVT device destinations', (tester) async {
     var selected = AppDestination.home;
     await tester.pumpWidget(
       MaterialApp(
@@ -18,12 +18,11 @@ void main() {
       ),
     );
 
-    await tester.tap(find.text('记录'));
+    await tester.tap(find.text('设备活动'));
 
     expect(selected, AppDestination.records);
     expect(AppDestination.values, const [
       AppDestination.home,
-      AppDestination.recording,
       AppDestination.records,
     ]);
   });

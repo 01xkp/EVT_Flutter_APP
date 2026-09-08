@@ -8,7 +8,6 @@ enum DeviceEventKind {
   statusChanged,
   recordingStarted,
   silenceEnded,
-  audioReceived,
   authenticationUpdated,
   batteryChanged,
   fileCountUpdated,
@@ -28,7 +27,7 @@ class DeviceEvent {
 
   factory DeviceEvent.fromFrame(EvtFrame frame, {required String source}) {
     return DeviceEvent(
-      kind: _kindFor(frame.command),
+      kind: _kindFor(frame),
       occurredAt: DateTime.now(),
       source: source,
       command: frame.command,
@@ -42,18 +41,32 @@ class DeviceEvent {
   final int command;
   final Uint8List payload;
 
-  static DeviceEventKind _kindFor(int command) => switch (command) {
+  static DeviceEventKind _kindFor(EvtFrame frame) => switch (frame.command) {
     0x01 || 0x81 => DeviceEventKind.deviceInfo,
     0x05 || 0x85 => DeviceEventKind.storageUpdated,
     0x06 || 0x86 => DeviceEventKind.statusChanged,
     0x07 => DeviceEventKind.recordingStarted,
-    0x87 => DeviceEventKind.silenceEnded,
-    0x08 => DeviceEventKind.audioReceived,
+    // V1.5 uses the first byte of a 0x87 indication as RecordStatus:
+    // 0 stopped, 1 recording, 2 paused, 3 resumed. Treating every 0x87 as
+    // a stop event makes a real start -> stop sequence impossible to verify.
+    0x87 => _recordingEventKind(frame.content),
     0x09 || 0x89 => DeviceEventKind.authenticationUpdated,
     0x11 || 0x91 => DeviceEventKind.batteryChanged,
     0x21 || 0xA1 => DeviceEventKind.fileCountUpdated,
     0x22 || 0xA2 => DeviceEventKind.fileListUpdated,
-    0x23 || 0xA3 => DeviceEventKind.fileDataReceived,
+    0x23 => DeviceEventKind.fileDataReceived,
     _ => DeviceEventKind.unknown,
   };
+
+  static DeviceEventKind _recordingEventKind(Uint8List content) {
+    if (content.isEmpty) {
+      return DeviceEventKind.unknown;
+    }
+    return switch (content.first) {
+      0 => DeviceEventKind.silenceEnded,
+      1 || 3 => DeviceEventKind.recordingStarted,
+      2 => DeviceEventKind.statusChanged,
+      _ => DeviceEventKind.unknown,
+    };
+  }
 }

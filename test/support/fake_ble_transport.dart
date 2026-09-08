@@ -11,8 +11,13 @@ class FakeBleTransport implements BleTransport {
     DeviceProfile? profile,
     List<BleService>? services,
     this.deferRead = false,
+    this.deferServiceDiscovery = false,
+    this.deferDisconnect = false,
     this.readError,
     this.negotiatedMtu = 247,
+    this.closeSubscriptionImmediatelyForCharacteristic,
+    this.deferNotificationSetup = false,
+    Map<String, Object> notificationSetupFailureByCharacteristicUuid = const {},
     Map<String, List<int>> readValuesByCharacteristicUuid = const {},
   }) : profile = profile ?? DeviceProfile.empty(),
        services = services ?? const [],
@@ -20,20 +25,21 @@ class FakeBleTransport implements BleTransport {
          readValuesByCharacteristicUuid.map(
            (uuid, value) => MapEntry(uuid, Uint8List.fromList(value)),
          ),
+       ),
+       _notificationSetupFailureByCharacteristicUuid = Map.unmodifiable(
+         notificationSetupFailureByCharacteristicUuid.map(
+           (uuid, error) => MapEntry(uuid.toUpperCase(), error),
+         ),
        );
 
-  factory FakeBleTransport.withGattReadyProfile() {
+  factory FakeBleTransport.withGattReadyProfile({
+    bool deferDisconnect = false,
+  }) {
     const profile = DeviceProfile(
       namePrefix: 'AIPIN',
       manufacturerPrefixHex: 'A389',
       serviceUuid: '0000AF30-0000-1000-8000-00805F9B34FB',
       gattServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
-      readServiceUuid: '0000FB10-1212-EFDE-1523-785FEABCD123',
-      readCharacteristicUuid: '0000FB11-1212-EFDE-1523-785FEABCD123',
-      notifyServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
-      notifyCharacteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
-      writeServiceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
-      writeCharacteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
       endpoints: {
         BleLogicalEndpoint.fa10Fa11: BleEndpoint(
           serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
@@ -48,13 +54,53 @@ class FakeBleTransport implements BleTransport {
         BleLogicalEndpoint.fa10Fa12: BleEndpoint(
           serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
           characteristicUuid: '0000FA12-1212-EFDE-1523-785FEABCD123',
+          operations: {
+            BleOperation.read,
+            BleOperation.write,
+            BleOperation.indicate,
+          },
+        ),
+        BleLogicalEndpoint.fa10Fa15: BleEndpoint(
+          serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FA15-1212-EFDE-1523-785FEABCD123',
+          operations: {BleOperation.read, BleOperation.indicate},
+        ),
+        BleLogicalEndpoint.fa10Fa16: BleEndpoint(
+          serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
           operations: {BleOperation.write, BleOperation.indicate},
+        ),
+        BleLogicalEndpoint.fa10Fa17: BleEndpoint(
+          serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FA17-1212-EFDE-1523-785FEABCD123',
+          operations: {BleOperation.write, BleOperation.indicate},
+        ),
+        BleLogicalEndpoint.fb10Fb11: BleEndpoint(
+          serviceUuid: '0000FB10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FB11-1212-EFDE-1523-785FEABCD123',
+          operations: {BleOperation.read, BleOperation.indicate},
+        ),
+        BleLogicalEndpoint.ff10Ff11: BleEndpoint(
+          serviceUuid: '0000FF10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FF11-1212-EFDE-1523-785FEABCD123',
+          operations: {BleOperation.read, BleOperation.indicate},
+        ),
+        BleLogicalEndpoint.ff10Ff12: BleEndpoint(
+          serviceUuid: '0000FF10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FF12-1212-EFDE-1523-785FEABCD123',
+          operations: {BleOperation.write, BleOperation.indicate},
+        ),
+        BleLogicalEndpoint.ff10Ff13: BleEndpoint(
+          serviceUuid: '0000FF10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FF13-1212-EFDE-1523-785FEABCD123',
+          operations: {BleOperation.write, BleOperation.notify},
         ),
       },
     );
     return FakeBleTransport(
       profile: profile,
       deferRead: true,
+      deferDisconnect: deferDisconnect,
       services: const [
         BleService(
           uuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
@@ -73,6 +119,18 @@ class FakeBleTransport implements BleTransport {
             ),
             BleDiscoveredCharacteristic(
               uuid: '0000FA12-1212-EFDE-1523-785FEABCD123',
+              operations: {
+                BleOperation.read,
+                BleOperation.write,
+                BleOperation.indicate,
+              },
+            ),
+            BleDiscoveredCharacteristic(
+              uuid: '0000FA15-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.read, BleOperation.indicate},
+            ),
+            BleDiscoveredCharacteristic(
+              uuid: '0000FA17-1212-EFDE-1523-785FEABCD123',
               operations: {BleOperation.write, BleOperation.indicate},
             ),
           ],
@@ -83,6 +141,23 @@ class FakeBleTransport implements BleTransport {
             BleDiscoveredCharacteristic(
               uuid: '0000FB11-1212-EFDE-1523-785FEABCD123',
               operations: {BleOperation.read, BleOperation.indicate},
+            ),
+          ],
+        ),
+        BleService(
+          uuid: '0000FF10-1212-EFDE-1523-785FEABCD123',
+          characteristics: [
+            BleDiscoveredCharacteristic(
+              uuid: '0000FF11-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.read, BleOperation.indicate},
+            ),
+            BleDiscoveredCharacteristic(
+              uuid: '0000FF12-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.write, BleOperation.indicate},
+            ),
+            BleDiscoveredCharacteristic(
+              uuid: '0000FF13-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.write, BleOperation.notify},
             ),
           ],
         ),
@@ -117,16 +192,28 @@ class FakeBleTransport implements BleTransport {
   final _connectionController =
       StreamController<BleConnectionState>.broadcast();
   final _subscriptionController = StreamController<Uint8List>.broadcast();
+  final _subscriptionControllersByCharacteristic =
+      <String, StreamController<Uint8List>>{};
   final disconnectedDeviceIds = <String>[];
   final List<String> discoveryRequests = [];
   final List<BleCharacteristic> subscribedCharacteristics = [];
+  final List<BleCharacteristic> notificationSetupRequests = [];
   final List<BleCharacteristic> readCharacteristics = [];
   var scanCallCount = 0;
   final bool deferRead;
+  final bool deferServiceDiscovery;
+  final bool deferDisconnect;
   final Object? readError;
   final int negotiatedMtu;
+  final String? closeSubscriptionImmediatelyForCharacteristic;
+  final bool deferNotificationSetup;
+  final Map<String, Object> _notificationSetupFailureByCharacteristicUuid;
   final Map<String, Uint8List> _readValuesByCharacteristicUuid;
   final Completer<Uint8List> _deferredRead = Completer<Uint8List>();
+  final Completer<List<BleService>> _deferredServices =
+      Completer<List<BleService>>();
+  final Completer<void> _deferredNotificationSetup = Completer<void>();
+  final Completer<void> _deferredDisconnect = Completer<void>();
   final List<BleService> services;
   Uint8List readValue = Uint8List(0);
   final List<int> requestedMtus = [];
@@ -144,11 +231,27 @@ class FakeBleTransport implements BleTransport {
       _connectionController.add(state);
 
   void emitSubscriptionBytes(List<int> bytes) {
-    _subscriptionController.add(Uint8List.fromList(bytes));
+    final value = Uint8List.fromList(bytes);
+    _subscriptionController.add(value);
+    for (final controller in _subscriptionControllersByCharacteristic.values) {
+      controller.add(value);
+    }
+  }
+
+  /// Emits a notification only through the subscription for [characteristicUuid].
+  void emitSubscriptionBytesForCharacteristic(
+    String characteristicUuid,
+    List<int> bytes,
+  ) {
+    _subscriptionControllersByCharacteristic[characteristicUuid.toUpperCase()]
+        ?.add(Uint8List.fromList(bytes));
   }
 
   void emitSubscriptionError(Object error) {
     _subscriptionController.addError(error, StackTrace.current);
+    for (final controller in _subscriptionControllersByCharacteristic.values) {
+      controller.addError(error, StackTrace.current);
+    }
   }
 
   @override
@@ -166,7 +269,13 @@ class FakeBleTransport implements BleTransport {
   @override
   Future<List<BleService>> discoverServices(String deviceId) async {
     discoveryRequests.add(deviceId);
-    return services;
+    return deferServiceDiscovery ? _deferredServices.future : services;
+  }
+
+  void completeServiceDiscovery([List<BleService>? value]) {
+    if (!_deferredServices.isCompleted) {
+      _deferredServices.complete(value ?? services);
+    }
   }
 
   @override
@@ -178,7 +287,43 @@ class FakeBleTransport implements BleTransport {
   @override
   Stream<Uint8List> subscribe(BleCharacteristic characteristic) {
     subscribedCharacteristics.add(characteristic);
-    return _subscriptionController.stream;
+    if (characteristic.characteristicUuid.toUpperCase() ==
+        closeSubscriptionImmediatelyForCharacteristic?.toUpperCase()) {
+      return Stream<Uint8List>.empty();
+    }
+    return _subscriptionControllersByCharacteristic
+        .putIfAbsent(
+          characteristic.characteristicUuid.toUpperCase(),
+          () => StreamController<Uint8List>.broadcast(),
+        )
+        .stream;
+  }
+
+  @override
+  Future<void> awaitSubscriptionReady(BleCharacteristic characteristic) {
+    notificationSetupRequests.add(characteristic);
+    final error =
+        _notificationSetupFailureByCharacteristicUuid[characteristic
+            .characteristicUuid
+            .toUpperCase()];
+    if (error != null) {
+      return Future<void>.error(error);
+    }
+    return deferNotificationSetup
+        ? _deferredNotificationSetup.future
+        : Future<void>.value();
+  }
+
+  void completeNotificationSetup() {
+    if (!_deferredNotificationSetup.isCompleted) {
+      _deferredNotificationSetup.complete();
+    }
+  }
+
+  void completeDisconnect() {
+    if (!_deferredDisconnect.isCompleted) {
+      _deferredDisconnect.complete();
+    }
   }
 
   @override
@@ -217,11 +362,17 @@ class FakeBleTransport implements BleTransport {
   @override
   Future<void> disconnect(String deviceId) async {
     disconnectedDeviceIds.add(deviceId);
+    if (deferDisconnect) {
+      await _deferredDisconnect.future;
+    }
   }
 
   Future<void> dispose() async {
     await _scanController.close();
     await _connectionController.close();
     await _subscriptionController.close();
+    for (final controller in _subscriptionControllersByCharacteristic.values) {
+      await controller.close();
+    }
   }
 }

@@ -25,7 +25,10 @@ class RecordingRecoveryService {
   final RecordingFileStore _files;
   final DateTime Function() _now;
 
-  Future<void> reconcile() async {
+  Future<void> reconcile({
+    Iterable<String> protectedRecordingIds = const [],
+    bool cleanupTemporaryFiles = true,
+  }) async {
     final recordings = await _repository.all();
     try {
       for (final recording in recordings) {
@@ -39,10 +42,14 @@ class RecordingRecoveryService {
         }
       }
     } finally {
-      try {
-        await _files.cleanupOrphanedTemporaryFiles();
-      } on RecordingFileException {
-        // Failed cleanup must not block the remaining recoverable recordings.
+      if (cleanupTemporaryFiles) {
+        try {
+          await _files.cleanupOrphanedTemporaryFiles(
+            protectedRecordingIds: protectedRecordingIds,
+          );
+        } on RecordingFileException {
+          // Failed cleanup must not block the remaining recoverable recordings.
+        }
       }
     }
   }

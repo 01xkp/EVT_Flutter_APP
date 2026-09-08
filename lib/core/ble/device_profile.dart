@@ -2,49 +2,182 @@ import 'package:aipin/core/diagnostics/evt_failure.dart';
 import 'package:aipin/core/ble/ble_models.dart';
 
 class DeviceProfile {
+  static const _evtV15NamePrefix = 'AIPIN';
+  static const _evtV15ManufacturerPrefix = <int>[0xA3, 0x89];
+  static const _evtV15AdvertisementServiceUuid =
+      '0000AF30-0000-1000-8000-00805F9B34FB';
+  static const _evtV15Fa10ServiceUuid = '0000FA10-1212-EFDE-1523-785FEABCD123';
+  static const _evtV15Fb10ServiceUuid = '0000FB10-1212-EFDE-1523-785FEABCD123';
+  static const _evtV15Ff10ServiceUuid = '0000FF10-1212-EFDE-1523-785FEABCD123';
+
+  /// The endpoints that every EVT V1.5 peripheral must expose.
+  ///
+  /// This intentionally lives in the BLE profile layer instead of importing
+  /// the protocol contract, so the configuration is validated before a
+  /// session or protocol client exists.
+  ///
+  /// `FF11 / 0x21` is intentionally absent here. The V1.5 protocol calls it a
+  /// compatibility-only file-count summary; file listing through `FF12 / 0x22`
+  /// remains the required sync path.
+  static const evtV15RequiredEndpointOperations =
+      <BleLogicalEndpoint, Set<BleOperation>>{
+        BleLogicalEndpoint.fa10Fa11: <BleOperation>{
+          BleOperation.write,
+          BleOperation.indicate,
+        },
+        BleLogicalEndpoint.fa10Fa12: <BleOperation>{
+          BleOperation.read,
+          BleOperation.write,
+          BleOperation.indicate,
+        },
+        BleLogicalEndpoint.fa10Fa15: <BleOperation>{
+          BleOperation.read,
+          BleOperation.indicate,
+        },
+        BleLogicalEndpoint.fa10Fa16: <BleOperation>{
+          BleOperation.write,
+          BleOperation.indicate,
+        },
+        BleLogicalEndpoint.fa10Fa17: <BleOperation>{
+          BleOperation.write,
+          BleOperation.indicate,
+        },
+        BleLogicalEndpoint.fa10Fa19: <BleOperation>{
+          BleOperation.write,
+          BleOperation.indicate,
+        },
+        BleLogicalEndpoint.fb10Fb11: <BleOperation>{
+          BleOperation.read,
+          BleOperation.indicate,
+        },
+        BleLogicalEndpoint.ff10Ff12: <BleOperation>{
+          BleOperation.write,
+          BleOperation.indicate,
+        },
+        BleLogicalEndpoint.ff10Ff13: <BleOperation>{
+          BleOperation.write,
+          BleOperation.notify,
+        },
+      };
+
+  /// Optional backwards-compatible capabilities declared by EVT V1.5.
+  static const evtV15OptionalEndpointOperations =
+      <BleLogicalEndpoint, Set<BleOperation>>{
+        BleLogicalEndpoint.ff10Ff11: <BleOperation>{
+          BleOperation.read,
+          BleOperation.indicate,
+        },
+      };
+
+  /// Every endpoint understood by this EVT build, including optional ones.
+  ///
+  /// This map validates the bundled profile and rejects later-stage UUIDs. It
+  /// is not the real-device admission gate; use
+  /// [evtV15RequiredEndpointOperations] for that purpose.
+  static const evtV15EndpointOperations =
+      <BleLogicalEndpoint, Set<BleOperation>>{
+        ...evtV15RequiredEndpointOperations,
+        ...evtV15OptionalEndpointOperations,
+      };
+
+  /// Exact service/characteristic identities defined by the V1.5 EVT table.
+  ///
+  /// The profile is bundled with this build rather than supplied by a user at
+  /// runtime, so accepting a merely well-formed but different UUID would hide
+  /// a packaging or protocol-drift error until a command is sent to hardware.
+  static const evtV15EndpointIdentities = <BleLogicalEndpoint, BleEndpoint>{
+    BleLogicalEndpoint.fa10Fa11: BleEndpoint(
+      serviceUuid: _evtV15Fa10ServiceUuid,
+      characteristicUuid: '0000FA11-1212-EFDE-1523-785FEABCD123',
+    ),
+    BleLogicalEndpoint.fa10Fa12: BleEndpoint(
+      serviceUuid: _evtV15Fa10ServiceUuid,
+      characteristicUuid: '0000FA12-1212-EFDE-1523-785FEABCD123',
+    ),
+    BleLogicalEndpoint.fa10Fa15: BleEndpoint(
+      serviceUuid: _evtV15Fa10ServiceUuid,
+      characteristicUuid: '0000FA15-1212-EFDE-1523-785FEABCD123',
+    ),
+    BleLogicalEndpoint.fa10Fa16: BleEndpoint(
+      serviceUuid: _evtV15Fa10ServiceUuid,
+      characteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
+    ),
+    BleLogicalEndpoint.fa10Fa17: BleEndpoint(
+      serviceUuid: _evtV15Fa10ServiceUuid,
+      characteristicUuid: '0000FA17-1212-EFDE-1523-785FEABCD123',
+    ),
+    BleLogicalEndpoint.fa10Fa19: BleEndpoint(
+      serviceUuid: _evtV15Fa10ServiceUuid,
+      characteristicUuid: '0000FA19-1212-EFDE-1523-785FEABCD123',
+    ),
+    BleLogicalEndpoint.fb10Fb11: BleEndpoint(
+      serviceUuid: _evtV15Fb10ServiceUuid,
+      characteristicUuid: '0000FB11-1212-EFDE-1523-785FEABCD123',
+    ),
+    BleLogicalEndpoint.ff10Ff11: BleEndpoint(
+      serviceUuid: _evtV15Ff10ServiceUuid,
+      characteristicUuid: '0000FF11-1212-EFDE-1523-785FEABCD123',
+    ),
+    BleLogicalEndpoint.ff10Ff12: BleEndpoint(
+      serviceUuid: _evtV15Ff10ServiceUuid,
+      characteristicUuid: '0000FF12-1212-EFDE-1523-785FEABCD123',
+    ),
+    BleLogicalEndpoint.ff10Ff13: BleEndpoint(
+      serviceUuid: _evtV15Ff10ServiceUuid,
+      characteristicUuid: '0000FF13-1212-EFDE-1523-785FEABCD123',
+    ),
+  };
+
   const DeviceProfile({
     required this.namePrefix,
     required this.manufacturerPrefixHex,
     required this.serviceUuid,
     required this.gattServiceUuid,
-    required this.readCharacteristicUuid,
-    required this.notifyCharacteristicUuid,
-    required this.writeCharacteristicUuid,
-    this.readServiceUuid,
-    this.notifyServiceUuid,
-    this.writeServiceUuid,
     this.endpoints = const {},
+    this.hasUnsupportedEndpointDeclaration = false,
   });
+
+  /// The fixed profile shipped by the EVT build.
+  ///
+  /// EVT joint testing must not wait for an asynchronously loaded asset before
+  /// it can connect to a peripheral. The protocol table is intentionally
+  /// compiled into this build, so this factory is synchronous and immutable.
+  factory DeviceProfile.evtV15() => _evtV15Profile;
 
   factory DeviceProfile.empty() => const DeviceProfile(
     namePrefix: 'AIPIN',
     manufacturerPrefixHex: 'A389',
     serviceUuid: '0000AF30-0000-1000-8000-00805F9B34FB',
     gattServiceUuid: '',
-    readCharacteristicUuid: '',
-    notifyCharacteristicUuid: '',
-    writeCharacteristicUuid: '',
   );
 
   factory DeviceProfile.fromJson(Map<String, Object?> json) {
     String stringValue(String key) => json[key] as String? ?? '';
     String uuidValue(String key) => normalizeBleUuid(stringValue(key));
     final endpoints = <BleLogicalEndpoint, BleEndpoint>{};
+    var hasUnsupportedEndpointDeclaration = false;
     final endpointJson = json['endpoints'];
     if (endpointJson is Map) {
       for (final serviceEntry in endpointJson.entries) {
-        if (serviceEntry.value is! Map) continue;
+        if (serviceEntry.value is! Map) {
+          hasUnsupportedEndpointDeclaration = true;
+          continue;
+        }
         final service = serviceEntry.key.toString().toLowerCase();
         for (final characteristicEntry in (serviceEntry.value as Map).entries) {
           final key = _logicalEndpoint('$service${characteristicEntry.key}');
-          if (key == null || characteristicEntry.value is! Map) continue;
+          if (key == null ||
+              !evtV15EndpointOperations.containsKey(key) ||
+              characteristicEntry.value is! Map) {
+            hasUnsupportedEndpointDeclaration = true;
+            continue;
+          }
           final value = characteristicEntry.value as Map;
           endpoints[key] = BleEndpoint(
             serviceUuid: _endpointServiceUuid(
               service,
               value['serviceUuid'] as String?,
               gattServiceUuid: uuidValue('gattServiceUuid'),
-              readServiceUuid: uuidValue('readServiceUuid'),
             ),
             characteristicUuid: normalizeBleUuid(
               value['uuid'] as String? ?? '',
@@ -64,13 +197,8 @@ class DeviceProfile {
       manufacturerPrefixHex: stringValue('manufacturerPrefixHex'),
       serviceUuid: uuidValue('serviceUuid'),
       gattServiceUuid: uuidValue('gattServiceUuid'),
-      readCharacteristicUuid: uuidValue('readCharacteristicUuid'),
-      notifyCharacteristicUuid: uuidValue('notifyCharacteristicUuid'),
-      writeCharacteristicUuid: uuidValue('writeCharacteristicUuid'),
-      readServiceUuid: uuidValue('readServiceUuid'),
-      notifyServiceUuid: uuidValue('notifyServiceUuid'),
-      writeServiceUuid: uuidValue('writeServiceUuid'),
       endpoints: endpoints,
+      hasUnsupportedEndpointDeclaration: hasUnsupportedEndpointDeclaration,
     );
   }
 
@@ -78,13 +206,8 @@ class DeviceProfile {
   final String manufacturerPrefixHex;
   final String serviceUuid;
   final String gattServiceUuid;
-  final String readCharacteristicUuid;
-  final String notifyCharacteristicUuid;
-  final String writeCharacteristicUuid;
-  final String? readServiceUuid;
-  final String? notifyServiceUuid;
-  final String? writeServiceUuid;
   final Map<BleLogicalEndpoint, BleEndpoint> endpoints;
+  final bool hasUnsupportedEndpointDeclaration;
 
   BleEndpoint endpoint(BleLogicalEndpoint key) =>
       endpoints[key] ??
@@ -92,21 +215,6 @@ class DeviceProfile {
 
   bool canOperate(BleLogicalEndpoint key, BleOperation operation) =>
       endpoints[key]?.operations.contains(operation) ?? false;
-
-  BleEndpoint get readEndpoint => BleEndpoint(
-    serviceUuid: _endpointService(readServiceUuid),
-    characteristicUuid: readCharacteristicUuid,
-  );
-
-  BleEndpoint get notifyEndpoint => BleEndpoint(
-    serviceUuid: _endpointService(notifyServiceUuid),
-    characteristicUuid: notifyCharacteristicUuid,
-  );
-
-  BleEndpoint get writeEndpoint => BleEndpoint(
-    serviceUuid: _endpointService(writeServiceUuid),
-    characteristicUuid: writeCharacteristicUuid,
-  );
 
   List<int> get manufacturerPrefixBytes {
     final normalized = manufacturerPrefixHex.replaceAll(RegExp(r'\s+'), '');
@@ -121,37 +229,53 @@ class DeviceProfile {
   }
 
   bool get isGattReady {
-    final coreReady = [
-      gattServiceUuid,
-      _endpointService(readServiceUuid),
-      _endpointService(notifyServiceUuid),
-      _endpointService(writeServiceUuid),
-      readCharacteristicUuid,
-      notifyCharacteristicUuid,
-      writeCharacteristicUuid,
-    ].every(_isUuid);
-    if (!coreReady) {
+    if (!_matchesEvtV15DiscoveryContract || !_matchesEvtV15LegacyAnchors) {
       return false;
     }
-    // The profile can describe optional file/OTA endpoints before firmware
-    // exposes them. Empty declarations are capabilities, not a connection
-    // prerequisite; configured declarations still receive strict validation.
-    return endpoints.values
-        .where((endpoint) => endpoint.characteristicUuid.isNotEmpty)
-        .every(
-          (endpoint) =>
-              _isUuid(endpoint.serviceUuid) &&
-              _isUuid(endpoint.characteristicUuid) &&
-              endpoint.operations.isNotEmpty,
-        );
+    if (!_isUuid(gattServiceUuid)) {
+      return false;
+    }
+    if (hasUnsupportedEndpointDeclaration ||
+        endpoints.length != evtV15EndpointOperations.length) {
+      return false;
+    }
+    for (final entry in evtV15EndpointOperations.entries) {
+      final endpoint = endpoints[entry.key];
+      final identity = evtV15EndpointIdentities[entry.key]!;
+      if (endpoint == null ||
+          !_isUuid(endpoint.serviceUuid) ||
+          !_isUuid(endpoint.characteristicUuid) ||
+          !_sameUuid(endpoint.serviceUuid, identity.serviceUuid) ||
+          !_sameUuid(
+            endpoint.characteristicUuid,
+            identity.characteristicUuid,
+          ) ||
+          !endpoint.operations.containsAll(entry.value)) {
+        return false;
+      }
+    }
+    return endpoints.keys.every(evtV15EndpointOperations.containsKey);
   }
 
   EvtFailure? get validationFailure => isGattReady
       ? null
       : EvtFailure.access(
           message: 'GATT 配置未完成',
-          detail: '请在 assets/config/device_profile.json 填写服务和特征 UUID。',
+          detail: '当前 EVT V1.5 内置协议配置不完整，请重新安装匹配的 App 构建。',
         );
+
+  bool get _matchesEvtV15DiscoveryContract {
+    final prefix = manufacturerPrefixBytes;
+    return namePrefix.trim().toUpperCase() == _evtV15NamePrefix &&
+        _sameUuid(serviceUuid, _evtV15AdvertisementServiceUuid) &&
+        prefix.length == _evtV15ManufacturerPrefix.length &&
+        Iterable<int>.generate(
+          prefix.length,
+        ).every((index) => prefix[index] == _evtV15ManufacturerPrefix[index]);
+  }
+
+  bool get _matchesEvtV15LegacyAnchors =>
+      _sameUuid(gattServiceUuid, _evtV15Fa10ServiceUuid);
 
   static bool _isUuid(String value) {
     return RegExp(
@@ -159,11 +283,13 @@ class DeviceProfile {
     ).hasMatch(value);
   }
 
+  static bool _sameUuid(String actual, String expected) =>
+      actual.trim().toUpperCase() == expected;
+
   static String _endpointServiceUuid(
     String service,
     String? configured, {
     required String gattServiceUuid,
-    required String readServiceUuid,
   }) {
     if (configured != null && configured.trim().isNotEmpty) {
       return normalizeBleUuid(configured);
@@ -174,20 +300,31 @@ class DeviceProfile {
             ? gattServiceUuid
             : normalizeBleUuid(service);
       case 'fb10':
-        return readServiceUuid.isNotEmpty
-            ? readServiceUuid
-            : normalizeBleUuid(service);
+        return _evtV15Fb10ServiceUuid;
       case 'ff10':
         return '0000FF10-1212-EFDE-1523-785FEABCD123';
       default:
         return normalizeBleUuid(service);
     }
   }
-
-  String _endpointService(String? value) {
-    return value != null && value.isNotEmpty ? value : gattServiceUuid;
-  }
 }
+
+final DeviceProfile _evtV15Profile = DeviceProfile(
+  namePrefix: DeviceProfile._evtV15NamePrefix,
+  manufacturerPrefixHex: 'A389',
+  serviceUuid: DeviceProfile._evtV15AdvertisementServiceUuid,
+  gattServiceUuid: DeviceProfile._evtV15Fa10ServiceUuid,
+  endpoints: Map<BleLogicalEndpoint, BleEndpoint>.unmodifiable({
+    for (final entry in DeviceProfile.evtV15EndpointIdentities.entries)
+      entry.key: BleEndpoint(
+        serviceUuid: entry.value.serviceUuid,
+        characteristicUuid: entry.value.characteristicUuid,
+        operations: Set<BleOperation>.unmodifiable(
+          DeviceProfile.evtV15EndpointOperations[entry.key]!,
+        ),
+      ),
+  }),
+);
 
 class BleEndpoint {
   const BleEndpoint({

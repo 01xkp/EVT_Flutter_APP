@@ -8,20 +8,23 @@ class PlatformPublicDiagnosticLogSink implements PublicDiagnosticLogSink {
   PlatformPublicDiagnosticLogSink({
     MethodChannel? channel,
     bool Function()? isAndroid,
+    bool Function()? isIOS,
   }) : _channel = channel ?? _defaultChannel,
-       _isAndroid = isAndroid ?? (() => Platform.isAndroid);
+       _isAndroid = isAndroid ?? (() => Platform.isAndroid),
+       _isIOS = isIOS ?? (() => Platform.isIOS);
 
   static const _defaultChannel = MethodChannel('aipin/public_diagnostic_logs');
 
   final MethodChannel _channel;
   final bool Function() _isAndroid;
+  final bool Function() _isIOS;
 
   @override
   Future<PublicDiagnosticLogMirrorStatus> mirrorCanonicalFile({
     required String sourcePath,
     required String filename,
   }) async {
-    if (!_isAndroid()) {
+    if (!_isAndroid() && !_isIOS()) {
       return const PublicDiagnosticLogMirrorStatus.unavailable();
     }
     try {

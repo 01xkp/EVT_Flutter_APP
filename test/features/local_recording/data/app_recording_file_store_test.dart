@@ -77,6 +77,26 @@ void main() {
     },
   );
 
+  test(
+    'keeps checkpoint-owned device temporary files while cleaning other orphans',
+    () async {
+      final orphan = await store.createPending(id: 'orphan-recording');
+      await File(orphan.temporaryPath).writeAsBytes([4, 5]);
+      final protected = await store.createPending(
+        id: 'device-checkpoint',
+        extension: '.ogg',
+      );
+      await File(protected.temporaryPath).writeAsBytes([6, 7, 8]);
+
+      await store.cleanupOrphanedTemporaryFiles(
+        protectedRecordingIds: [protected.id],
+      );
+
+      expect(File(orphan.temporaryPath).exists(), completion(isFalse));
+      expect(File(protected.temporaryPath).exists(), completion(isTrue));
+    },
+  );
+
   test('rejects empty captures and unsafe relative paths', () async {
     final pending = await store.createPending(id: 'recording-4');
     await File(pending.temporaryPath).create(recursive: true);

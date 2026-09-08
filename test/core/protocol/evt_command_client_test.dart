@@ -82,6 +82,29 @@ void main() {
     await client.close();
   });
 
+  test('does not retry a command explicitly marked non-idempotent', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: EvtProtocolCodec(),
+      responses: transport.subscriptionStream,
+    );
+
+    await expectLater(
+      client.execute(
+        const EvtCommandRequest(
+          command: 0x09,
+          writeCharacteristic: characteristic,
+          timeout: Duration(milliseconds: 10),
+          maxRetries: 0,
+        ),
+      ),
+      throwsA(isA<EvtCommandTimeoutException>()),
+    );
+    expect(transport.writes, hasLength(1));
+    await client.close();
+  });
+
   test(
     'serializes requests so the second write waits for the first response',
     () async {
@@ -115,6 +138,50 @@ void main() {
       expect(transport.writes, hasLength(2));
       transport.emitSubscriptionBytes(codec.encodeRequest(0x87, const []));
       await second;
+      await client.close();
+    },
+  );
+
+  test(
+    'does not write a queued command when write admission is revoked',
+    () async {
+      final transport = FakeBleTransport();
+      final codec = EvtProtocolCodec();
+      var admitted = true;
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+        beforeWrite: (_) {
+          if (!admitted) {
+            throw StateError('authorization expired');
+          }
+        },
+      );
+
+      final first = client.execute(
+        const EvtCommandRequest(
+          command: 0x01,
+          writeCharacteristic: characteristic,
+          timeout: Duration(milliseconds: 100),
+        ),
+      );
+      final queued = client.execute(
+        const EvtCommandRequest(
+          command: 0x06,
+          writeCharacteristic: characteristic,
+          timeout: Duration(milliseconds: 100),
+        ),
+      );
+
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes, hasLength(1));
+      admitted = false;
+      transport.emitSubscriptionBytes(codec.encodeRequest(0x81, const []));
+
+      await first;
+      await expectLater(queued, throwsA(isA<StateError>()));
+      expect(transport.writes, hasLength(1));
       await client.close();
     },
   );
@@ -198,6 +265,53 @@ void main() {
         <int>[0, 0, 0, 0, 2, 0, 1, 2],
         <int>[2, 0, 0, 0, 0, 0],
       ]);
+      await client.close();
+    },
+  );
+
+  test(
+    'does not write a queued streaming command when write admission is revoked',
+    () async {
+      final transport = FakeBleTransport();
+      final codec = EvtProtocolCodec();
+      var admitted = true;
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+        beforeWrite: (_) {
+          if (!admitted) {
+            throw StateError('authorization expired');
+          }
+        },
+      );
+
+      final first = client.execute(
+        const EvtCommandRequest(
+          command: 0x01,
+          writeCharacteristic: characteristic,
+          timeout: Duration(milliseconds: 100),
+        ),
+      );
+      final queued = client
+          .executeStreaming(
+            const EvtCommandRequest(
+              command: 0x23,
+              writeCharacteristic: characteristic,
+              expectedResponseCommand: 0x23,
+            ),
+            isTerminal: (_) => true,
+          )
+          .drain<void>();
+
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes, hasLength(1));
+      admitted = false;
+      transport.emitSubscriptionBytes(codec.encodeRequest(0x81, const []));
+
+      await first;
+      await expectLater(queued, throwsA(isA<StateError>()));
+      expect(transport.writes, hasLength(1));
       await client.close();
     },
   );

@@ -79,7 +79,6 @@ class RecordingLibraryController extends ChangeNotifier {
   RecordingLibraryState _state = const RecordingLibraryState();
   RecordingLibraryState get state => _state;
 
-  var _captureActive = false;
   var _closed = false;
 
   Future<void> close() async {
@@ -121,7 +120,9 @@ class RecordingLibraryController extends ChangeNotifier {
         ),
       );
     } catch (_) {
-      _setState(_state.copyWith(isLoading: false, errorMessage: '本地录音暂时不可读取。'));
+      _setState(
+        _state.copyWith(isLoading: false, errorMessage: '已保存录音暂时不可读取。'),
+      );
     }
   }
 
@@ -134,10 +135,6 @@ class RecordingLibraryController extends ChangeNotifier {
   }
 
   Future<void> play(String id) async {
-    if (_captureActive) {
-      _setState(_state.copyWith(errorMessage: '录音进行中，结束后可播放。'));
-      return;
-    }
     final recording = _recordingFor(id);
     if (recording == null || !recording.isPlayable) {
       _setState(_state.copyWith(errorMessage: '这条录音暂时不可播放。'));
@@ -183,16 +180,6 @@ class RecordingLibraryController extends ChangeNotifier {
       _setState(_state.copyWith(errorMessage: '录音标题不能为空。'));
     } catch (_) {
       _setState(_state.copyWith(errorMessage: '无法修改录音标题。'));
-    }
-  }
-
-  void setCaptureActive(bool value) {
-    if (_captureActive == value) {
-      return;
-    }
-    _captureActive = value;
-    if (value) {
-      unawaited(stopPlayback());
     }
   }
 

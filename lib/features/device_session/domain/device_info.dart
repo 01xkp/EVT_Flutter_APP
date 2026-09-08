@@ -14,7 +14,6 @@ class DeviceInfo {
     required this.charging,
     required this.powerOff,
     required this.chargingMode,
-    required this.audioStreamEnabled,
   });
 
   final DeviceCapabilities capabilities;
@@ -29,5 +28,4 @@ class DeviceInfo {
   final int charging;
   final int powerOff;
   final int chargingMode;
-  final bool audioStreamEnabled;
 }

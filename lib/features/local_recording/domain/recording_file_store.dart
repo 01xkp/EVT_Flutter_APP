@@ -50,5 +50,7 @@ abstract interface class RecordingFileStore {
   Future<String> absolutePathFor(String relativePath);
   Future<bool> exists(String relativePath);
   Future<void> delete(String relativePath);
-  Future<void> cleanupOrphanedTemporaryFiles();
+  Future<void> cleanupOrphanedTemporaryFiles({
+    Iterable<String> protectedRecordingIds = const [],
+  });
 }

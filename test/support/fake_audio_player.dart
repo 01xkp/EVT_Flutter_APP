@@ -5,12 +5,17 @@ import 'package:aipin/features/local_recording/domain/audio_player_port.dart';
 class FakeAudioPlayer implements AudioPlayerPort {
   final _states = StreamController<AudioPlaybackState>.broadcast();
   final _positions = StreamController<Duration>.broadcast();
+  final _durations = StreamController<Duration?>.broadcast();
   final List<String> playedPaths = [];
   final List<Duration> seekedPositions = [];
 
   String? activePath;
   bool disposed = false;
   Object? playError;
+  Duration? playDuration;
+
+  @override
+  Stream<Duration?> get durations => _durations.stream;
 
   @override
   Stream<Duration> get positions => _positions.stream;
@@ -23,7 +28,10 @@ class FakeAudioPlayer implements AudioPlayerPort {
     disposed = true;
     await _states.close();
     await _positions.close();
+    await _durations.close();
   }
+
+  void emitDuration(Duration? value) => _durations.add(value);
 
   void emitPosition(Duration value) => _positions.add(value);
 
@@ -39,6 +47,9 @@ class FakeAudioPlayer implements AudioPlayerPort {
     }
     activePath = absolutePath;
     playedPaths.add(absolutePath);
+    if (playDuration != null) {
+      _durations.add(playDuration);
+    }
     _states.add(AudioPlaybackState.playing);
   }
 

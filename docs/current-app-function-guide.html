@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>AIPIN 声存 - EVT 设备功能清单</title>
+  <style>
+    :root { --bg:#F8F6F3; --surface:#FFF; --hover:#F0EDE8; --text:#1C1A17; --muted:#6B655C; --line:#E5E1DA; --accent:#19212B; --accent-soft:#F0F4F8; --ok:#2D6A4F; --warn:#9A6700; --no:#A33B32; --radius:8px; --max:1120px; }
+    @media (prefers-color-scheme:dark) { :root { --bg:#11100E; --surface:#1D1B18; --hover:#2B2824; --text:#EFECE7; --muted:#A69E94; --line:#2F2C27; --accent:#F0F4F8; --accent-soft:#262C33; --ok:#87C49A; --warn:#E9B55D; --no:#F09A8D; } }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; background:var(--bg); color:var(--text); font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    .wrap { width:min(calc(100% - 32px),var(--max)); margin:0 auto; }
+    header { padding:52px 0 36px; border-bottom:1px solid var(--line); }
+    main { padding:36px 0 64px; }
+    section { margin-top:46px; scroll-margin-top:20px; }
+    h1,h2,h3 { margin:0; line-height:1.25; letter-spacing:0; }
+    h1 { font-size:clamp(30px,5vw,46px); }
+    h2 { font-size:clamp(23px,3vw,30px); }
+    h3 { font-size:18px; }
+    p { margin:0 0 10px; }
+    a { color:inherit; text-underline-offset:3px; }
+    code { padding:1px 5px; border-radius:4px; background:var(--hover); font:0.9em ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .eyebrow,.muted { color:var(--muted); }
+    .eyebrow { margin-bottom:10px; font-size:13px; }
+    .meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
+    .chip,.status { display:inline-flex; align-items:center; min-height:28px; padding:3px 10px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:13px; line-height:1.4; }
+    .status.ok { color:var(--ok); border-color:color-mix(in srgb,var(--ok) 42%,var(--line)); }
+    .status.wait { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 42%,var(--line)); }
+    .status.no { color:var(--no); border-color:color-mix(in srgb,var(--no) 42%,var(--line)); }
+    .section-head { display:grid; gap:8px; margin-bottom:18px; }
+    .section-head p { color:var(--muted); }
+    .card,.notice,.table-wrap,.flow,details,.toc { border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); }
+    .card { padding:20px; }
+    .notice { padding:15px 18px; }
+    .notice strong { display:block; margin-bottom:4px; }
+    .notice.info { border-left:3px solid var(--accent); }
+    .notice.warn { border-left:3px solid var(--warn); }
+    .notice.danger { border-left:3px solid var(--no); }
+    .grid-2,.grid-3 { display:grid; gap:16px; }
+    .grid-2 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .grid-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .toc { padding:18px 20px; }
+    .toc ol { columns:2; margin:0; padding-left:22px; }
+    .toc li { margin:5px 0; break-inside:avoid; }
+    .table-wrap { overflow-x:auto; }
+    table { width:100%; min-width:720px; border-collapse:collapse; }
+    th,td { padding:12px 14px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:var(--hover); font-size:13px; }
+    tr:last-child td { border-bottom:0; }
+    .feature + .feature { margin-top:16px; }
+    .feature-title { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:14px; }
+    .feature-body { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.15fr); gap:22px; }
+    .label { display:block; margin-bottom:5px; color:var(--muted); font-size:13px; }
+    ol,ul { margin:8px 0 0; padding-left:22px; }
+    li + li { margin-top:4px; }
+    .steps { margin:0; padding:0; list-style:none; counter-reset:step; }
+    .steps li { position:relative; min-height:28px; padding:0 0 12px 40px; counter-increment:step; }
+    .steps li::before { content:counter(step); position:absolute; left:0; top:0; display:grid; width:24px; height:24px; place-items:center; border-radius:50%; background:var(--accent); color:var(--bg); font-size:12px; font-weight:700; }
+    .steps li:not(:last-child)::after { content:""; position:absolute; top:27px; bottom:0; left:11px; border-left:1px solid var(--line); }
+    .flow { padding:18px; overflow-x:auto; }
+    .flow-track { display:flex; align-items:stretch; min-width:max-content; }
+    .flow-step { width:166px; padding:12px; border:1px solid var(--line); border-radius:6px; background:var(--accent-soft); font-size:13px; }
+    .flow-step strong { display:block; margin-bottom:3px; }
+    .arrow { display:grid; place-items:center; padding:0 9px; color:var(--muted); }
+    details { padding:0 18px; }
+    details + details { margin-top:10px; }
+    summary { padding:14px 0; cursor:pointer; font-weight:650; }
+    details > div { padding:0 0 16px; }
+    pre { margin:10px 0 0; padding:14px; overflow-x:auto; border:1px solid var(--line); border-radius:6px; background:var(--hover); font-size:13px; line-height:1.55; }
+    pre code { padding:0; background:transparent; }
+    footer { margin-top:48px; padding-top:22px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+    @media (max-width:760px) { .wrap { width:min(calc(100% - 24px),var(--max)); } header { padding-top:36px; } .grid-2,.grid-3,.feature-body { grid-template-columns:1fr; } .toc ol { columns:1; } .card { padding:17px; } }
+    @media print { body { background:#fff; color:#111; } .card,.notice,.table-wrap,.flow,details { break-inside:avoid; background:#fff; } section { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="eyebrow">AIPIN 声存 / EVT 阶段 / 设备功能清单</p>
+      <h1>EVT App 与设备功能清单</h1>
+      <p class="muted" style="margin-top:14px">仅包含当前 EVT 分支已开放的 BLE 设备功能、操作流程和联调条件。不包含本机录音、AI 转写/总结、账户或其他非设备功能。</p>
+      <div class="meta">
+        <span class="chip">App：Android / iOS</span>
+        <span class="chip">协议：V1.5 EVT 子集</span>
+        <span class="chip">认证：V1 六字节认证码</span>
+        <span class="chip">更新：2026-09-07</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section id="scope">
+      <div class="section-head">
+        <h2>范围</h2>
+        <p>当前 EVT 只开放设备发现、连接、认证、状态读取、配置、设备录音控制、设备文件导入、回连、设备检查和调试日志。</p>
+      </div>
+      <div class="grid-3">
+        <article class="card"><span class="status ok">已开放</span><h3>基础设备链路</h3><p>扫描、连接、GATT 发现、通知订阅、V1 认证和认证后初始化。</p></article>
+        <article class="card"><span class="status ok">已开放</span><h3>设备业务能力</h3><p>状态读取、录音授权、隐私时长、设备录音控制、文件导入和回连。</p></article>
+        <article class="card"><span class="status ok">完整协议准入</span><h3>EVT GATT 合同</h3><p>九个必需 EVT 特征值及其 CCC 订阅必须可用；<code>FF11</code> 是可选文件数摘要，缺失不会停止连接。</p></article>
+      </div>
+      <div class="notice danger" style="margin-top:16px">
+        <strong>当前不开放</strong>
+        <p>实时音频 <code>FA18 / 0x08</code>、V2 Ticket/云端认证、<code>0x26</code> 归档确认、设备文件自动回收、WQOTA 固件升级均不属于当前 EVT 功能。</p>
+      </div>
+    </section>
+
+    <section id="toc">
+      <div class="section-head"><h2>目录</h2></div>
+      <nav class="toc" aria-label="目录">
+        <ol>
+          <li><a href="#matrix">功能矩阵</a></li>
+          <li><a href="#scan">扫描附近设备</a></li>
+          <li><a href="#connect">连接与 GATT 初始化</a></li>
+          <li><a href="#auth">认证、首次绑定、恢复初始码</a></li>
+          <li><a href="#status">设备状态与配置</a></li>
+          <li><a href="#record">设备录音控制</a></li>
+          <li><a href="#files">设备文件导入</a></li>
+          <li><a href="#reconnect">回连与断开</a></li>
+          <li><a href="#check">设备检查与设备活动</a></li>
+          <li><a href="#logs">实时日志</a></li>
+          <li><a href="#protocol">协议与特征值映射</a></li>
+          <li><a href="#limits">联调前置条件与限制</a></li>
+        </ol>
+      </nav>
+    </section>
+
+    <section id="matrix">
+      <div class="section-head"><h2>功能矩阵</h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>功能</th><th>App 入口</th><th>前置条件</th><th>结果</th></tr></thead>
+          <tbody>
+            <tr><td>扫描设备</td><td>首页设备卡片 → 连接设备</td><td>系统蓝牙开启，附近设备权限可用</td><td>当前实时显示所有名称非空的 BLE 广播；严格 EVT 身份检查保留给自动回连</td></tr>
+            <tr><td>连接设备</td><td>选中设备 → 连接设备</td><td>名称非空；连接后九个必需 EVT 特征均有效</td><td>连接、服务发现、校验 GATT 合约并订阅必需 EVT 通道；有 <code>FF11</code> 时追加可选订阅</td></tr>
+            <tr><td>认证设备</td><td>设备详情 → 认证设备</td><td>九个必需 EVT 特征和 CCC 均已就绪</td><td>获得 60 秒状态、配置和文件权限</td></tr>
+            <tr><td>首次绑定</td><td>设备详情 → 首次绑定设备</td><td>设备接受初始认证码</td><td>向设备写入新的六字节认证码</td></tr>
+            <tr><td>恢复初始认证码</td><td>设备详情 → 恢复初始认证码</td><td>当前会话已认证</td><td>设备恢复初始码并格式化设备录音和配置</td></tr>
+            <tr><td>状态与配置</td><td>设备详情</td><td>认证成功，对应端点存在</td><td>读取/设置电量、存储、隐私、录音授权等</td></tr>
+            <tr><td>设备录音</td><td>设备详情 → 设备录音</td><td>认证成功，<code>FA17</code> 可用</td><td>开始、暂停、继续、结束设备录音</td></tr>
+            <tr><td>设备文件导入</td><td>设备详情 → 设备录音文件</td><td>认证成功，<code>FF12/FF13</code> 可用</td><td>下载到 App 本地记录，支持断点续传</td></tr>
+            <tr><td>自动回连</td><td>App 回前台或异常断连后</td><td>曾认证并完成初始化</td><td>扫描同一设备后自动尝试重连</td></tr>
+            <tr><td>设备检查</td><td>设备详情 → 设备检查</td><td>设备状态可观察</td><td>保存本地联调证据与检查结果</td></tr>
+            <tr><td>实时日志</td><td>设备详情右上角</td><td>Debug 构建</td><td>查看并落盘连接、协议和传输日志</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="scan">
+      <div class="section-head"><h2>扫描附近设备</h2><p>扫描只负责发现；真正连接前还会校验设备身份数据。</p></div>
+      <article class="card feature">
+        <div class="feature-title"><h3>操作流程</h3><span class="status ok">已开放</span></div>
+        <div class="feature-body">
+          <div>
+            <span class="label">用户操作</span>
+            <ol class="steps">
+              <li>首页点击设备卡片，进入“连接设备”。</li>
+              <li>点击“查找附近设备”。</li>
+              <li>蓝牙关闭时按系统提示开启蓝牙。</li>
+              <li>选择设备后点击“连接设备”。</li>
+            </ol>
+          </div>
+          <div>
+            <span class="label">扫描规则</span>
+            <ul>
+              <li>没有名称的 BLE 设备不显示。</li>
+              <li>相同连接 ID 只保留一条，后续广播更新 RSSI 和最后出现时间。</li>
+              <li>列表按 RSSI 从强到弱排序。</li>
+              <li>约 5 秒未收到新广播的设备从列表移除。</li>
+              <li>当前 EVT 调试构建只要求名称非空即可展示并允许手动连接；没有名称的设备不显示。</li>
+              <li>手动连接后才校验九个必需 EVT GATT 特征及属性；不符合 GATT 合约的设备不会进入认证。<code>AIPIN_XXXX</code>、<code>A3 89 + 6B</code>、<code>AF30</code> 仍是自动回连的严格身份合同。</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+      <div class="notice info">
+        <strong>平台处理</strong>
+        <p>Android 12+ 使用附近设备权限；Android 10/11 按系统要求检查定位权限和定位服务。iOS 使用 CoreBluetooth 授权。Android 可以请求系统打开蓝牙；iOS 只能引导用户前往系统设置或控制中心开启后返回。</p>
+      </div>
+    </section>
+
+    <section id="connect">
+      <div class="section-head"><h2>连接与 GATT 初始化</h2><p>连接成功不等于可控制设备。App 必须完成服务发现、认证通道订阅和 V1 认证后才开放受保护功能。</p></div>
+      <div class="flow">
+        <div class="flow-track">
+          <div class="flow-step"><strong>连接</strong>BLE/GATT 建立连接</div><div class="arrow">→</div>
+          <div class="flow-step"><strong>服务发现</strong>读取服务与特征值</div><div class="arrow">→</div>
+          <div class="flow-step"><strong>订阅通知</strong>订阅 EVT 业务端点</div><div class="arrow">→</div>
+          <div class="flow-step"><strong>等待认证</strong>仅开放认证入口</div><div class="arrow">→</div>
+          <div class="flow-step"><strong>认证后初始化</strong>信息、配置、状态同步</div>
+        </div>
+      </div>
+      <article class="card feature" style="margin-top:16px">
+        <div class="feature-title"><h3>连接步骤</h3><span class="status ok">已开放</span></div>
+        <div class="feature-body">
+          <div>
+            <span class="label">App 执行</span>
+            <ol class="steps">
+              <li>停止扫描并建立 BLE 连接。</li>
+              <li>发现全部 GATT 服务和特征值。</li>
+              <li>校验九个必需 EVT 特征值均存在，并逐项校验协议规定的 Read、Write、Indicate 或 Notify 属性；<code>FF11</code> 仅作可选兼容检查。</li>
+              <li>按 EVT 固定顺序订阅九个必需业务特征值的 CCC 通道；存在 <code>FF11</code> 时再订阅其可选通道。</li>
+              <li>进入“等待设备认证”，不发送其他受保护业务命令。</li>
+            </ol>
+          </div>
+          <div>
+            <span class="label">失败处理</span>
+            <ul>
+              <li>连接和服务发现均有约 15 秒保护时间。</li>
+              <li>任一 EVT 特征缺失、属性不符或 CCC 订阅失败：会话中断，不能认证。</li>
+              <li>错误会写入实时日志，需由固件修正完整 GATT 合同后重新连接。</li>
+              <li>断开时取消订阅、取消待发送命令并进入可重连状态。</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+      <article class="card feature">
+        <div class="feature-title"><h3>认证后初始化</h3><span class="status ok">认证成功后自动执行</span></div>
+        <div class="feature-body">
+          <div><span class="label">App 操作</span><p>请求 ATT MTU，要求实际协商值至少为 136；发送 <code>0x01</code> 读取设备信息，要求设备返回协议版本 3；再发送 <code>0x02</code> 写入 EVT 默认配置。</p></div>
+          <div><span class="label">结果</span><p>初始化成功后进入状态可观察阶段，开放状态、配置、设备录音和文件导入。关键步骤失败会中断并断开，避免“已连接但数据不完整”的状态。</p></div>
+        </div>
+      </article>
+    </section>
+
+    <section id="auth">
+      <div class="section-head"><h2>认证、首次绑定、恢复初始码</h2><p>当前只实现 V1 本地六字节认证，不调用云端认证服务，不使用 V2 Ticket。</p></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>功能</th><th>用户操作</th><th>协议动作</th><th>成功后</th></tr></thead>
+          <tbody>
+            <tr><td>认证设备</td><td>点“认证设备”，输入当前 6 字节认证码。</td><td>向 <code>FA19</code> 写入 V1 <code>0x09</code>，<code>Action=0 + Code[6]</code>；等待 <code>0x89</code> 成功值 <code>1</code>。</td><td>授权状态、配置、文件权限 60 秒。</td></tr>
+            <tr><td>首次绑定设备</td><td>点“首次绑定设备”，输入要写入设备的新 6 字节码。</td><td>向 <code>FA19</code> 写入 V1 <code>0x09</code>，<code>Action=1 + Code[6]</code>。</td><td>绑定成功后进行认证后初始化。</td></tr>
+            <tr><td>恢复初始认证码</td><td>已认证状态点击入口，阅读二次确认后输入当前认证码。</td><td>向 <code>FA19</code> 写入 V1 <code>0x09</code>，<code>Action=2 + Code[6]</code>。</td><td>App 清除回连记录、文件下载断点并断开；设备侧格式化录音和配置。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="notice warn" style="margin-top:16px">
+        <strong>认证窗口</strong>
+        <p>认证有效约 60 秒。超时、连接断开或认证失败后，状态、配置、文件和录音控制按钮重新锁定，需要再次认证。命令真正写入前会再次检查认证窗口，避免排队后仍发送过期授权的命令。</p>
+      </div>
+    </section>
+
+    <section id="status">
+      <div class="section-head"><h2>设备状态与配置</h2><p>状态页显示设备返回的数据；每项可用性由设备实际提供的端点和字段决定。</p></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>功能</th><th>入口</th><th>协议</th><th>页面结果</th></tr></thead>
+          <tbody>
+            <tr><td>设备基本信息</td><td>认证后自动读取</td><td><code>0x01 → 0x81</code></td><td>设备编号、固件版本、总/剩余存储空间。</td></tr>
+            <tr><td>刷新设备状态</td><td>设备状态卡片右上角刷新图标</td><td><code>0x06</code>、<code>0x11</code>、<code>0x05</code></td><td>用户状态、电量/充电、存储、文件数量等。</td></tr>
+            <tr><td>允许设备录音</td><td>“允许设备录音”开关</td><td><code>FA16 / 0x06 / SubCmd=0x02</code></td><td>写入 <code>0/1</code>，成功后刷新状态。</td></tr>
+            <tr><td>默认隐私时长</td><td>“默认隐私时长”菜单</td><td>读取 <code>SubCmd=0x03</code>；写入 <code>SubCmd=0x04</code></td><td>手动退出、10、30、60 分钟四档。</td></tr>
+            <tr><td>设备主动状态</td><td>通知到达时自动更新</td><td><code>0x86 / SubCmd=0x80</code></td><td>隐私状态、录音授权和同步状态更新。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="notice info" style="margin-top:16px">
+        <strong>数据缺失</strong>
+        <p>某一项读取失败或设备未上报时，页面显示“暂未读取”，不会使用虚构默认值。单项失败不影响其他已正常工作的设备功能。</p>
+      </div>
+    </section>
+
+    <section id="record">
+      <div class="section-head"><h2>设备录音控制</h2><p>设备录音由固件实际执行；App 只在收到对应结果后更新状态。</p></div>
+      <article class="card feature">
+        <div class="feature-title"><h3>开始、暂停、继续、结束</h3><span class="status ok">FA17 可用时开放</span></div>
+        <div class="feature-body">
+          <div>
+            <span class="label">用户操作</span>
+            <ol class="steps">
+              <li>认证成功后，打开设备详情中的“设备录音”。</li>
+              <li>未录音时点“开始录音”。</li>
+              <li>录音中可点“暂停录音”，暂停后可点“继续录音”。</li>
+              <li>录音中或暂停时点“结束录音”。</li>
+            </ol>
+          </div>
+          <div>
+            <span class="label">协议与状态</span>
+            <ul>
+              <li>App 向 <code>FA17</code> 写入 <code>0x07</code>。</li>
+              <li>动作值：开始 <code>1</code>、暂停 <code>2</code>、继续 <code>3</code>、结束 <code>0</code>。</li>
+              <li>App 等待 <code>0x87</code>；停止帧与活动帧按协议分别校验。</li>
+              <li>操作期间按钮禁用并显示进度；超时、设备拒绝或断连时显示失败。</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section id="files">
+      <div class="section-head"><h2>设备文件导入</h2><p>文件导入将设备录音下载到 App 的本地记录。当前不向设备发送“已归档/可删除”确认。</p></div>
+      <article class="card feature">
+        <div class="feature-title"><h3>操作流程</h3><span class="status ok">FF12 / FF13 可用时开放</span></div>
+        <div class="feature-body">
+          <div>
+            <span class="label">用户操作</span>
+            <ol class="steps">
+              <li>认证成功后，设备详情点击“设备录音文件”。</li>
+              <li>等待文件列表加载；需要时点右上角刷新。</li>
+              <li>点击某条文件的“导入到记录”。</li>
+              <li>等待进度条完成；成功后该文件成为 App 本地记录。</li>
+            </ol>
+          </div>
+          <div>
+            <span class="label">传输流程</span>
+            <ol class="steps">
+              <li>App 使用 <code>0x22 → 0xA2</code> 分页读取列表。</li>
+              <li>App 使用 <code>0x23</code> 请求文件数据。</li>
+              <li>设备通过 <code>FF13 Notify</code> 连续推送带 offset 的数据。</li>
+              <li>App 校验 offset 连续、长度边界和零长度 EOF，完成后写入本地记录。</li>
+            </ol>
+          </div>
+        </div>
+      </article>
+      <div class="grid-2">
+        <article class="notice info"><strong>断点续传</strong><p>下载中断时，已连续收到的字节和 offset 会作为本地 checkpoint 保留。再次导入同一设备、同一文件时，从 checkpoint 继续。</p></article>
+        <article class="notice warn"><strong>当前 EVT 文件边界</strong><p>不使用旧单包读取；不使用 <code>0x26</code> 元数据/归档确认；不向设备发送删除或回收指令。设备原始文件继续保留。</p></article>
+      </div>
+    </section>
+
+    <section id="reconnect">
+      <div class="section-head"><h2>回连与断开</h2><p>回连只针对曾经完成认证和初始化的设备；用户主动断开不会在同一前台周期自动重连。</p></div>
+      <div class="grid-2">
+        <article class="card">
+          <span class="status ok">自动回连</span>
+          <h3>回连规则</h3>
+          <ul>
+            <li>保存最近一次成功设备的连接 ID、物理 MAC、显示名称和时间。</li>
+            <li>扫描时优先按物理 MAC 匹配；iOS 无 MAC 时回退系统连接 ID。</li>
+            <li>异常断连后最多尝试 3 次，重试间隔约 1 秒、2 秒。</li>
+            <li>App 进入后台暂停扫描和回连；回到前台后恢复。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <span class="status ok">主动断开</span>
+          <h3>断开流程</h3>
+          <ol>
+            <li>设备详情点击“断开设备”。</li>
+            <li>确认弹窗后，App 取消订阅并断开 BLE。</li>
+            <li>当前会话进入中断状态，扫描列表可再次发现该设备。</li>
+            <li>用户可通过“重新连接”重新执行完整连接、认证和初始化流程。</li>
+          </ol>
+        </article>
+      </div>
+    </section>
+
+    <section id="check">
+      <div class="section-head"><h2>设备检查与设备活动</h2><p>设备检查是 App 本地的联调证据判断，不会额外下发固件自检命令。</p></div>
+      <article class="card feature">
+        <div class="feature-title"><h3>使用流程</h3><span class="status ok">状态可观察时开放</span></div>
+        <div class="feature-body">
+          <div>
+            <span class="label">用户操作</span>
+            <ol class="steps">
+              <li>先让设备实际产生需要验证的状态或事件。</li>
+              <li>设备详情点击“设备检查”。</li>
+              <li>选择检查场景，查看通过、失败或不可验证的原因。</li>
+              <li>点击“保存验证结果”或提交人工观察，写入“设备活动”。</li>
+            </ol>
+          </div>
+          <div>
+            <span class="label">检查场景</span>
+            <ul>
+              <li>设备访问：检查当前状态是否可读取。</li>
+              <li>VAD 录音：检查 <code>录音开始 → 静音结束</code> 事件顺序和最终待机状态。</li>
+              <li>电池与充电：要求电量和充电字段存在。</li>
+              <li>待机功耗：要求功耗字段存在；当前 EVT 通常无该字段。</li>
+              <li>恢复验证：根据已有状态快照判断恢复结果。</li>
+              <li>物理反馈：保存用户填写的人工观察备注。</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+      <div class="notice warn">
+        <strong>限制</strong>
+        <p>页面使用进入时的最新状态快照和本次会话已收到的事件，不会重新执行录音、恢复或功耗测量。当前“恢复前/后”没有独立两次采集，因此它适合联调证据记录，不替代自动化产测。</p>
+      </div>
+    </section>
+
+    <section id="logs">
+      <div class="section-head"><h2>实时日志</h2><p>日志用于定位扫描、连接、认证、命令、文件传输和回连问题。</p></div>
+      <div class="grid-2">
+        <article class="card">
+          <span class="status ok">App 内查看</span>
+          <h3>入口与能力</h3>
+          <ul>
+            <li>设备详情右上角点击“实时日志”。</li>
+            <li>支持自动跟随、暂停跟随、清空当前视图。</li>
+            <li>记录扫描、连接状态、服务发现、订阅、收发命令、认证、状态读取、文件导入、断连和回连。</li>
+            <li>日志会过滤音频正文、转写正文、完整 BLE 原始载荷和敏感路径。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <span class="status ok">Android Debug 文件</span>
+          <h3>日志位置</h3>
+          <pre><code>Download/AIPIN/logs/aipin-YYYY-MM-DD.log</code></pre>
+          <p>主日志在 App 私有 Support 目录的 <code>logs</code> 下；单文件约 5 MB 自动轮转，最多保留 7 个文件。Android Debug 成功镜像后可从公共下载目录取得文件。</p>
+        </article>
+      </div>
+      <div class="notice warn" style="margin-top:16px">
+        <strong>限制</strong>
+        <p>持久日志和 Android 公共镜像仅在 Debug 构建启用。日志页的“导出”图标当前只确保日志落盘并取得路径，没有接入系统分享回调；要获取 Android Debug 日志，优先从 <code>Download/AIPIN/logs</code> 读取。</p>
+      </div>
+    </section>
+
+    <section id="protocol">
+      <div class="section-head"><h2>协议与特征值映射</h2><p>当前 EVT App 仅使用下列命令和端点。所有普通命令串行执行，默认约 2 秒超时并最多重试一次。</p></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>逻辑用途</th><th>特征值 / 命令</th><th>App 行为</th><th>设备要求</th></tr></thead>
+          <tbody>
+            <tr><td>V1 认证</td><td><code>FA19 / 0x09 → 0x89</code></td><td>发送认证、绑定或恢复初始码动作。</td><td>FA19 必须 Write + Indicate；成功回复单字节 <code>1</code>。</td></tr>
+            <tr><td>设备信息</td><td><code>0x01 → 0x81</code></td><td>认证后读取并验证 ProtocolVersion=3。</td><td>返回合法设备信息。</td></tr>
+            <tr><td>默认配置</td><td><code>0x02 → 0x82</code></td><td>认证后写入 EVT 默认配置。</td><td>返回配置结果。</td></tr>
+            <tr><td>存储、状态、电量</td><td><code>0x05 / 0x06 / 0x11</code></td><td>自动或手动读取，显示在设备详情。</td><td>从正确特征值返回匹配响应。</td></tr>
+            <tr><td>设备录音</td><td><code>FA17 / 0x07 → 0x87</code></td><td>开始、暂停、继续、结束录音。</td><td>按动作返回正确录音状态帧。</td></tr>
+            <tr><td>文件数量、列表、数据</td><td><code>0x21 / 0x22 / 0x23</code></td><td>读取文件和接收连续数据流。</td><td>FF13 Notify 数据 offset 连续，并以零长度 EOF 结束。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <details>
+        <summary>当前订阅顺序</summary>
+        <div><p>必需顺序为 <code>FA19、FA11、FA12、FA15、FA16、FA17、FB11、FF12、FF13</code>，任一 CCC 订阅失败都会中断会话。设备提供 <code>FF11</code> 时，App 最后订阅其可选文件数通道；缺失或失败只是不显示文件数摘要。当前不订阅 <code>FA18</code>、<code>FF16</code> 或 WQOTA 服务。</p></div>
+      </details>
+      <details>
+        <summary>业务帧格式</summary>
+        <div><pre><code>[0xED][Length Low][Length High][CMD][Content ...][CRC Low][CRC High]</code></pre><p>长度为小端序，CRC 为对 <code>CMD + Content</code> 计算的 CRC-16/CCITT-FALSE，并以小端序放入帧尾。App 会校验同步字、长度、CRC、命令号和响应所属特征值。</p></div>
+      </details>
+    </section>
+
+    <section id="limits">
+      <div class="section-head"><h2>联调前置条件与限制</h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>问题</th><th>App 当前处理</th><th>联调先检查</th></tr></thead>
+          <tbody>
+            <tr><td>扫描不到设备</td><td>不显示无名称设备；有名称设备可手动尝试连接，之后由 GATT 合约决定是否可用。</td><td>蓝牙、权限、设备是否提供本地名称；自动回连再检查名称、<code>A3 89</code> 厂商数据和 6B 地址。</td></tr>
+            <tr><td>连接后无法认证</td><td>任一必需 EVT 端点缺失、属性不符或 CCC 订阅失败时中断；<code>FF11</code> 不阻断认证。</td><td>九个必需 GATT 特征的属性、CCC、系统配对/加密状态、<code>0x09</code> 和 <code>0x89</code> 抓包。</td></tr>
+            <tr><td>认证后功能不可点</td><td>60 秒授权到期或连接中断时锁定功能。</td><td>认证时间、是否断连和完整 EVT GATT 合同是否仍保持有效。</td></tr>
+            <tr><td>文件导入失败</td><td>offset 不连续、长度越界、无 EOF 或 15 秒无下一帧时失败。</td><td>文件列表、FF13 通知顺序、offset、数据长度和零长度 EOF。</td></tr>
+            <tr><td>日志文件找不到</td><td>私有主日志不一定能从文件管理器看到；公共镜像仅 Android Debug。</td><td>先打开实时日志触发写入，再检查 <code>Download/AIPIN/logs</code> 和 <code>public_mirror_failed</code> 日志。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p>本文档仅描述当前 <code>evt</code> 分支已经开放的设备功能。真实联调结果以设备固件版本、GATT 服务发现、协议抓包和实时日志为准。</p>
+      <p>工程：<code>D:\xkp\EVT_Flutter_APP</code>；主要实现：<code>lib/features/device_discovery/</code>、<code>lib/features/device_session/</code>、<code>lib/features/device_logs/</code>。</p>
+    </footer>
+  </main>
+</body>
+</html>

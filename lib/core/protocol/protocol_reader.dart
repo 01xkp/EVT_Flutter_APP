@@ -38,7 +38,14 @@ class ProtocolReader {
     if (slot.take(nul).any((byte) => byte < 0x20 || byte > 0x7E)) {
       throw const FormatException('FileName[17] 只能包含 ASCII 可打印字符。');
     }
-    return ascii.decode(slot.take(nul).toList());
+    final value = ascii.decode(slot.take(nul).toList());
+    if (value.isEmpty) {
+      throw const FormatException('FileName[17] 不能为空。');
+    }
+    if (value.contains('/') || value.contains(r'\')) {
+      throw const FormatException('FileName[17] 不能包含路径分隔符。');
+    }
+    return value;
   }
 
   int _at(int offset) {

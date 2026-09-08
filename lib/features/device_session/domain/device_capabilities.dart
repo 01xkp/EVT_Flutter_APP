@@ -1,11 +1,5 @@
 class DeviceCapabilities {
-  const DeviceCapabilities({
-    required this.protocolVersion,
-    this.supportsRealtimeAudio = false,
-    this.supportsDualOta = false,
-  });
+  const DeviceCapabilities({required this.protocolVersion});
 
   final int protocolVersion;
-  final bool supportsRealtimeAudio;
-  final bool supportsDualOta;
 }

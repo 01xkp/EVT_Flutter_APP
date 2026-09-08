@@ -6,6 +6,7 @@ class FakeRecordingFileStore implements RecordingFileStore {
   final Set<String> discardedIds = {};
   final Set<String> missingPaths = {};
   var cleanupTemporaryFilesCalls = 0;
+  List<String> cleanupProtectedRecordingIds = const [];
   int finalizedSizeBytes = 160000;
   bool failFinalization = false;
   bool failDelete = false;
@@ -72,8 +73,13 @@ class FakeRecordingFileStore implements RecordingFileStore {
       !missingPaths.contains(relativePath);
 
   @override
-  Future<void> cleanupOrphanedTemporaryFiles() async {
+  Future<void> cleanupOrphanedTemporaryFiles({
+    Iterable<String> protectedRecordingIds = const [],
+  }) async {
     cleanupTemporaryFilesCalls += 1;
+    cleanupProtectedRecordingIds = List<String>.unmodifiable(
+      protectedRecordingIds,
+    );
   }
 
   @override

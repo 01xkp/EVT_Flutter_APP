@@ -9,6 +9,8 @@ class DeviceFileDownloadCheckpoints extends Table {
   TextColumn get expectedLength => text()();
   TextColumn get expectedCrc32 => text()();
   IntColumn get receivedBytes => integer()();
+  // Retained solely to read and normalize pre-EVT/DVT database rows. EVT
+  // checkpoint behavior does not expose or branch on a phase value.
   TextColumn get phase => text().withDefault(const Constant('downloading'))();
   DateTimeColumn get updatedAt => dateTime()();
 

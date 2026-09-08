@@ -6,7 +6,7 @@ import '../../../support/fake_ble_transport.dart';
 
 void main() {
   test(
-    'lists named advertisements regardless of V1.5 payload completeness',
+    'lists only advertisements that satisfy the V1.5 EVT contract',
     () async {
       final transport = FakeBleTransport();
       final controller = DiscoveryController(
@@ -44,12 +44,12 @@ void main() {
       transport.emitCandidate(FakeBleTransport.matchingCandidate);
       await Future<void>.delayed(Duration.zero);
 
-      expect(controller.state.candidates, hasLength(3));
+      expect(controller.state.candidates, hasLength(2));
       expect(controller.state.candidates.first.name, 'AIPIN_8423');
       expect(controller.state.candidates.first.rssi, -48);
       expect(
         controller.state.candidates.map((candidate) => candidate.connectionId),
-        contains('unknown-device'),
+        isNot(contains('unknown-device')),
       );
       expect(controller.state.connectEnabled, isFalse);
     },
@@ -71,6 +71,84 @@ void main() {
 
     expect(controller.state.candidates, isEmpty);
   });
+
+  test(
+    'lists named advertisements when strict EVT filtering is disabled',
+    () async {
+      final transport = FakeBleTransport();
+      final controller = DiscoveryController(
+        transport,
+        const AdvertisementFilter(),
+        filterByV15Advertisement: false,
+      );
+      addTearDown(controller.dispose);
+
+      controller.start();
+      transport.emitCandidate(
+        FakeBleTransport.weakMatchingCandidate.copyWith(
+          connectionId: 'temporary-evt-device',
+          name: 'EVT debug peripheral',
+          manufacturerData: const [],
+          serviceUuids: const [],
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.state.candidates, hasLength(1));
+      expect(
+        controller.state.candidates.single.connectionId,
+        'temporary-evt-device',
+      );
+      controller.select(controller.state.candidates.single);
+      expect(controller.state.connectEnabled, isTrue);
+    },
+  );
+
+  test(
+    'merges V1.5 primary advertisement and scan response before filtering',
+    () async {
+      final transport = FakeBleTransport();
+      final controller = DiscoveryController(
+        transport,
+        const AdvertisementFilter(),
+      );
+      addTearDown(controller.dispose);
+
+      final primaryAdvertisement = FakeBleTransport.matchingCandidate.copyWith(
+        name: '',
+        serviceUuids: const [],
+      );
+      final scanResponse = FakeBleTransport.matchingCandidate.copyWith(
+        manufacturerData: const [],
+      );
+
+      controller.start();
+      transport.emitCandidate(primaryAdvertisement);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.state.candidates, isEmpty);
+
+      transport.emitCandidate(scanResponse);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.state.candidates, hasLength(1));
+      expect(controller.state.candidates.single.name, 'AIPIN_8423');
+
+      await controller.stop();
+      controller.start();
+      transport.emitCandidate(scanResponse);
+      transport.emitCandidate(primaryAdvertisement);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.state.candidates, hasLength(1));
+      expect(
+        controller.state.candidates.single.manufacturerData,
+        FakeBleTransport.matchingCandidate.manufacturerData,
+      );
+      expect(
+        controller.state.candidates.single.serviceUuids,
+        FakeBleTransport.matchingCandidate.serviceUuids,
+      );
+    },
+  );
 
   test(
     'scan failure exposes a recoverable state without retaining selection',

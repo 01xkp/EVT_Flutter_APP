@@ -61,10 +61,6 @@ class PermissionHandlerGateway implements AppPermissionGateway {
   };
 
   @override
-  Future<AppPermissionState> microphone() async =>
-      _map(await Permission.microphone.status);
-
-  @override
   Future<bool> openSettings() => openAppSettings();
 
   AppPermissionState _map(PermissionStatus status) => switch (status) {

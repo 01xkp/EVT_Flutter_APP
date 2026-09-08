@@ -41,7 +41,38 @@ void main() {
   );
 
   test(
-    'uses a no-op status outside Android without invoking a channel',
+    'sends the canonical path and daily filename to iOS Documents',
+    () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            expect(call.method, 'mirrorCanonicalLog');
+            expect(call.arguments, <String, Object?>{
+              'sourcePath': '/app/files/logs/aipin-2026-09-01.log',
+              'filename': 'aipin-2026-09-01.log',
+            });
+            return <String, Object?>{
+              'available': true,
+              'relativePath': 'Documents/AIPIN/logs/aipin-2026-09-01.log',
+              'lastUpdatedAtEpochMilliseconds': 1788264000000,
+            };
+          });
+      final sink = PlatformPublicDiagnosticLogSink(
+        isAndroid: () => false,
+        isIOS: () => true,
+      );
+
+      final status = await sink.mirrorCanonicalFile(
+        sourcePath: '/app/files/logs/aipin-2026-09-01.log',
+        filename: 'aipin-2026-09-01.log',
+      );
+
+      expect(status.available, isTrue);
+      expect(status.relativePath, 'Documents/AIPIN/logs/aipin-2026-09-01.log');
+    },
+  );
+
+  test(
+    'uses a no-op status outside Android and iOS without invoking a channel',
     () async {
       var invoked = false;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -49,7 +80,10 @@ void main() {
             invoked = true;
             return <String, Object?>{};
           });
-      final sink = PlatformPublicDiagnosticLogSink(isAndroid: () => false);
+      final sink = PlatformPublicDiagnosticLogSink(
+        isAndroid: () => false,
+        isIOS: () => false,
+      );
 
       final status = await sink.mirrorCanonicalFile(
         sourcePath: '/app/files/logs/aipin-2026-09-01.log',

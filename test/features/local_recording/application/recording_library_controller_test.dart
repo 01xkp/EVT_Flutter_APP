@@ -33,24 +33,17 @@ void main() {
     await controller.load();
 
     expect(controller.state.items.single.id, 'one');
-    expect(controller.state.errorMessage, '本地录音暂时不可读取。');
+    expect(controller.state.errorMessage, '已保存录音暂时不可读取。');
   });
 
-  test(
-    'starting playback stops the prior selection and blocks it during capture',
-    () async {
-      repository.values.add(savedRecording('two'));
-      await controller.load();
+  test('starting playback replaces the prior selected recording', () async {
+    repository.values.add(savedRecording('two'));
+    await controller.load();
 
-      await controller.play('one');
-      await controller.play('two');
-      expect(player.activePath, endsWith('two.m4a'));
-
-      controller.setCaptureActive(true);
-      await controller.play('one');
-      expect(controller.state.errorMessage, '录音进行中，结束后可播放。');
-    },
-  );
+    await controller.play('one');
+    await controller.play('two');
+    expect(player.activePath, endsWith('two.m4a'));
+  });
 
   test(
     'delayed idle events do not replace the selected playing item',

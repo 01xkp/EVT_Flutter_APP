@@ -35,10 +35,12 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
   late final AudioPlayerPort _audioPlayer;
   late final StreamSubscription<AudioPlaybackState> _stateSubscription;
   late final StreamSubscription<Duration> _positionSubscription;
+  late final StreamSubscription<Duration?> _durationSubscription;
   Timer? _progressTimer;
 
   var _playbackState = AudioPlaybackState.idle;
   var _position = Duration.zero;
+  late Duration _duration;
   Duration? _scrubPosition;
 
   static const _progressTick = Duration(milliseconds: 180);
@@ -46,6 +48,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
   @override
   void initState() {
     super.initState();
+    _duration = widget.duration;
     _audioPlayer = widget.audioPlayerFactory();
     _stateSubscription = _audioPlayer.states.listen(_onPlaybackState);
     _positionSubscription = _audioPlayer.positions.listen((position) {
@@ -53,6 +56,27 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
         setState(() => _position = _clamp(position));
       }
     });
+    _durationSubscription = _audioPlayer.durations.listen((duration) {
+      if (mounted && duration != null && duration > Duration.zero) {
+        setState(() {
+          _duration = duration;
+          _position = _clamp(_position);
+        });
+        _syncProgressTimer();
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant AudioPlaybackPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.duration != oldWidget.duration &&
+        widget.duration > Duration.zero) {
+      setState(() {
+        _duration = widget.duration;
+        _position = _clamp(_position);
+      });
+    }
   }
 
   @override
@@ -60,6 +84,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     _progressTimer?.cancel();
     unawaited(_stateSubscription.cancel());
     unawaited(_positionSubscription.cancel());
+    unawaited(_durationSubscription.cancel());
     unawaited(_audioPlayer.dispose());
     super.dispose();
   }
@@ -67,7 +92,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
   @override
   Widget build(BuildContext context) {
     final position = _scrubPosition ?? _position;
-    final maximum = widget.duration.inMilliseconds.toDouble();
+    final maximum = _duration.inMilliseconds.toDouble();
     final progress = maximum == 0
         ? 0.0
         : (position.inMilliseconds / maximum).clamp(0.0, 1.0);
@@ -104,10 +129,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
                 const Spacer(),
                 SizedBox(
                   width: 42,
-                  child: Text(
-                    _format(widget.duration),
-                    textAlign: TextAlign.end,
-                  ),
+                  child: Text(_format(_duration), textAlign: TextAlign.end),
                 ),
               ],
             ),
@@ -173,7 +195,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     setState(() {
       _playbackState = state;
       if (state == AudioPlaybackState.completed) {
-        _position = widget.duration;
+        _position = _duration;
       }
     });
     _syncProgressTimer();
@@ -197,8 +219,8 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
       if (!mounted ||
           _playbackState != AudioPlaybackState.playing ||
           _scrubPosition != null ||
-          _position >= widget.duration) {
-        if (_position >= widget.duration) {
+          _position >= _duration) {
+        if (_position >= _duration) {
           _progressTimer?.cancel();
           _progressTimer = null;
         }
@@ -212,7 +234,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     if (value <= Duration.zero) {
       return Duration.zero;
     }
-    return value >= widget.duration ? widget.duration : value;
+    return value >= _duration ? _duration : value;
   }
 
   String _format(Duration value) {

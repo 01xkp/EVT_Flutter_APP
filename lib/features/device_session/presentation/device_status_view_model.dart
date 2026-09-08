@@ -25,7 +25,9 @@ final class DeviceStatusViewModel {
         DeviceState.standby => '未在录音',
         _ => '暂时无法获取',
       },
-      batteryLabel: snapshot?.batteryPercent?.toString(),
+      batteryLabel:
+          state.deviceBattery?.percent.toString() ??
+          snapshot?.batteryPercent?.toString(),
       updatedAt: snapshot?.observedAt,
       canReconnect: !connected,
     );

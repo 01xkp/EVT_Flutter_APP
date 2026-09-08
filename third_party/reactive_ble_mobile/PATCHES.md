@@ -1,0 +1,46 @@
+# Local Patch Record
+
+Source: `reactive_ble_mobile` 5.5.0 from pub.dev.
+
+## Android legacy advertising scan
+
+`ReactiveBleClient.kt` uses `ScanSettings.Builder.setLegacy(true)` instead of
+the upstream `false` value on Android 8.0 (API 26) and newer. Android 7.x
+keeps its platform default because the method is not available before API 26.
+
+The EVT V1.5 firmware publishes its `AIPIN_XXXX` name, `AF30` service UUID,
+and `A3 89 + BtAddressRaw` manufacturer data through a legacy primary
+advertisement and scan response. Android's extended-only scan misses those
+packets. The change is Android-only; the iOS CoreBluetooth implementation is
+kept unmodified.
+
+When upgrading the plugin, reapply this behavioral patch and verify device
+discovery on Android 7.x and Android 8+ before replacing this vendor copy.
+
+## iOS unfiltered foreground scan
+
+`Central.swift` converts an empty service list to `nil` before calling
+`CBCentralManager.scanForPeripherals`. CoreBluetooth documents `nil` as the
+unfiltered scan form; the EVT App begins unfiltered so it can receive both the
+legacy primary advertisement and its Scan Response before validating
+`A3 89`, `AF30`, and `AIPIN_XXXX` in Dart.
+
+This remains a foreground scan rule. iOS background discovery is intentionally
+not relied on by the App's reconnect flow because CoreBluetooth requires an
+explicit advertised-service filter and substantially throttles background
+scanning.
+
+## Notification setup acknowledgement
+
+`ReactiveBleNotificationSetup.awaitNotificationSetup` is a public local
+facade for the native `awaitNotificationSetup` method. It completes only after
+the characteristic CCC has been acknowledged, rather than after Dart merely
+starts a notification stream.
+
+Android preserves RxAndroidBle's outer notification observable, which is
+emitted after CCC setup. Darwin retains the matching CoreBluetooth
+`didUpdateNotificationStateFor` result. Both implementations support a wait
+registered immediately before or after the stream subscription and reject
+replacement, cancellation, disconnect, invalid arguments, and unsupported
+platforms with explicit errors. The application must still apply its own
+timeout when no stream subscription is ever requested.

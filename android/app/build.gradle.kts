@@ -47,3 +47,9 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+// MainActivity installs the RxAndroidBle disconnect-error handler, so these
+// classes must be visible to the application module at compile time.
+dependencies {
+    implementation("com.polidea.rxandroidble2:rxandroidble:1.16.0")
+}

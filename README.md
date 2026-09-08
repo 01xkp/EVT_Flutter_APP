@@ -1,8 +1,6 @@
 # AIPIN 声存
 
-让声音表达更简单
-
-面向普通用户的 Android/iOS 智能录音设备伴侣。首次打开可选择连接设备或直接使用手机本机录音；应用不提供账户、云同步、设备音频播放或硬件录音控制。
+当前 `evt` 分支是 AIPIN 智能录音设备的 V1.5 EVT BLE 联调构建。它只包含设备发现、连接、V1 六字节认证、设备状态与配置、设备录音控制、设备文件下载和本地查看，不包含手机本机录音、AI/ASR、账户、云端服务、实时音频、文件归档或 OTA。
 
 ## 运行
 
@@ -11,75 +9,73 @@ flutter pub get
 flutter run
 ```
 
-调试运行会自动使用当前临时 AI 语音联调地址；也可以通过 `dart-define` 覆盖它：
-
-```powershell
-flutter run --dart-define=ASR_API_BASE_URL=https://your-temporary-asr-host
-```
-
-`AI 语音`是封闭研究功能。临时服务公开且未鉴权，不能用于敏感录音。临时地址失效时，使用最新联调地址重新运行命令；正式构建必须通过 `ASR_API_BASE_URL` 配置受控服务。
-
-Android debug 包：
+Android Debug APK：
 
 ```powershell
 flutter build apk --debug
 ```
 
-## 使用流程
+应用包名为 `com.aigutta.aipin`。
 
-1. 首次使用选择“连接我的设备”或“先用本机录音”。
-2. 首页显示当前设备连接与录音状态；连接页负责查找、选择和连接附近设备。
-3. “录音”只启动离线 M4A 本机录音，可暂停、继续、结束保存，且不依赖设备连接。
-4. 本机录音可在明确确认后复制一份交由 AI 处理；超过 5 分钟的录音会切成可独立播放的 M4A 分段，逐段转写后按原顺序合并文本。
-5. “记录”展示本机录音和设备活动；设备活动仅展示已完成的设备检查。
-5. 设备详情可查看连接、设备录音状态与电量，并支持断开、重连及进入“设备检查”。
+## EVT 联调功能
 
-## 工程验证
+1. 当前 EVT 手动扫描显示所有名称非空的 BLE 设备；用户手动连接后才严格校验 EVT GATT 合约。自动回连仍以 `AIPIN_XXXX`、`A3 89 + 6B` Manufacturer Data 和 `AF30` Service UUID 识别已记住的设备。
+2. 连接后验证九个必需 EVT 特征及属性，建立对应的 Indicate/Notify 订阅。
+3. 用户通过 `FA19 / 0x09` 输入 V1 六字节认证码，进行认证、首次绑定或恢复初始认证码。
+4. 认证成功后协商 MTU，读取并校验 `ProtocolVersion=3`，写入 EVT 基线时间和录音配置。
+5. 读取设备状态、电量、存储、设备时间、默认隐私时长和可选文件数量；支持设置录音授权和默认隐私时长。
+6. 控制设备开始、暂停、继续和结束录音。
+7. 通过 `0x22` 读取设备文件列表，通过连续 `0x23` Notify 下载 `.m4a` 或 `.ogg` 文件，并支持断连后续传。
+8. 在前台对非用户主动断开的已认证设备自动回连；应用进入后台时停止扫描和回连。
 
-底层仍保留真实 BLE 广播、GATT 服务、状态订阅、状态读取和观察证据流程，供“设备检查”上下文使用。它不产生或同步设备录音文件，也不会向设备发送开始或结束录音指令。
+EVT 仅允许 `0x01`、`0x02`、`0x05`、`0x06`、`0x07`、`0x09`、`0x11`、`0x21`、`0x22`、`0x23`。不会订阅 `FA18`，不会发送 `0x08`、`0x26`、`0x09` V2 或任何 WQOTA、HTTP/HTTPS、Factory/UART 指令。
 
-缺失字段、未知协议事件、CRC 错误和无法读取的状态一律显示为“不可验证”，不会被推断为通过。模拟数据或缺少设备身份的结果会在仓储层被拒绝保存。
+完整的广播、GATT、命令帧、超时和真机验收规则见 [真实固件联调说明](docs/real-firmware-integration.md)。
 
-## 设备 Profile
+## 平台说明
 
-`assets/config/device_profile.json` 是唯一的设备配置来源，包含广播过滤规则及状态读取/订阅使用的 GATT UUID。设置页会展示该 Profile 的就绪状态。
+- Android 6-11：扫描前按系统要求请求定位权限，并要求系统定位服务开启。
+- Android 12 及以上：扫描前请求“附近设备”中的蓝牙扫描和连接权限。
+- Android 使用 legacy scan，适配 EVT 的主广播加 Scan Response 结构。
+- iOS：已配置 `NSBluetoothAlwaysUsageDescription` 和 `bluetooth-central`。iOS 无法由 App 直接开启系统蓝牙，用户需在控制中心或系统设置中开启后重新扫描。
+- iOS 的 BLE `connectionId` 是 CoreBluetooth UUID，不会被当作硬件 MAC；回连使用广播 Manufacturer Data 中的稳定物理地址匹配。
+- 固件默认 `.ogg/Opus` 文件可以在 Android 播放；iOS 可下载保存但不会尝试用 AVFoundation 播放 Ogg/Opus。iOS 若需本地播放，固件需输出 M4A/AAC，或另行引入 Ogg 解码方案。
 
-Profile 未完整配置时，扫描规则仍可使用，但连接后的状态验证会被阻止。变更 Profile 后需重新运行应用。
+## 调试日志
 
-## 平台权限
-
-- Android：声明并在扫描前请求 `BLUETOOTH_SCAN` 和 `BLUETOOTH_CONNECT`；录音开始时请求 `RECORD_AUDIO`，并以 microphone 前台服务维持后台录制。旧版 Android 保留 `ACCESS_FINE_LOCATION` 声明（最高 API 30）。
-- iOS：`Info.plist` 声明 `NSBluetoothAlwaysUsageDescription`、`NSMicrophoneUsageDescription` 和 audio 后台模式。当前 Flutter iOS 工程采用 Swift Package Manager，`permission_handler` 会据此自动启用蓝牙权限。
-- 未授权、蓝牙不可用或连接中断会显示可恢复诊断，不会制造可观察状态。
-
-## 本地证据
-
-证据通过 Drift 存储在应用沙盒中的 `evt_evidence` 数据库，包含设备身份、判定、原因、来源快照/事件、人工备注和诊断载荷。应用不上传、同步或共享该数据库；需要导出时应通过受控的内部流程读取诊断载荷。
-
-## 本机录音
-
-- 本机录音支持离线 M4A 录制、后台/锁屏连续录制、本地播放、重命名、删除和异常恢复。
-- 录音音频保存在应用私有目录，Drift 只保存标题、时长、状态和文件相对路径等元数据。
-- 手机本机录音与设备自有的硬件录音完全独立，不向设备发送开始或结束录音指令，也不会将本机音频混入设备证据。
-
-## 工程结构
+Debug 构建会将脱敏日志写入应用支持目录：
 
 ```text
-lib/app                 应用壳层、依赖注入、主题
-lib/core/ble            Profile、传输契约、平台 BLE 适配器
-lib/core/protocol       EVT 帧、CRC、事件解码
-lib/core/persistence    Drift 数据库与表
-lib/core/design_system  单色主题与复用组件
-lib/features/*          发现、会话、观察、证据、设置的分层实现
+<App Support>/logs/aipin-YYYY-MM-DD.log
 ```
+
+单个文件最大 5 MiB，保留最近 7 个文件。设备详情页的“实时日志”可查看当前路径和导出日志。Android Debug 会额外镜像到：
+
+```text
+Download/AIPIN/logs/aipin-YYYY-MM-DD.log
+```
+
+Android 6-9 首次镜像时会请求存储权限；应用私有日志不受该权限影响。日志不写入认证码、音频内容、文件名、原始 MAC 或 CoreBluetooth UUID。
 
 ## 验证
 
 ```powershell
-dart format --set-exit-if-changed lib test
-flutter analyze
-flutter test
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze --no-fatal-infos
+flutter test --reporter compact
 flutter build apk --debug
+git diff --check
 ```
 
-在真机上额外验证权限请求、蓝牙关闭、广播过滤、GATT 首读、订阅状态、断开重连和本地证据保存。iOS 构建和真机验证需在 macOS/Xcode 环境执行。
+Windows 可完成 Android 构建和 Flutter 测试。iOS 编译、签名及真机 BLE 验证必须在 macOS/Xcode 环境完成。
+
+## 工程结构
+
+```text
+lib/app                    应用壳、依赖注入与主题
+lib/core/ble               广播过滤、GATT Profile 与平台 BLE 传输
+lib/core/protocol          EVT 帧、CRC、命令队列与协议解码
+lib/core/persistence       本地设备记录、下载断点和证据存储
+lib/features/device_*      发现、会话、回连、日志和文件导入
+lib/features/local_recording  仅保存和播放从设备导入的音频
+```

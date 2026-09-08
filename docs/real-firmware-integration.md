@@ -1,144 +1,166 @@
-# 真实固件 V1.5 联调说明
+# AIPIN V1.5 EVT 真实固件联调说明
 
-## App 协议范围
+## 1. 适用范围
 
-本 App 仅实现 V1.5 用户态接口：`0x01`、`0x02`、`0x05`、`0x06`、`0x07`、`0x08`、`0x09`、`0x11`、`0x21`、`0x22`、`0x23`、`0x26`，以及独立 WQOTA 服务 `7033/2001/2002`。Factory、UART、`0x03`、`0x04`、`0x0A`、`0x0B`、`0x24`、`0x25`、`0x27`、`0x28` 和业务 `0x31` 不在用户 App 范围内。
+本文档只描述当前 `evt` 构建与 V1.5 EVT 固件之间实际会发生的 BLE 和业务协议交互。它是 App、固件和测试联调时的共同边界。
 
-## 设备准备
+当前构建只使用 V1 六字节认证码和下表中的 EVT 命令。没有 V2 Ticket/Proof 认证、云端设备票据、实时音频、文件元数据/归档确认、OTA/WQOTA，也不会调用这些路径对应的特征或服务。
 
-1. V1.5 正式设备广播应同时包含精确名称 `AIPIN_[0-9A-F]{4}`、恰好 8 字节的厂商数据 `A3 89 + BtAddressRaw[6]` 和服务 UUID `0000AF30-0000-1000-8000-00805F9B34FB`。当前 App 为真机排查暂时关闭该严格过滤，仅隐藏名称为空或全为空白的设备；恢复 `filterByV15Advertisement` 后，任一项缺失或格式不符的设备都不会展示。
-2. GATT 服务发现后，App 会根据真实 Characteristic 属性决定是否允许操作。基础连接要求：`FB11` 可读、`FA16` 可 Indicate、`FA11` 和 `FA19` 均同时可 Write With Response 和 Indicate。`FB11` 只在认证后按授权范围读取。
-3. 认证后 `0x01` 返回的 `ProtocolVersion` 必须为 `3`，否则 App 主动断开。
-4. 每个可选入口还需实际存在对应属性：
+| EVT 已启用命令 | 业务响应 | 特征 | 当前用途 |
+| --- | --- | --- | --- |
+| `0x01` | `0x81` | `FA11` | 读取设备信息，确认 `ProtocolVersion=3` |
+| `0x02` | `0x82` | `FA12` | 写入时间和基础录音参数；通过 GATT Read 读取设备 UTC |
+| `0x05` | `0x85` | `FA15` | 通过 GATT Read 读取存储空间 |
+| `0x06` | `0x86` | `FA16` | 读取设备状态、设置录音授权和默认隐私时长 |
+| `0x07` | `0x87` | `FA17` | 开始、暂停、继续、结束设备录音 |
+| `0x09` | `0x89` | `FA19` | V1 认证、首次绑定、恢复初始认证码 |
+| `0x11` | `0x91` | `FB11` | 通过 GATT Read 读取电池与充电状态 |
+| `0x21` | `0xA1` | 可选 `FF11` | 通过 GATT Read 读取兼容性设备文件数量摘要 |
+| `0x22` | `0xA2` | `FF12` | 分页读取设备录音文件列表 |
+| `0x23` | `0x23` | `FF13` | 连续 Notify 下载一个设备录音文件，并支持断点继续 |
 
-| 功能 | 必需 GATT 属性 |
-| --- | --- |
-| 配置与隐私 | `FA12 Write + Indicate`、`FA16 Write + Indicate` |
-| 设备录音控制 | `FA17 Write + Indicate` |
-| 文件导入与归档确认 | `FF12 Write + Indicate`、`FF13 Write + Notify`、`FF16 Write + Indicate` |
-| 实时音频 | `FA12 Write + Indicate`、`FA17 Write + Indicate`、`FA18 Notify` |
-| WQOTA | `7033/2001 Write Without Response`、`7033/2002 Notify` |
+以下能力明确不属于本次 EVT 联调范围：`0x08` / `FA18` 实时音频、`0x26` / `FF16` 文件元数据和归档确认、`7033/2001/2002` WQOTA、`0x09` V2、Ticket/Proof、HTTP/HTTPS 设备服务，以及 Factory、UART 和其他未列出的业务命令。
 
-## 连接和认证流程
+## 2. 固件广播与 GATT 要求
 
-1. App 扫描名称非空的广播设备；恢复严格过滤开关后，将按上述三项广播身份过滤。
-2. App 连接、发现服务并订阅业务响应特征后进入 `authenticationReady`。此阶段不读取 `FB11`，也不发送 `0x01`、`0x06` 或文件命令。
-3. 未绑定设备走 `0x09` 的 `bindRequest -> bindConfirm`；已绑定设备走 `authenticate -> authenticationResult`。每次 `0x09` 都需要由票据服务签发一次性 ticket 和 32 字节 proof key；App 会先按本次帧长校验 ATT MTU，且不生成、不保存、不记录 ticket 或 proof key。
-4. 固件要求加密的 GATT 操作会由 Android/iOS 系统触发配对。`flutter_reactive_ble` 不提供显式 bonding 状态或发起 API；若系统返回认证或加密不足，App 提示用户在系统弹窗完成配对后重试，并记录 `pairing_required=true` 诊断日志。
-5. `0x09` 成功后，App 请求最大可用 MTU。Android 请求 `ATT_MTU=517`；iOS 由 CoreBluetooth 自动协商，插件返回的是 Write Without Response 的最大负载，App 会加上 3 字节 ATT 头换算为 ATT MTU。换算后的 ATT MTU 小于 `136` 时，App 不会发送 `0x01`，会明确提示 MTU 不足并断开。
-6. MTU 准入通过后，App 通过 `FA11` 发送 `0x01`；只有 V3 信息回包后会话才进入 `observable`，随后仅同步 grant scope 允许的状态、配置和文件信息。
-7. 固件返回的 grant scope 决定文件、配置、实时音频、OTA 和清除入口是否可用。
-8. grant 仅在固件返回的 `session_ttl_seconds` 内有效；断开连接、到期或重新认证失败后，App 会立即撤销本地 scope，必须重新认证。
+### 2.1 广播
 
-## ATT MTU 准入
+固件应广播下列 V1.5 身份信息：
 
-每个协议帧必须在单次 GATT Write 或 Indicate/Notify 内完整传输。App 在 V3 准入和每个可变长度写入前请求并校验 ATT MTU；小于所需值时不会写入半帧，也不会开始接收不可能完整到达的 `0x81`。
+- Complete Local Name：`AIPIN_XXXX`，其中 `XXXX` 为广播中原始蓝牙地址最后两个字节的大写十六进制；
+- Manufacturer Data：恰好 8 字节，`A3 89 + BtAddressRaw[6]`；
+- Service UUID：`0000AF30-0000-1000-8000-00805F9B34FB`。
 
-| 操作 | 最小 ATT MTU |
-| --- | --- |
-| `0x01 -> 0x81` V3 准入 | `136`（覆盖 30B 兼容保留区和录音态的最大合法 Indicate） |
-| `0x09` BIND/AUTH begin | `35 + ticketLength` |
-| `0x09` BIND/AUTH confirm | `35` |
-| `0x09` CLEAR confirm | `57 + ticketLength` |
-| `0x22` 文件列表 | `31` |
-| `0x26/0x01` 文件元数据 | `57` |
-| `0x23` 文件读取 | 首段 `26`；断点读取 `32` |
-| `0x26/0x02` 归档确认 | `37` |
-| WQOTA E2 | `30` |
+当前 EVT 调试构建暂时关闭手动扫描的上述三项身份过滤：名称非空的 BLE 设备会显示，用户可手动尝试连接。连接后 App 会严格校验 EVT GATT 合约，非 EVT 设备不能进入认证或控制流程；自动回连仍要求上述三项身份字段完整且匹配。
 
-## 文件流程
+`connectionId` 仅供 BLE 连接使用。Android 通常是 MAC；iOS 通常是 CoreBluetooth UUID，不能把它当作 MAC。回连优先使用厂商数据中的物理地址匹配同一台设备。
 
-1. `0x22` 分页读取列表，始终保留原始 `FileName[17]` 槽位。
-2. `0x26/0x01` 读取元数据，`0x23` 按断点下载。
-3. App 校验完整文件长度和 CRC-32/ISO-HDLC。
-4. App 将音频和元数据发送给归档服务；只有服务返回 `durable: true` 才发送 `0x26/0x02`。
-5. `0x26/0x02` 使用同一 `FileName[17]`、大小和 CRC32；设备成功回包的 FileState 必须为 `3` 或 `4`。
-6. 认证同步的 `0x02` 会写入当前 UTC，同时保留 `0x01` 中设备报告的 `PowerOff` 和 `ChargingMode`；App 不会把它们重置为默认值，但会将 `AudioStream` 明确写为 `0`，避免异常断开后的实时音频流残留。
+### 2.2 GATT
 
-## WQOTA 安全边界
+业务服务 UUID 均使用 `0000xxxx-1212-EFDE-1523-785FEABCD123`。固件应按下表提供特征和属性。
 
-1. OTA 页面必须已有 `ota` scope，并且已发现 `2001/2002` 的真实属性。
-2. App 在当前连接上请求最大可用 MTU，以实际协商值计算 `E5` 数据块：`N = min(655, ATT_MTU - 20)`。`E2` 的特征值本身为 27B，包含 3B ATT 头后单帧要求 `ATT_MTU >= 30`；未达到时，Android 或 iOS 都会拒绝开始 OTA，不能把帧拆成多次 Write Without Response。
-3. App 使用 `E1 -> E2 -> E3 -> E5 -> E6 -> E8 -> reboot -> 0x01`。`E5` 的整帧永远只写入一次 BLE Write Without Response。
-4. 当前固件若 `E8 state=0` 会早于异步整镜像验证完成，固件包服务必须返回 `wqota_final_verification_supported: false`。App 会在传输前拒绝该包，不会把该状态当作成功或发送 reboot。
-5. 只有目标固件已经修复为“`E8 state=0` 仅在最终 CRC 验证成功后返回”时，固件包服务才可返回 `wqota_final_verification_supported: true`。升级后仍必须重连并由 `0x01` 验证 `expected_business_version`。
+| 服务 | 特征 | 必需属性 | 使用方式 |
+| --- | --- | --- | --- |
+| `FA10` | `FA11` | Write With Response + Indicate | `0x01 -> 0x81` |
+| `FA10` | `FA12` | Read + Write With Response + Indicate | `0x02 -> 0x82`，以及时间 Read |
+| `FA10` | `FA15` | Read + Indicate | Read 返回 `0x85` |
+| `FA10` | `FA16` | Write With Response + Indicate | `0x06 -> 0x86` |
+| `FA10` | `FA17` | Write With Response + Indicate | `0x07 -> 0x87` |
+| `FA10` | `FA19` | Write With Response + Indicate | `0x09 -> 0x89` |
+| `FB10` | `FB11` | Read + Indicate | Read 返回 `0x91` |
+| `FF10` | `FF11` | 可选 Read + Indicate | 存在时 Read 返回 `0xA1`；不影响认证、`0x22` 或 `0x23` |
+| `FF10` | `FF12` | Write With Response + Indicate | `0x22 -> 0xA2` |
+| `FF10` | `FF13` | Write With Response + Notify | `0x23` 连续文件数据 |
 
-## HTTPS 服务配置
+除 `FF11` 外，表中的九个 EVT 特征及各自规定属性是建立 EVT 认证通道的硬性要求。任一必需特征缺失、属性不支持或 CCC 订阅失败时，App 会终止会话，不会把设备展示为“可认证”或“可联调”。`FF11/0x21` 是兼容性文件数摘要：固件提供时 App 会订阅和读取，缺失或订阅失败只是不显示该摘要，不会阻止认证、`0x22` 文件列表或 `0x23` 导入。
 
-生产或真实联调构建使用三个 HTTPS Dart Define。HTTP 地址会被 Provider 视为未配置，不会降级发送安全材料。
+## 3. 连接与认证流程
 
-```powershell
-flutter run `
-  --dart-define=DEVICE_TICKET_API_BASE_URL=https://device-api.example.com `
-  --dart-define=DEVICE_ARCHIVE_API_BASE_URL=https://archive-api.example.com `
-  --dart-define=FIRMWARE_PACKAGE_API_BASE_URL=https://firmware-api.example.com
+```text
+扫描到名称非空的 BLE 广播（当前兼容扫描）
+  -> 选择设备并连接
+  -> 发现 GATT 服务和特征属性
+  -> 校验九个必需 EVT 特征及属性，并订阅九个必需响应特征
+  -> 若存在 FF11，再订阅其可选响应通道
+  -> 认证通道就绪
+  -> 用户执行认证或首次绑定
+  -> 协商 ATT MTU
+  -> 0x01 读取并校验 ProtocolVersion=3
+  -> 0x02 写入本次会话的基础配置
+  -> 状态可观察，可使用 EVT 功能
 ```
 
-### 票据服务
+具体行为如下：
 
-`POST {DEVICE_TICKET_API_BASE_URL}/v1/device-tickets`
+1. App 使用系统 BLE 扫描、连接和服务发现。连接底层超时为 12 秒，会话建立阶段最长等待 15 秒。
+2. 发现完成后，App 先验证九个必需 EVT 特征的协议属性，再建立必需回应订阅，顺序为 `FA19`、`FA11`、`FA12`、`FA15`、`FA16`、`FA17`、`FB11`、`FF12`、`FF13`。`FF11` 存在时最后建立其可选订阅。任一必需特征缺失、属性不符或必需订阅失败均会中断会话；`FF11` 缺失或可选订阅失败不会阻断会话。
+3. 在“认证通道就绪”之前，App 不读取 `FB11`，不发送 `0x01`、`0x02`、`0x06`、`0x07`、`0x22` 或 `0x23`。
+4. 用户输入 6 个原始字节的认证码后，App 仅向 `FA19` 写入 V1 `0x09`。请求 Content 为 `Action:u8 + SecurityCode[6]`：`0` 为认证、`1` 为首次绑定、`2` 为恢复初始认证码。`0x89` 的 Content 必须恰好 1 字节：`1` 成功、`0` 失败。
+5. 本构建不请求任何认证服务，不发送 ticket、proof、nonce 或 V2 载荷。认证码、绑定码和恢复码不会写入 App 持久化存储或日志。
+6. 认证或首次绑定成功后，App 请求最大 `ATT_MTU=517`。实际 ATT MTU 小于 `136` 时，App 不会发送 `0x01`，会中断本次会话，因为最大合法 `0x81` 指示无法在单次 ATT 传输内完整接收。
+7. MTU 准入成功后，App 写 `0x01`，只接受 `ProtocolVersion=3`。随后写一次 `0x02`：当前 UTC、1800 秒录音时长、当前 EVT 基线录音参数，并强制 `AudioStream=0`。`0x01` 或基线 `0x02` 任一步失败都会中断会话，避免把“已认证”误显示为“可联调”。
+8. App 的本地认证权限窗口为 60 秒。到期、断连或认证失败后，状态、配置、录音和文件操作都会被禁止；BLE 可保持连接，但需重新认证才可继续操作。
+9. “恢复初始认证码”被当作破坏性操作处理。设备返回成功后，App 清除该设备的本地下载断点和回连记录，并主动断开；固件应按 EVT 约定恢复初始认证码并清除设备录音/配置。
 
-```json
-{
-  "device_id": "BLE device identifier",
-  "action": 32,
-  "transaction_id": 42,
-  "device_payload_base64": "..."
-}
+如果系统报 GATT 认证或加密不足，App 会提示用户完成系统蓝牙配对后重试。App 不使用私有 Android 或 iOS API 强制发起 bonding。
+
+## 4. 认证后的 EVT 功能
+
+### 4.1 自动同步与刷新
+
+认证后的首次同步会读取以下完整 EVT 合同中的信息：
+
+- `0x06 / SubCmd 0x01`：隐私状态、剩余分钟数、录音授权和同步状态；
+- `FB11` GATT Read：电量、充电状态和充电模式；
+- `FA15` GATT Read：总存储和剩余存储；
+- `FA12` GATT Read：设备当前 UTC；
+- `0x06 / SubCmd 0x03`：默认隐私时长；
+- 可选 `FF11` GATT Read：兼容性设备文件数量摘要。
+
+状态面板的“刷新设备状态”会重新读取状态、电量和存储。读取失败只保留最后一次有效值并写入诊断日志，不会把无效包当作新状态。
+
+### 4.2 配置与状态：`0x06 -> 0x86`
+
+| SubCmd | App 行为 | 请求数据 | 成功响应 |
+| --- | --- | --- | --- |
+| `0x01` | 读取状态 | 无 | `Privacy:u8, PrivacyRemainMin:u16LE, RecordConsent:u8, SyncState:u8` |
+| `0x02` | 设置“允许设备录音” | `Granted:u8`，`0` 撤回、`1` 授权 | 仅 `SubCmd, Result=0, DataLength=0` |
+| `0x03` | 读取默认隐私时长 | 无 | 1 字节 `DurationCode` |
+| `0x04` | 设置默认隐私时长 | `DurationCode:u8` | 仅 `SubCmd, Result=0, DataLength=0` |
+
+隐私时长编码为 `0=手动退出`、`1=10 分钟`、`2=30 分钟`、`3=60 分钟`。设备主动状态变化可通过 `0x86 / SubCmd 0x80` 上报；它必须使用相同的状态数据布局。
+
+### 4.3 录音控制：`0x07 -> 0x87`
+
+设备详情页根据最后一个有效 `0x87` 状态显示按钮：待机时“开始录音”，录音时“暂停录音/结束录音”，暂停时“继续录音/结束录音”。
+
+| Action | App 入口 | 期望 `0x87` RecordStatus |
+| --- | --- | --- |
+| `0` | 结束录音 | `0` 停止 |
+| `1` | 开始录音 | `1` 录音中 |
+| `2` | 暂停录音 | `2` 已暂停 |
+| `3` | 继续录音 | `3` 已恢复录音 |
+
+`0x87` 为停止时 1 字节、其他状态时 8 字节的可变布局。App 会严格验证长度和枚举。由于录音控制不是幂等操作，`0x07` 超时不会自动重发，避免一次“暂停”被重放成不符合预期的设备状态；联调时应读取日志和设备状态后再决定下一步。
+
+### 4.4 设备文件：`0x22` 和 `0x23`
+
+1. 用户打开“设备录音文件”后，App 用 `0x22` 从 offset `0` 分页请求，直到设备返回 `Count=0`。每条记录固定为 `FileName[17] + FileLength:u32LE`，文件名槽必须是 NUL 终止、后续补零的 ASCII，且不能包含路径分隔符。
+2. App 只接受 `.m4a` 或 `.ogg` 文件名；文件长度必须大于零。
+3. 导入时，App 向 `FF13` 只写一次 `0x23`。首次下载的 Content 仅为 `FileName[17]`；断点继续时为 `FileName[17] + StartOffset:u32LE + ChunkSize:u16LE`，当前 App 使用 `ChunkSize=0`。
+4. 设备随后在 `FF13 Notify` 连续发送 `0x23`：`FileOffset:u32LE + DataLength:u16LE + FileData`。App 要求 offset 连续、长度与实际数据一致。`DataLength=0` 是本次传输结束帧。
+5. App 将连续数据写入应用私有 `.part` 文件，并保存已接收长度。普通断连或传输超时后，用户再次导入同一文件会从最后连续字节的 offset 请求继续；出现乱序、重复结束、超长或最终长度不等于列表声明值时则判定失败。
+6. 当前 EVT 文件链路不读取 `0x26` 元数据，也没有活动 CRC-32 或归档确认协议。长度符合 `0x22` 声明后，App 将文件导入本机记录；**不会**向设备发送确认删除或可回收标记，设备端文件仍应保留。
+
+文件列表响应至少需要 ATT MTU `31`；首次 `0x23` 请求至少需要 `26`，断点请求至少需要 `32`。流式传输任意 15 秒未收到下一帧会以超时结束。
+
+## 5. 帧、超时和错误处理
+
+业务帧格式固定为：
+
+```text
+[0xED][Length:u16LE][CMD:u8][Content...][CRC16:u16LE]
 ```
 
-```json
-{
-  "ticket_base64": "...",
-  "proof_key_base64": "32-byte Base64 value"
-}
-```
+`Length = CMD(1) + Content + CRC(2)`。CRC 为 `CMD + Content` 上的 CRC-16/CCITT-FALSE，写入时采用小端序。App 只接受同步字、声明长度和 CRC 都正确的帧；无效帧不更新状态。
 
-`action` 是 `0x09` 的 action 值。服务必须将 ticket 绑定到设备、action、transaction_id 和短时有效期；proof key 必须刚好 32 字节。
+普通单次命令在 2 秒内未收到匹配响应时最多重试一次。`0x07` 与 `0x09` 不自动重试；`0x23` 保持独占命令队列直至收到终止帧或发生 15 秒空闲超时。响应还必须来自预期特征并匹配预期 CMD（`0x06` 还匹配 SubCmd），否则仅记录为未匹配事件。
 
-### 归档服务
+## 6. 回连、平台和日志
 
-`POST {DEVICE_ARCHIVE_API_BASE_URL}/v1/device-archives`，`multipart/form-data`：
+一次会话在认证成功并进入可观察状态后，App 会本地保存最近设备的显示名称、平台连接 ID 以及可用时的厂商数据物理 MAC。非用户主动断开时，App 在前台重新扫描，优先按物理 MAC 匹配，最多连接三次，重试间隔为 1 秒和 2 秒。进入后台会停止扫描和回连；回到前台后重新开始。每次新连接仍必须重新执行 GATT 发现、V1 认证和同步。
 
-| 字段 | 含义 |
-| --- | --- |
-| `device_id` | BLE device identifier |
-| `file_name_slot_base64` | 设备返回的完整 `FileName[17]` |
-| `file_size_bytes` | 下载后校验的字节数 |
-| `file_crc32` | 下载后校验的 CRC-32/ISO-HDLC，无符号十进制 |
-| `recording_start_utc`、`duration_seconds`、`recording_session_id`、`segment_index` | `0x26/0x01` 元数据 |
-| `audio` | 校验完成的原始音频文件 |
+Android 扫描前请求附近设备权限（Android 11 及以下按系统要求请求定位权限）；蓝牙关闭时可请求系统开启。iOS 不能由 App 直接开启蓝牙，用户返回系统设置或控制中心开启后再扫描。iOS 的 BLE `connectionId` 不是硬件 MAC，回连依赖厂商广播的稳定物理地址。
 
-只有已实际持久化内容后才返回：
+Debug 构建会保存脱敏联调日志到应用支持目录的 `logs/aipin-YYYY-MM-DD.log`，单文件 5 MiB 轮转，保留最近 7 个文件。设备详情的“实时日志”可查看当前路径和导出文件；Android Debug 还会尝试镜像到系统可访问的位置，镜像状态在该页面显示。关键日志包括扫描、连接、服务发现、订阅、MTU、写入、响应、断连和回连，日志不记录认证码或音频内容。
 
-```json
-{"durable": true, "archive_id": "server receipt"}
-```
+## 7. EVT 真机验收顺序
 
-`durable` 不为 `true` 时 App 保留本地文件且不会发送设备归档确认。
-
-### 固件包服务
-
-`GET {FIRMWARE_PACKAGE_API_BASE_URL}/v1/firmware-packages?device_id={id}`
-
-```json
-{
-  "vendor_id": 4660,
-  "product_id": 22136,
-  "image_version": 2,
-  "expected_business_version": "1.0.2",
-  "payload_crc32": 1438416925,
-  "wqota_request_prefix_flags": [112, 7, 110, 193],
-  "wqota_response_prefix_flags": [112, 7, 110, 1],
-  "wqota_final_verification_supported": true,
-  "payload_url": "https://firmware-api.example.com/payloads/aipin-1.0.2.bin"
-}
-```
-
-`payload_url` 必须为 HTTPS。服务要按目标 VID/PID、镜像版本和实际固件抓包向量返回清单；App 会在设备连接后再次校验 VID/PID、payload CRC、前缀向量和最终业务版本。
-
-## 日志和真机清单
-
-Debug 包的安全日志会保存在应用支持目录的 `logs/aipin-YYYY-MM-DD.log`，单文件最大 5 MiB，保留最近 7 个文件。日志会脱敏 ticket、proof、token、设备 ID 和二进制音频/固件内容。
-
-每个 Android 10/11、Android 12+、iOS 13+ 真机至少验证：扫描过滤、首次连接、服务发现属性、V3 拒绝、绑定或认证、配置写入、录音控制、文件断点续传和归档确认、实时音频启停、断连重连、OTA MTU、OTA 最终校验、重启后版本核验。没有票据服务、归档服务、固件包服务或固件抓包向量时，对应入口必须保持“未配置/不可用”，不能以模拟成功代替。
+1. 确认广播包含名称、`A3 89 + 6B` 厂商数据和 `AF30` 服务 UUID。
+2. 扫描到设备后连接，确认 GATT discovery 发现九个必需 EVT 特征、属性符合第 2.2 节，且九个必需 CCC 都已成功订阅；若有 `FF11`，再确认其可选订阅成功。
+3. 用正确和错误的 6 字节认证码分别验证 `0x09 -> 0x89`；确认 App 不出现“认证服务未配置”。
+4. 认证成功后确认 MTU、`0x01 -> 0x81` 和基线 `0x02 -> 0x82` 完成，且 `ProtocolVersion=3`。
+5. 逐项验证 `0x06` 状态/配置、`0x07` 录音控制、`0x05` 存储、`0x11` 电池；若有 `FF11`，再验证可选 `0x21` 文件数量。
+6. 使用 `0x22` 获取至少一页文件，并用 `0x23` 完成一次导入和一次断连后续传。
+7. 验证意外断连的前台回连、手动断开的不自动回连，以及 iOS/Android 的权限和蓝牙关闭提示。
+8. 导出 Debug 日志，与固件侧时间线核对写入的特征、CMD、响应和错误点。

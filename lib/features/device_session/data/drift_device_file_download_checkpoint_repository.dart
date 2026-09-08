@@ -12,6 +12,16 @@ class DriftDeviceFileDownloadCheckpointRepository
   final AppDatabase _database;
 
   @override
+  Future<List<DeviceFileDownloadCheckpoint>> allDownloading() async {
+    // `phase` was written by the retired DVT archive flow. EVT has only an
+    // interruptible download, so legacy values are treated as resumable.
+    final rows = await _database
+        .select(_database.deviceFileDownloadCheckpoints)
+        .get();
+    return rows.map(_fromRow).toList(growable: false);
+  }
+
+  @override
   Future<DeviceFileDownloadCheckpoint?> find({
     required String deviceId,
     required List<int> nameSlot,
@@ -57,7 +67,6 @@ class DriftDeviceFileDownloadCheckpointRepository
       expectedCrc32: int.parse(row.expectedCrc32),
       receivedBytes: row.receivedBytes,
       updatedAt: row.updatedAt,
-      phase: DeviceFileDownloadPhase.values.byName(row.phase),
     );
   }
 
@@ -72,7 +81,8 @@ class DriftDeviceFileDownloadCheckpointRepository
       expectedLength: checkpoint.expectedLength.toString(),
       expectedCrc32: checkpoint.expectedCrc32.toString(),
       receivedBytes: checkpoint.receivedBytes,
-      phase: Value(checkpoint.phase.name),
+      // Normalize any legacy DVT phase when this checkpoint is next saved.
+      phase: const Value('downloading'),
       updatedAt: checkpoint.updatedAt,
     );
   }

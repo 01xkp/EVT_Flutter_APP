@@ -6,6 +6,52 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('retains safe reconnect and BLE discovery diagnostics', () {
+    const sanitizer = DiagnosticSanitizer();
+
+    final reconnectFields = sanitizer.sanitize(
+      scope: 'RECONNECT',
+      fields: const <String, Object?>{
+        'attempt': 2,
+        'phase': 'waiting_to_retry',
+        'failure_category': 'connect_rejected',
+        'cycle': 4,
+      },
+    );
+    final discoveryFields = sanitizer.sanitize(
+      scope: 'BLE',
+      fields: const <String, Object?>{
+        'service_count': 3,
+        'characteristic_count': 11,
+        'services': 'must-not-be-retained',
+      },
+    );
+    final reconnectEvent = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 7),
+      level: DiagnosticLevel.info,
+      scope: 'RECONNECT',
+      operation: 'device_reconnect',
+      stage: 'waiting_to_retry',
+      event: 'reconnect_attempt_failed',
+      fields: reconnectFields,
+    );
+
+    expect(reconnectFields, <String, Object?>{
+      'attempt': 2,
+      'cycle': 4,
+      'failure_category': 'connect_rejected',
+      'phase': 'waiting_to_retry',
+    });
+    expect(discoveryFields, <String, Object?>{
+      'characteristic_count': 11,
+      'service_count': 3,
+    });
+    expect(
+      reconnectEvent.formatLine(),
+      contains('RECONNECT | - | device_reconnect | waiting_to_retry'),
+    );
+  });
+
   test(
     'recursively removes raw diagnostic data while retaining safe fields',
     () {

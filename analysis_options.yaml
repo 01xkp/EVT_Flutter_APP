@@ -9,6 +9,13 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  # The local Reactive BLE override is vendor source maintained in its own
+  # package. Analyze the application and its tests here; avoid treating the
+  # vendor package's independent lint policy as an app diagnostic.
+  exclude:
+    - third_party/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

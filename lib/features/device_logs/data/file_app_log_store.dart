@@ -23,7 +23,10 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     Duration mirrorDebounce = const Duration(seconds: 1),
   }) : _clock = clock ?? DateTime.now,
        _enabled = (enabled ?? true) && (isDebugBuild ?? _isDebugBuild)(),
+       // These public parameter names are part of the construction API.
+       // ignore: prefer_initializing_formals
        _publicDiagnosticLogSink = publicDiagnosticLogSink,
+       // ignore: prefer_initializing_formals
        _mirrorDebounce = mirrorDebounce;
 
   final Future<Directory> Function()? _supportDirectoryProvider;

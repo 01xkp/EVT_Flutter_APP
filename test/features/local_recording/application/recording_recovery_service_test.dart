@@ -90,4 +90,36 @@ void main() {
       expect(files.cleanupTemporaryFilesCalls, 1);
     },
   );
+
+  test(
+    'recovery protects checkpoint-owned temporary device downloads',
+    () async {
+      final files = FakeRecordingFileStore();
+      final service = RecordingRecoveryService(
+        repository: FakeLocalRecordingRepository(),
+        files: files,
+      );
+
+      await service.reconcile(
+        protectedRecordingIds: const ['device-checkpoint'],
+      );
+
+      expect(files.cleanupProtectedRecordingIds, ['device-checkpoint']);
+    },
+  );
+
+  test(
+    'recovery retains temporary files when checkpoint lookup is unavailable',
+    () async {
+      final files = FakeRecordingFileStore();
+      final service = RecordingRecoveryService(
+        repository: FakeLocalRecordingRepository(),
+        files: files,
+      );
+
+      await service.reconcile(cleanupTemporaryFiles: false);
+
+      expect(files.cleanupTemporaryFilesCalls, 0);
+    },
+  );
 }

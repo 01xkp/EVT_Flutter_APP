@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:aipin/core/ble/bluetooth_enable_gateway.dart';
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
+import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/core/design_system/widgets/status_label.dart';
 import 'package:aipin/features/device_discovery/application/discovery_controller.dart';
 import 'package:aipin/features/device_discovery/application/discovery_state.dart';
@@ -17,17 +18,21 @@ class DiscoveryPage extends StatefulWidget {
     this.controller,
     this.onConnect,
     this.onSettings,
+    this.onOpenSystemSettings,
     this.bluetoothEnableGateway = const PlatformBluetoothEnableGateway(),
-    this.onOpenBluetoothSettings,
     this.onStartScan,
     this.onStopScan,
   });
 
   final DiscoveryController? controller;
-  final ValueChanged<DeviceCandidate>? onConnect;
+  final Future<bool> Function(DeviceCandidate candidate)? onConnect;
   final VoidCallback? onSettings;
+
+  /// iOS cannot programmatically enable the Bluetooth adapter. The shell
+  /// supplies the platform-supported App Settings handoff so a user can check
+  /// the Bluetooth permission before returning to retry the scan.
+  final Future<bool> Function()? onOpenSystemSettings;
   final BluetoothEnableGateway bluetoothEnableGateway;
-  final Future<void> Function()? onOpenBluetoothSettings;
 
   /// Lets the shell prepare an explicit reconnect cycle before a user-driven
   /// scan begins. The page still starts its [controller] afterward.
@@ -52,6 +57,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
   Future<void>? _pendingStopScan;
   var _stopScanCompleted = false;
   var _isDisposed = false;
+  var _isConnecting = false;
 
   @override
   void initState() {
@@ -144,9 +150,9 @@ class _DiscoveryPageState extends State<DiscoveryPage>
                     Expanded(child: _buildContent(context)),
                     const SizedBox(height: 16),
                     AppButton.primary(
-                      label: '连接设备',
-                      onPressed: _state.connectEnabled
-                          ? () => widget.onConnect?.call(_state.selected!)
+                      label: _isConnecting ? '正在连接' : '连接设备',
+                      onPressed: _state.connectEnabled && !_isConnecting
+                          ? () => unawaited(_connectSelectedDevice())
                           : null,
                       icon: Icons.bluetooth_connected,
                     ),
@@ -199,14 +205,19 @@ class _DiscoveryPageState extends State<DiscoveryPage>
     }
     _isBluetoothPromptVisible = true;
     final canRequestEnable = widget.bluetoothEnableGateway.canRequestEnable;
+    final canOpenSystemSettings = widget.onOpenSystemSettings != null;
     final confirmed = await AppConfirmationSheet.show(
       context,
       title: canRequestEnable ? '蓝牙未开启？' : '请开启蓝牙',
       message: canRequestEnable
           ? '开启蓝牙后即可查找附近设备。'
-          : '请在系统设置或控制中心开启蓝牙后，返回 App 重新查找设备。',
+          : 'iPhone 不允许 App 直接开启蓝牙。请在控制中心或系统设置中打开蓝牙后返回。',
       cancelLabel: '暂不',
-      confirmLabel: canRequestEnable ? '开启蓝牙' : '打开 App 设置',
+      confirmLabel: canRequestEnable
+          ? '开启蓝牙'
+          : canOpenSystemSettings
+          ? '打开设置'
+          : '我已开启',
     );
     if (!mounted || !confirmed) {
       _isBluetoothPromptVisible = false;
@@ -214,8 +225,11 @@ class _DiscoveryPageState extends State<DiscoveryPage>
     }
     if (!canRequestEnable) {
       _retryScanWhenResumed = true;
-      await widget.onOpenBluetoothSettings?.call();
       _isBluetoothPromptVisible = false;
+      final openSystemSettings = widget.onOpenSystemSettings;
+      if (openSystemSettings != null) {
+        await openSystemSettings();
+      }
       return;
     }
     final result = await widget.bluetoothEnableGateway.requestEnable();
@@ -247,6 +261,30 @@ class _DiscoveryPageState extends State<DiscoveryPage>
       onError: (_, _) => _clearPendingStart(action),
     );
     return action;
+  }
+
+  Future<void> _connectSelectedDevice() async {
+    final candidate = _state.selected;
+    final connect = widget.onConnect;
+    if (candidate == null || connect == null || _isDisposed || _isConnecting) {
+      return;
+    }
+    setState(() => _isConnecting = true);
+    var connected = false;
+    try {
+      connected = await connect(candidate);
+    } catch (_) {
+      connected = false;
+    }
+    if (!mounted || _isDisposed) {
+      return;
+    }
+    setState(() => _isConnecting = false);
+    if (connected) {
+      Navigator.of(context).pop(candidate);
+      return;
+    }
+    AppToast.show(context, message: '连接失败，请确认设备状态后重试');
   }
 
   Future<void> _stopScanning() {

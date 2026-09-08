@@ -11,7 +11,7 @@ class AppRecordingFileStore implements RecordingFileStore {
 
   static final _validRelativePath = RegExp(r'^[A-Za-z0-9-]+\.(m4a|ogg)$');
   static final _validTemporaryFileName = RegExp(
-    r'^[A-Za-z0-9-]+\.part\.(m4a|ogg)$',
+    r'^([A-Za-z0-9-]+)\.part\.(m4a|ogg)$',
   );
 
   final Future<Directory> Function() _rootDirectory;
@@ -142,15 +142,19 @@ class AppRecordingFileStore implements RecordingFileStore {
   }
 
   @override
-  Future<void> cleanupOrphanedTemporaryFiles() async {
+  Future<void> cleanupOrphanedTemporaryFiles({
+    Iterable<String> protectedRecordingIds = const [],
+  }) async {
     final directory = await _recordingsDirectory();
+    final protectedIds = protectedRecordingIds.toSet();
     try {
       await for (final entity in directory.list(followLinks: false)) {
         if (entity is! File) {
           continue;
         }
         final fileName = entity.path.split(Platform.pathSeparator).last;
-        if (_validTemporaryFileName.hasMatch(fileName)) {
+        final match = _validTemporaryFileName.firstMatch(fileName);
+        if (match != null && !protectedIds.contains(match.group(1))) {
           await entity.delete();
         }
       }

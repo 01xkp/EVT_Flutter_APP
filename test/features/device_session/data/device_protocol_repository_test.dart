@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -8,8 +9,7 @@ import 'package:aipin/core/protocol/evt_frame.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:aipin/features/device_session/data/device_protocol_repository.dart';
 import 'package:aipin/features/device_session/domain/device_configuration.dart';
-import 'package:aipin/features/device_session/domain/device_security_gateway.dart';
-import 'package:aipin/features/device_session/domain/ticket_gateway.dart';
+import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/fake_ble_transport.dart';
@@ -143,11 +143,207 @@ void main() {
     );
     expect(battery.percent, 80);
     expect(battery.isCharging, isTrue);
+
+    final fullyChargedBattery = DeviceProtocolRepository.decodeBattery(
+      EvtFrame(command: 0x91, content: Uint8List.fromList([100, 2, 0])),
+    );
+    expect(fullyChargedBattery.percent, 100);
+    expect(fullyChargedBattery.isCharging, isTrue);
     expect(
       DeviceProtocolRepository.decodeFileCount(
         EvtFrame(command: 0xA1, content: Uint8List.fromList([2, 0])),
       ),
       2,
+    );
+  });
+
+  test('rejects malformed conditional V1.5 device-information layouts', () {
+    final active = _deviceInfoContent(recordStatus: 1);
+    expect(
+      DeviceProtocolRepository.decodeDeviceInfo(
+        EvtFrame(command: 0x81, content: Uint8List.fromList(active)),
+      ).recordStatus,
+      1,
+    );
+
+    final compatibilityLayout = _deviceInfoContent(
+      reservedFeatureStatus: 1,
+      recordStatus: 2,
+    );
+    expect(
+      DeviceProtocolRepository.decodeDeviceInfo(
+        EvtFrame(
+          command: 0x81,
+          content: Uint8List.fromList(compatibilityLayout),
+        ),
+      ).recordStatus,
+      2,
+    );
+
+    final fullyCharged = _deviceInfoContent()..[85] = 2;
+    expect(
+      DeviceProtocolRepository.decodeDeviceInfo(
+        EvtFrame(command: 0x81, content: Uint8List.fromList(fullyCharged)),
+      ).charging,
+      2,
+    );
+
+    final extraByte = _deviceInfoContent(recordStatus: 1)..add(0);
+    final missingByte = _deviceInfoContent(recordStatus: 1)..removeLast();
+    final invalidRecordStatus = _deviceInfoContent()..[83] = 4;
+    final invalidBattery = _deviceInfoContent()..[84] = 101;
+    final invalidCharging = _deviceInfoContent()..[85] = 3;
+    final invalidBuzzer = _deviceInfoContent()..[86] = 2;
+    final invalidPowerOff = _deviceInfoContent()..[87] = 2;
+    final invalidChargingMode = _deviceInfoContent()..[88] = 2;
+
+    for (final content in [
+      extraByte,
+      missingByte,
+      invalidRecordStatus,
+      invalidBattery,
+      invalidCharging,
+      invalidBuzzer,
+      invalidPowerOff,
+      invalidChargingMode,
+    ]) {
+      expect(
+        () => DeviceProtocolRepository.decodeDeviceInfo(
+          EvtFrame(command: 0x81, content: Uint8List.fromList(content)),
+        ),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test('rejects inconsistent storage capacity values in EVT responses', () {
+    final impossibleDeviceInfo = _deviceInfoContent()
+      ..[74] = 1
+      ..[75] = 0
+      ..[76] = 0
+      ..[77] = 0
+      ..[78] = 2
+      ..[79] = 0
+      ..[80] = 0
+      ..[81] = 0;
+
+    expect(
+      () => DeviceProtocolRepository.decodeDeviceInfo(
+        EvtFrame(
+          command: 0x81,
+          content: Uint8List.fromList(impossibleDeviceInfo),
+        ),
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => DeviceProtocolRepository.decodeStorage(
+        EvtFrame(
+          command: 0x85,
+          content: Uint8List.fromList(const [1, 0, 0, 0, 2, 0, 0, 0]),
+        ),
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test('rejects invalid device-information fixed-slot padding', () {
+    final nonZeroAfterDeviceCodeNul = _deviceInfoContent()
+      ..[3] = 0
+      ..[4] = 0x58;
+    final nonZeroAfterNameNul = _deviceInfoContent()..[56] = 0x58;
+    final nameOverMaximum = _deviceInfoContent()
+      ..fillRange(45, 45 + 28, 0x41)
+      ..[45 + 28] = 0;
+
+    for (final content in [
+      nonZeroAfterDeviceCodeNul,
+      nonZeroAfterNameNul,
+      nameOverMaximum,
+    ]) {
+      expect(
+        () => DeviceProtocolRepository.decodeDeviceInfo(
+          EvtFrame(command: 0x81, content: Uint8List.fromList(content)),
+        ),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test('rejects invalid EVT status booleans and sync-state enums', () {
+    for (final content in [
+      <int>[0x01, 0, 5, 2, 0, 0, 1, 0],
+      <int>[0x01, 0, 5, 0, 0, 0, 2, 0],
+      <int>[0x80, 0, 5, 0, 0, 0, 1, 4],
+    ]) {
+      expect(
+        () => content.first == 0x80
+            ? DeviceProtocolRepository.decodeStatusEvent(
+                EvtFrame(command: 0x86, content: Uint8List.fromList(content)),
+              )
+            : DeviceProtocolRepository.decodeStatus(
+                EvtFrame(command: 0x86, content: Uint8List.fromList(content)),
+              ),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test('rejects invalid charging enums in 0x91 battery frames', () {
+    for (final content in [
+      <int>[80, 3, 0],
+      <int>[80, 1, 2],
+    ]) {
+      expect(
+        () => DeviceProtocolRepository.decodeBattery(
+          EvtFrame(command: 0x91, content: Uint8List.fromList(content)),
+        ),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test('validates 0x87 state-dependent lengths and enums', () {
+    expect(
+      () => DeviceProtocolRepository.validateRecordState(
+        EvtFrame(command: 0x87, content: Uint8List.fromList([0])),
+      ),
+      returnsNormally,
+    );
+    expect(
+      () => DeviceProtocolRepository.validateRecordState(
+        EvtFrame(
+          command: 0x87,
+          content: Uint8List.fromList([1, 8, 7, 0, 0, 1, 2, 0]),
+        ),
+      ),
+      returnsNormally,
+    );
+
+    for (final content in [
+      <int>[],
+      <int>[4],
+      <int>[0, 0],
+      <int>[1],
+    ]) {
+      expect(
+        () => DeviceProtocolRepository.validateRecordState(
+          EvtFrame(command: 0x87, content: Uint8List.fromList(content)),
+        ),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test('rejects a file-list page whose Count exceeds the EVT limit', () {
+    expect(
+      () => DeviceProtocolRepository.decodeFileList(
+        EvtFrame(
+          command: 0xA2,
+          content: Uint8List.fromList([21, ...List<int>.filled(21 * 21, 0)]),
+        ),
+      ),
+      throwsFormatException,
     );
   });
 
@@ -177,7 +373,6 @@ void main() {
         denoise: false,
         powerOff: 0,
         chargingMode: 0,
-        audioStreamEnabled: false,
       ),
     );
     await Future<void>.delayed(Duration.zero);
@@ -219,7 +414,6 @@ void main() {
           denoise: false,
           powerOff: 0,
           chargingMode: 0,
-          audioStreamEnabled: false,
         ),
       );
       await Future<void>.delayed(Duration.zero);
@@ -233,8 +427,13 @@ void main() {
     },
   );
 
-  test('reads the device UTC with an empty 0x02 request', () async {
-    final transport = FakeBleTransport();
+  test('reads the device UTC through the documented FA12 GATT Read', () async {
+    final transport = FakeBleTransport(
+      readValuesByCharacteristicUuid: {
+        _profile.endpoint(BleLogicalEndpoint.fa10Fa12).characteristicUuid: codec
+            .encodeRequest(0x82, const [0x80, 0x96, 0x98, 0x66]),
+      },
+    );
     final client = EvtCommandClient(
       transport: transport,
       codec: codec,
@@ -248,27 +447,28 @@ void main() {
       codec: codec,
     );
 
-    final operation = repository.readConfigurationTime();
-    await Future<void>.delayed(Duration.zero);
-
-    final request = codec.decode(transport.writes.single).value!;
-    expect(request.command, 0x02);
-    expect(request.content, isEmpty);
-    transport.emitSubscriptionBytes(
-      codec.encodeRequest(0x82, const [0x80, 0x96, 0x98, 0x66]),
-    );
-
     expect(
-      await operation,
+      await repository.readConfigurationTime(),
       DateTime.fromMillisecondsSinceEpoch(1_721_276_032_000, isUtc: true),
+    );
+    expect(transport.writes, isEmpty);
+    expect(transport.readCharacteristics, hasLength(1));
+    expect(
+      transport.readCharacteristics.single.characteristicUuid,
+      _profile.endpoint(BleLogicalEndpoint.fa10Fa12).characteristicUuid,
     );
     await client.close();
   });
 
   test(
-    'ignores a stale configuration acknowledgement while reading UTC',
+    'rejects a malformed FA12 GATT Read response while reading UTC',
     () async {
-      final transport = FakeBleTransport();
+      final transport = FakeBleTransport(
+        readValuesByCharacteristicUuid: {
+          _profile.endpoint(BleLogicalEndpoint.fa10Fa12).characteristicUuid:
+              codec.encodeRequest(0x82, const [0x01]),
+        },
+      );
       final client = EvtCommandClient(
         transport: transport,
         codec: codec,
@@ -282,16 +482,45 @@ void main() {
         codec: codec,
       );
 
-      final operation = repository.readConfigurationTime();
-      await Future<void>.delayed(Duration.zero);
-      transport.emitSubscriptionBytes(codec.encodeRequest(0x82, const [1]));
-      transport.emitSubscriptionBytes(
-        codec.encodeRequest(0x82, const [0x80, 0x96, 0x98, 0x66]),
+      await expectLater(
+        repository.readConfigurationTime(),
+        throwsA(isA<FormatException>()),
+      );
+      expect(transport.writes, isEmpty);
+      await client.close();
+    },
+  );
+
+  test(
+    'retries an idempotent GATT Read exactly once after a timeout',
+    () async {
+      final transport = FakeBleTransport(deferRead: true);
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
+      final repository = DeviceProtocolRepository(
+        deviceId: 'device-1',
+        profile: _profile,
+        transport: transport,
+        commands: client,
+        codec: codec,
+        gattReadTimeout: const Duration(milliseconds: 10),
       );
 
+      await expectLater(
+        repository.readConfigurationTime(),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(transport.readCharacteristics, hasLength(2));
       expect(
-        await operation,
-        DateTime.fromMillisecondsSinceEpoch(1_721_276_032_000, isUtc: true),
+        transport.readCharacteristics.map(
+          (characteristic) => characteristic.characteristicUuid,
+        ),
+        everyElement(
+          _profile.endpoint(BleLogicalEndpoint.fa10Fa12).characteristicUuid,
+        ),
       );
       await client.close();
     },
@@ -341,8 +570,39 @@ void main() {
     },
   );
 
+  test('rejects 0x06 responses outside the documented EVT layout', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    final repository = DeviceProtocolRepository(
+      deviceId: 'device-1',
+      profile: _profile,
+      transport: transport,
+      commands: client,
+      codec: codec,
+    );
+
+    final setConsent = repository.setRecordConsent(true);
+    await Future<void>.delayed(Duration.zero);
+    transport.emitSubscriptionBytes(
+      codec.encodeRequest(0x86, const [0x02, 0, 1, 0]),
+    );
+    await expectLater(setConsent, throwsFormatException);
+
+    final readPrivacyDuration = repository.readPrivacyDuration();
+    await Future<void>.delayed(Duration.zero);
+    transport.emitSubscriptionBytes(
+      codec.encodeRequest(0x86, const [0x03, 0, 1, 4]),
+    );
+    await expectLater(readPrivacyDuration, throwsFormatException);
+    await client.close();
+  });
+
   test(
-    'confirms archive only with the documented size, CRC and success flag',
+    'rejects a file-list response that exceeds the requested page size',
     () async {
       final transport = FakeBleTransport();
       final client = EvtCommandClient(
@@ -357,31 +617,33 @@ void main() {
         commands: client,
         codec: codec,
       );
-      final nameSlot = <int>[
-        ...'capture.m4a'.codeUnits,
-        ...List<int>.filled(6, 0),
-      ];
-      final operation = repository.confirmArchive(
-        nameSlot: nameSlot,
-        fileSize: 8192,
-        crc32: 0xCBF43926,
-      );
+
+      final operation = repository.listFiles(pageSize: 1);
       await Future<void>.delayed(Duration.zero);
-      final written = codec.decode(transport.writes.single).value!;
-      expect(written.command, 0x26);
-      expect(written.content, hasLength(28));
-      expect(written.content.first, 0x02);
-      expect(written.content.last, 0x01);
       transport.emitSubscriptionBytes(
-        codec.encodeRequest(0xA6, const [0x02, 0x00, 0x01, 0x04]),
+        codec.encodeRequest(0xA2, [
+          2,
+          ...'6a7be704_001.ogg'.codeUnits,
+          0,
+          1,
+          0,
+          0,
+          0,
+          ...'6a7be704_002.ogg'.codeUnits,
+          0,
+          2,
+          0,
+          0,
+          0,
+        ]),
       );
-      await expectLater(operation, completion(4));
+      await expectLater(operation, throwsFormatException);
       await client.close();
     },
   );
 
   test(
-    'rejects metadata returned for a different immutable file slot',
+    'does not retry a timed-out file-list page without an echoed page offset',
     () async {
       final transport = FakeBleTransport();
       final client = EvtCommandClient(
@@ -395,25 +657,15 @@ void main() {
         transport: transport,
         commands: client,
         codec: codec,
-      );
-      final requestedSlot = <int>[
-        ...'capture.ogg'.codeUnits,
-        ...List<int>.filled(6, 0),
-      ];
-      final returnedSlot = <int>[
-        ...'other.ogg'.codeUnits,
-        ...List<int>.filled(8, 0),
-      ];
-      final metadataData = <int>[...returnedSlot, ...List<int>.filled(28, 0)];
-      metadataData[44] = 1;
-
-      final operation = repository.readFileMetadata(requestedSlot);
-      await Future<void>.delayed(Duration.zero);
-      transport.emitSubscriptionBytes(
-        codec.encodeRequest(0xA6, <int>[0x01, 0, 45, ...metadataData]),
+        fileListResponseTimeout: const Duration(milliseconds: 10),
       );
 
-      await expectLater(operation, throwsA(isA<FormatException>()));
+      await expectLater(
+        repository.listFiles(),
+        throwsA(isA<EvtCommandTimeoutException>()),
+      );
+
+      expect(transport.writes, hasLength(1));
       await client.close();
     },
   );
@@ -439,10 +691,10 @@ void main() {
         ...List<int>.filled(6, 0),
       ];
 
-      final bytes = <int>[];
+      final events = <Object>[];
       final completed = repository
-          .downloadFile(nameSlot: nameSlot)
-          .forEach(bytes.addAll);
+          .downloadEvtFile(nameSlot: nameSlot)
+          .forEach(events.add);
       await Future<void>.delayed(Duration.zero);
       expect(transport.writes, hasLength(1));
       transport.emitSubscriptionBytes(
@@ -456,14 +708,17 @@ void main() {
       );
 
       await completed;
-      expect(bytes, <int>[1, 2, 3]);
+      expect(events, hasLength(3));
+      expect((events[0] as dynamic).bytes, <int>[1, 2]);
+      expect((events[1] as dynamic).bytes, <int>[3]);
+      expect((events[2] as dynamic).isTerminal, isTrue);
       expect(transport.writes, hasLength(1));
       await client.close();
     },
   );
 
   test(
-    'uses the V2 envelope and exact transaction for device authentication',
+    'uses the EVT V1 security frame with six raw security-code bytes',
     () async {
       final transport = FakeBleTransport();
       final client = EvtCommandClient(
@@ -479,30 +734,58 @@ void main() {
         codec: codec,
       );
 
-      final operation = repository.execute(
-        const DeviceSecurityRequest(
-          action: DeviceAuthAction.authenticate,
-          transactionId: 7,
-          data: [0xAA, 0xBB],
+      final operation = repository.executeEvtLegacySecurity(
+        EvtLegacySecurityRequest(
+          action: EvtLegacySecurityAction.authenticate,
+          securityCode: '123456',
         ),
       );
       await Future<void>.delayed(Duration.zero);
 
-      final request = codec.decode(transport.writes.single).value!;
-      expect(request.command, 0x09);
-      expect(request.content, <int>[0xF2, 0x20, 7, 0, 0, 0, 2, 0, 0xAA, 0xBB]);
-      transport.emitSubscriptionBytes(
-        codec.encodeRequest(0x89, const [0xF2, 0x20, 7, 0, 0, 0, 0, 1, 0, 0]),
-      );
+      expect(transport.writes.single, <int>[
+        0xED,
+        0x0A,
+        0x00,
+        0x09,
+        0x00,
+        0x31,
+        0x32,
+        0x33,
+        0x34,
+        0x35,
+        0x36,
+        0xD3,
+        0x48,
+      ]);
+      transport.emitSubscriptionBytes(codec.encodeRequest(0x89, const [0x01]));
 
-      final response = await operation;
-      expect(response.action, DeviceAuthAction.authenticate);
-      expect(response.transactionId, 7);
-      expect(response.result, 0);
-      expect(response.data, <int>[0]);
+      expect(await operation, isTrue);
       await client.close();
     },
   );
+
+  test('rejects a malformed 0x87 record-action response', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    final repository = DeviceProtocolRepository(
+      deviceId: 'device-1',
+      profile: _profile,
+      transport: transport,
+      commands: client,
+      codec: codec,
+    );
+
+    final operation = repository.setRecordAction(1);
+    await Future<void>.delayed(Duration.zero);
+    transport.emitSubscriptionBytes(codec.encodeRequest(0x87, const [1]));
+
+    await expectLater(operation, throwsA(isA<FormatException>()));
+    await client.close();
+  });
 }
 
 final _profile = DeviceProfile(
@@ -510,14 +793,12 @@ final _profile = DeviceProfile(
   manufacturerPrefixHex: 'A389',
   serviceUuid: '0000AF30-0000-1000-8000-00805F9B34FB',
   gattServiceUuid: '0000FA10-0000-1000-8000-00805F9B34FB',
-  readCharacteristicUuid: '0000FB11-0000-1000-8000-00805F9B34FB',
-  notifyCharacteristicUuid: '0000FA16-0000-1000-8000-00805F9B34FB',
-  writeCharacteristicUuid: '0000FA16-0000-1000-8000-00805F9B34FB',
   endpoints: {
     BleLogicalEndpoint.fa10Fa11: _endpoint('FA10', 'FA11', {
       BleOperation.write,
     }),
     BleLogicalEndpoint.fa10Fa12: _endpoint('FA10', 'FA12', {
+      BleOperation.read,
       BleOperation.write,
     }),
     BleLogicalEndpoint.fa10Fa16: _endpoint('FA10', 'FA16', {
@@ -535,9 +816,6 @@ final _profile = DeviceProfile(
     BleLogicalEndpoint.ff10Ff13: _endpoint('FF10', 'FF13', {
       BleOperation.write,
     }),
-    BleLogicalEndpoint.ff10Ff16: _endpoint('FF10', 'FF16', {
-      BleOperation.write,
-    }),
   },
 );
 
@@ -550,3 +828,39 @@ BleEndpoint _endpoint(
   characteristicUuid: normalizeBleUuid(characteristic),
   operations: operations,
 );
+
+List<int> _deviceInfoContent({
+  int reservedFeatureStatus = 0,
+  int recordStatus = 0,
+}) {
+  final content = <int>[
+    3,
+    ...'SN202608130001'.codeUnits,
+    ...List<int>.filled(6, 0),
+    ...'1.0.0'.codeUnits,
+    ...List<int>.filled(3, 0),
+    ...'A1'.codeUnits,
+    ...List<int>.filled(6, 0),
+    ...List<int>.filled(8, 0),
+    ...'AIPIN_8423'.codeUnits,
+    ...List<int>.filled(19, 0),
+    0,
+    1,
+    0,
+    0,
+    0x80,
+    0,
+    0,
+    0,
+    reservedFeatureStatus,
+  ];
+  if (reservedFeatureStatus != 0) {
+    content.addAll(List<int>.filled(30, 0));
+  }
+  content.add(recordStatus);
+  if (recordStatus != 0) {
+    content.addAll(const [8, 7, 0, 0, 1, 2, 0]);
+  }
+  content.addAll(const [80, 1, 0, 0, 0, 0]);
+  return content;
+}

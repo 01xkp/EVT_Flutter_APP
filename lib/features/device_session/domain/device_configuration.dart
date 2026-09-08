@@ -7,7 +7,6 @@ class DeviceConfiguration {
     required this.denoise,
     required this.powerOff,
     required this.chargingMode,
-    required this.audioStreamEnabled,
   });
 
   final DateTime systemTime;
@@ -17,7 +16,6 @@ class DeviceConfiguration {
   final bool denoise;
   final int powerOff;
   final int chargingMode;
-  final bool audioStreamEnabled;
 
   DeviceConfiguration copyWith({
     DateTime? systemTime,
@@ -27,7 +25,6 @@ class DeviceConfiguration {
     bool? denoise,
     int? powerOff,
     int? chargingMode,
-    bool? audioStreamEnabled,
   }) => DeviceConfiguration(
     systemTime: systemTime ?? this.systemTime,
     recordDurationSeconds: recordDurationSeconds ?? this.recordDurationSeconds,
@@ -36,7 +33,6 @@ class DeviceConfiguration {
     denoise: denoise ?? this.denoise,
     powerOff: powerOff ?? this.powerOff,
     chargingMode: chargingMode ?? this.chargingMode,
-    audioStreamEnabled: audioStreamEnabled ?? this.audioStreamEnabled,
   );
 }
 

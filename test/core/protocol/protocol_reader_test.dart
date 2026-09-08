@@ -52,5 +52,19 @@ void main() {
       () => ProtocolReader(const [0xFF]).asciiSlot17(0),
       throwsFormatException,
     );
+    expect(
+      () => ProtocolReader(List<int>.filled(17, 0)).asciiSlot17(0),
+      throwsFormatException,
+    );
+    for (final invalidName in <String>['file/one.ogg', r'file\one.ogg']) {
+      expect(
+        () => ProtocolReader([
+          ...invalidName.codeUnits,
+          0,
+          ...List<int>.filled(16 - invalidName.length, 0),
+        ]).asciiSlot17(0),
+        throwsFormatException,
+      );
+    }
   });
 }

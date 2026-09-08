@@ -73,7 +73,7 @@ class _DeviceLogPageState extends State<DeviceLogPage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
-              widget.store.currentFilePath ?? 'Debug 日志文件尚未初始化',
+              _logFileLocation(),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.bodySmall,
@@ -105,5 +105,18 @@ class _DeviceLogPageState extends State<DeviceLogPage> {
     if (path != null) {
       await widget.onExport?.call(path);
     }
+  }
+
+  String _logFileLocation() {
+    final mirror = widget.store.publicMirrorStatus;
+    final publicPath = mirror?.available == true ? mirror?.relativePath : null;
+    if (publicPath != null) {
+      return '已保存到：$publicPath';
+    }
+    final canonicalPath = widget.store.currentFilePath;
+    if (canonicalPath != null) {
+      return '应用内部日志：$canonicalPath';
+    }
+    return 'Debug 日志文件尚未初始化';
   }
 }

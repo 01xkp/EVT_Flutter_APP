@@ -24,14 +24,9 @@ class AppNavigationBar extends StatelessWidget {
           label: '首页',
         ),
         NavigationDestination(
-          icon: Icon(Icons.mic_none_outlined),
-          selectedIcon: Icon(Icons.mic),
-          label: '录音',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.folder_open_outlined),
-          selectedIcon: Icon(Icons.folder_open),
-          label: '记录',
+          icon: Icon(Icons.fact_check_outlined),
+          selectedIcon: Icon(Icons.fact_check),
+          label: '设备活动',
         ),
       ],
     );

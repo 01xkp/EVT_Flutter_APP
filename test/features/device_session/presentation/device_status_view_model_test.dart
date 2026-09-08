@@ -1,4 +1,5 @@
 import 'package:aipin/features/device_session/application/session_state.dart';
+import 'package:aipin/features/device_session/domain/device_configuration.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:aipin/features/device_session/presentation/device_status_view_model.dart';
@@ -14,11 +15,17 @@ void main() {
           observedAt: DateTime(2026, 8, 21, 9, 41),
           source: 'test',
         ),
+        deviceBattery: const DeviceBattery(
+          percent: 76,
+          isCharging: true,
+          chargingMode: 0,
+        ),
       ),
     );
 
     expect(viewModel.connectionLabel, '已连接');
     expect(viewModel.recordingLabel, '正在录音');
+    expect(viewModel.batteryLabel, '76');
     expect(viewModel.canReconnect, isFalse);
   });
 }
