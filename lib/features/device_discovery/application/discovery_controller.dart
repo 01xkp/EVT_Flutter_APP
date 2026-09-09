@@ -20,6 +20,7 @@ class DiscoveryController extends ChangeNotifier {
 
   static const _defaultStaleDeviceTimeout = Duration(seconds: 5);
   static const _defaultExpiryCheckInterval = Duration(seconds: 1);
+  static const _repeatedAdvertisementLogInterval = 25;
 
   final BleTransport _transport;
   final AdvertisementFilter _filter;
@@ -33,6 +34,7 @@ class DiscoveryController extends ChangeNotifier {
   var _isDisposed = false;
   Set<String> _excludedDeviceIds = const {};
   final Map<String, _AdvertisementFragment> _advertisementFragments = {};
+  final Map<String, int> _advertisementDiagnosticCounts = {};
   DiscoveryState _state = const DiscoveryState();
 
   DiscoveryState get state => _state;
@@ -76,6 +78,7 @@ class DiscoveryController extends ChangeNotifier {
       isBluetoothOff: false,
     );
     _advertisementFragments.clear();
+    _advertisementDiagnosticCounts.clear();
     notifyListeners();
     _startExpiryTimer(generation);
     late final StreamSubscription<DeviceCandidate> subscription;
@@ -225,21 +228,25 @@ class DiscoveryController extends ChangeNotifier {
       return;
     }
     if (_excludedDeviceIds.contains(candidate.connectionId)) {
-      _logInfo(
-        'scan_result_ignored',
+      _logCandidateDiagnostic(
+        candidate,
+        category: 'excluded',
+        event: 'scan_result_ignored',
+        aggregateEvent: 'scan_result_ignored_aggregate',
         reason: '忽略已连接设备的广播，避免设备列表重复展示。',
-        stage: 'scanning',
+        aggregateReason: '已汇总忽略已连接设备的重复广播，避免扫描日志覆盖连接与认证证据。',
         result: 'cancelled',
-        fields: _candidateLogFields(candidate),
       );
       return;
     }
-    _logInfo(
-      'scan_result_received',
+    _logCandidateDiagnostic(
+      candidate,
+      category: 'received',
+      event: 'scan_result_received',
+      aggregateEvent: 'scan_result_received_aggregate',
       reason: '收到一条蓝牙广播，开始合并广告与扫描响应字段。',
-      stage: 'scanning',
+      aggregateReason: '已汇总同一设备的重复蓝牙广播，详细字段以首次记录和扫描列表当前值为准。',
       result: 'pending',
-      fields: _candidateLogFields(candidate),
     );
     final now = DateTime.now();
     final previous = _advertisementFragments[candidate.connectionId];
@@ -251,22 +258,26 @@ class DiscoveryController extends ChangeNotifier {
     _advertisementFragments[candidate.connectionId] = fragment;
     final freshCandidate = fragment.toCandidate(candidate.connectionId);
     if (freshCandidate.name.trim().isEmpty) {
-      _logInfo(
-        'scan_result_ignored',
+      _logCandidateDiagnostic(
+        freshCandidate,
+        category: 'unnamed',
+        event: 'scan_result_ignored',
+        aggregateEvent: 'scan_result_ignored_aggregate',
         reason: '忽略没有设备名称的蓝牙广播，无法向用户安全展示。',
-        stage: 'scanning',
+        aggregateReason: '已汇总无名称设备的重复广播，不写入逐条日志以保留认证链路空间。',
         result: 'cancelled',
-        fields: _candidateLogFields(freshCandidate),
       );
       return;
     }
     if (filterByV15Advertisement && !_filter.matches(freshCandidate)) {
-      _logInfo(
-        'scan_result_ignored',
+      _logCandidateDiagnostic(
+        freshCandidate,
+        category: 'filtered',
+        event: 'scan_result_ignored',
+        aggregateEvent: 'scan_result_ignored_aggregate',
         reason: '忽略不符合 EVT 广播约定的设备，保留当前扫描列表。',
-        stage: 'scanning',
+        aggregateReason: '已汇总不符合 EVT 广播约定的重复设备，保留首次字段用于联调。',
         result: 'cancelled',
-        fields: _candidateLogFields(freshCandidate),
       );
       return;
     }
@@ -287,15 +298,52 @@ class DiscoveryController extends ChangeNotifier {
       selected: selected,
     );
     notifyListeners();
-    _logInfo(
-      'scan_result_accepted',
+    _logCandidateDiagnostic(
+      freshCandidate,
+      category: 'accepted',
+      event: 'scan_result_accepted',
+      aggregateEvent: 'scan_result_accepted_aggregate',
       reason: wasKnown ? '已刷新扫描列表中的设备信号与广告字段。' : '已将符合条件的设备加入实时扫描列表。',
-      stage: 'scanning',
+      aggregateReason: '已汇总扫描列表中同一设备的重复信号刷新，当前列表保留最新值。',
       result: 'accepted',
       fields: {
-        ..._candidateLogFields(freshCandidate),
         'action': wasKnown ? 'update' : 'add',
         'length': candidates.length,
+      },
+    );
+  }
+
+  /// Repeated Android advertisements can arrive dozens of times per second.
+  /// Keep the first one and periodic samples, while the scan state still
+  /// processes every callback in real time. This keeps later FA19 write and
+  /// response evidence visible in the Debug log.
+  void _logCandidateDiagnostic(
+    DeviceCandidate candidate, {
+    required String category,
+    required String event,
+    required String aggregateEvent,
+    required String reason,
+    required String aggregateReason,
+    required String result,
+    Map<String, Object?> fields = const {},
+  }) {
+    final key =
+        '$category:${candidate.connectionId}:${candidate.name.trim().isEmpty ? 'unnamed' : 'named'}';
+    final count = (_advertisementDiagnosticCounts[key] ?? 0) + 1;
+    _advertisementDiagnosticCounts[key] = count;
+    if (count != 1 && count % _repeatedAdvertisementLogInterval != 0) {
+      return;
+    }
+    final isAggregate = count > 1;
+    _logInfo(
+      isAggregate ? aggregateEvent : event,
+      reason: isAggregate ? aggregateReason : reason,
+      stage: 'scanning',
+      result: result,
+      fields: {
+        ..._candidateLogFields(candidate),
+        ...fields,
+        'subscription_count': count,
       },
     );
   }
@@ -536,6 +584,7 @@ class DiscoveryController extends ChangeNotifier {
     ++_scanGeneration;
     _stopExpiryTimer();
     _advertisementFragments.clear();
+    _advertisementDiagnosticCounts.clear();
     unawaited(_scanSubscription?.cancel());
     _logInfo(
       'scan_controller_disposed',

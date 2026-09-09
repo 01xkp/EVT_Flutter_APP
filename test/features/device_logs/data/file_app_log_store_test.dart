@@ -208,6 +208,20 @@ void main() {
   );
 
   test(
+    'close completes when an external log-stream listener is paused',
+    () async {
+      final store = FileAppLogStore(enabled: false);
+      final subscription = store.stream.listen((_) {});
+      subscription.pause();
+      addTearDown(subscription.cancel);
+
+      await store.close().timeout(const Duration(seconds: 1));
+
+      store.dispose();
+    },
+  );
+
+  test(
     'does not persist when a non-debug build forces logging enabled',
     () async {
       final store = FileAppLogStore(

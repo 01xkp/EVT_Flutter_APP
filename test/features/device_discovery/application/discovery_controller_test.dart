@@ -212,6 +212,51 @@ void main() {
     },
   );
 
+  test(
+    'aggregates repeated scan diagnostics without changing scan results',
+    () async {
+      final transport = FakeBleTransport();
+      final logger = _CapturingLogger();
+      final controller = DiscoveryController(
+        transport,
+        const AdvertisementFilter(),
+        logger: logger,
+      );
+      addTearDown(controller.dispose);
+
+      controller.start();
+      for (var index = 0; index < 50; index += 1) {
+        transport.emitCandidate(
+          FakeBleTransport.matchingCandidate.copyWith(rssi: -48 - index),
+        );
+      }
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.state.candidates, hasLength(1));
+      expect(controller.state.candidates.single.rssi, -97);
+      expect(
+        logger.events.where((event) => event == 'scan_result_received'),
+        hasLength(1),
+      );
+      expect(
+        logger.events.where(
+          (event) => event == 'scan_result_received_aggregate',
+        ),
+        hasLength(2),
+      );
+      expect(
+        logger.events.where((event) => event == 'scan_result_accepted'),
+        hasLength(1),
+      );
+      expect(
+        logger.events.where(
+          (event) => event == 'scan_result_accepted_aggregate',
+        ),
+        hasLength(2),
+      );
+    },
+  );
+
   test('removes a device when its advertisements stop arriving', () async {
     final transport = FakeBleTransport();
     final controller = DiscoveryController(

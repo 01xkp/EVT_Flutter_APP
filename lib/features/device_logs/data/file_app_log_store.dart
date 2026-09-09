@@ -128,7 +128,7 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
 
   @override
   void record(AppLogEntry entry) {
-    if (!_enabled || _disposed) {
+    if (!_enabled || _disposed || _closedStream) {
       return;
     }
     final sanitizedEntry = AppLogEntry.fromEvent(
@@ -157,12 +157,9 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
 
   @override
   Future<void> flush() async {
-    _writeTimer?.cancel();
-    _writeTimer = null;
+    _cancelScheduledWork();
     _enqueuePendingWrite();
     await _writeQueue;
-    _mirrorTimer?.cancel();
-    _mirrorTimer = null;
     _mirrorQueue = _mirrorQueue.then((_) => _mirrorPendingFile(force: true));
     await _mirrorQueue;
     await _writeQueue;
@@ -193,6 +190,13 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
       _writeTimer = null;
       _enqueuePendingWrite();
     });
+  }
+
+  void _cancelScheduledWork() {
+    _writeTimer?.cancel();
+    _writeTimer = null;
+    _mirrorTimer?.cancel();
+    _mirrorTimer = null;
   }
 
   void _enqueuePendingWrite() {
@@ -425,7 +429,12 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   }
 
   @override
-  Future<void> close() => _closeFuture ??= _close();
+  Future<void> close() {
+    // [dispose] cannot await this work. Stop timers synchronously so a page
+    // teardown cannot leave delayed callbacks alive after its owner is gone.
+    _cancelScheduledWork();
+    return _closeFuture ??= _close();
+  }
 
   Future<void> _close() async {
     if (_closedStream) {
@@ -433,11 +442,11 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     }
     _closedStream = true;
     await flush();
-    _writeTimer?.cancel();
-    _writeTimer = null;
-    _mirrorTimer?.cancel();
-    _mirrorTimer = null;
-    await _stream.close();
+    _cancelScheduledWork();
+    // A paused external listener makes StreamController.close() wait until
+    // that listener resumes. Closing this owner must not keep diagnostics or
+    // widget teardown alive indefinitely after file writes have been drained.
+    unawaited(_stream.close());
   }
 
   @override

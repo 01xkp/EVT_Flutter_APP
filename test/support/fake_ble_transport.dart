@@ -226,6 +226,7 @@ class FakeBleTransport implements BleTransport {
 
   Stream<Uint8List> get subscriptionStream => _subscriptionController.stream;
   final writes = <Uint8List>[];
+  final writtenCharacteristics = <BleCharacteristic>[];
   final writesWithoutResponse = <Uint8List>[];
 
   void emitCandidate(DeviceCandidate candidate) =>
@@ -358,6 +359,7 @@ class FakeBleTransport implements BleTransport {
 
   @override
   Future<void> write(BleCharacteristic characteristic, Uint8List bytes) async {
+    writtenCharacteristics.add(characteristic);
     writes.add(Uint8List.fromList(bytes));
   }
 

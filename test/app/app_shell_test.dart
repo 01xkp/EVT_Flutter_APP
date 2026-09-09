@@ -1,6 +1,7 @@
 import 'package:aipin/app/evt_app.dart';
 import 'package:aipin/app/providers.dart';
 import 'package:aipin/core/design_system/widgets/app_button.dart';
+import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:aipin/features/device_discovery/presentation/discovery_page.dart';
 import 'package:aipin/features/device_logs/data/file_app_log_store.dart';
 import 'package:aipin/features/device_session/domain/device_connection_history_repository.dart';
@@ -358,6 +359,117 @@ void main() {
     expect(find.byType(DiscoveryPage), findsNothing);
     expect(find.text('设备详情'), findsOneWidget);
   });
+
+  testWidgets(
+    'manual EVT authentication opens the code sheet and writes V1 0x09 to FA19',
+    (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final transport = FakeBleTransport.withGattReadyProfile();
+      final appLogStore = FileAppLogStore(enabled: false);
+      final candidate = FakeBleTransport.matchingCandidate;
+      final history = _MemoryConnectionHistory(const <RememberedDevice>[]);
+      addTearDown(transport.dispose);
+      addTearDown(appLogStore.dispose);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            onboardingStoreProvider.overrideWithValue(
+              FakeOnboardingStore(completed: true),
+            ),
+            bleTransportProvider.overrideWithValue(transport),
+            deviceConnectionHistoryRepositoryProvider.overrideWithValue(
+              history,
+            ),
+            appLogStoreProvider.overrideWithValue(appLogStore),
+          ],
+          child: const EvtApp(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.text('连接设备').first);
+      await tester.pump();
+      await tester.pump();
+      transport.emitCandidate(candidate);
+      await tester.pump();
+      await tester.tap(find.text(candidate.name));
+      await tester.pump();
+      final connectButton = find.descendant(
+        of: find.byType(DiscoveryPage),
+        matching: find.widgetWithText(AppButton, '连接设备'),
+      );
+      await tester.tap(connectButton);
+      await tester.pump();
+      await tester.runAsync(() async {
+        final timeoutAt = DateTime.now().add(const Duration(seconds: 3));
+        while (transport.discoveryRequests.isEmpty &&
+            DateTime.now().isBefore(timeoutAt)) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      expect(find.text('设备详情'), findsOneWidget);
+      expect(find.text('设备认证（EVT）'), findsOneWidget);
+      expect(find.widgetWithText(AppButton, '认证设备'), findsOneWidget);
+      expect(find.widgetWithText(AppButton, '首次绑定设备'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(AppButton, '认证设备'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.text('6 字节认证码'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), '123456');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(AppButton, '开始认证'));
+      await tester.pump();
+      await tester.runAsync(() async {
+        final timeoutAt = DateTime.now().add(const Duration(seconds: 3));
+        while (transport.writes.isEmpty && DateTime.now().isBefore(timeoutAt)) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump();
+
+      expect(transport.writes, hasLength(1));
+      expect(transport.writtenCharacteristics, hasLength(1));
+      expect(
+        transport.writtenCharacteristics.single.characteristicUuid,
+        '0000FA19-1212-EFDE-1523-785FEABCD123',
+      );
+      expect(transport.writes.single, <int>[
+        0xED,
+        0x0A,
+        0x00,
+        0x09,
+        0x00,
+        0x31,
+        0x32,
+        0x33,
+        0x34,
+        0x35,
+        0x36,
+        0xD3,
+        0x48,
+      ]);
+
+      // Resolve the pending authentication request so the test proves the
+      // outbound path without leaving its response-timeout timer active.
+      transport.emitSubscriptionBytesForCharacteristic(
+        '0000FA19-1212-EFDE-1523-785FEABCD123',
+        EvtProtocolCodec().encodeRequest(0x89, const [0]),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
 }
 
 Future<void> _pumpUntil(

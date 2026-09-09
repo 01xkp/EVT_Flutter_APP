@@ -33,6 +33,41 @@ void main() {
     );
   });
 
+  test('encodes the documented EVT V1 FA19 authentication frame exactly', () {
+    final bytes = EvtProtocolCodec().encodeRequest(0x09, const [
+      0x00,
+      0x31,
+      0x32,
+      0x33,
+      0x34,
+      0x35,
+      0x36,
+    ]);
+
+    expect(bytes, const [
+      0xED,
+      0x0A,
+      0x00,
+      0x09,
+      0x00,
+      0x31,
+      0x32,
+      0x33,
+      0x34,
+      0x35,
+      0x36,
+      0xD3,
+      0x48,
+    ]);
+    expect(
+      EvtProtocolCodec()
+          .decode(const [0xED, 0x04, 0x00, 0x89, 0x01, 0x2E, 0xAC])
+          .value
+          ?.content,
+      const [0x01],
+    );
+  });
+
   test('decodes a complete 0xED frame after CRC validation', () {
     final result = EvtProtocolCodec().decode(const [
       0xED,

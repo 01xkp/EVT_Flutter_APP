@@ -17,10 +17,12 @@ import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:aipin/features/device_discovery/presentation/discovery_page.dart';
 import 'package:aipin/features/device_session/application/session_controller.dart';
 import 'package:aipin/features/device_session/application/evt_legacy_auth_controller.dart';
+import 'package:aipin/features/device_session/application/evt_legacy_security_failure_message.dart';
 import 'package:aipin/features/device_session/application/session_state.dart';
 import 'package:aipin/features/device_session/domain/device_auth_state.dart';
 import 'package:aipin/features/device_session/domain/device_permission.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
+import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
 import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:aipin/features/device_session/presentation/device_detail_page.dart';
 import 'package:aipin/features/device_session/presentation/device_file_browser_page.dart';
@@ -1091,15 +1093,10 @@ class _AppShellState extends ConsumerState<AppShell>
         AppToast.show(context, message: '设备认证完成');
       }
     } catch (error) {
-      _logSecurityUi(
-        'security_ui_operation_failed',
-        action: 'authenticate',
-        result: 'failed',
-        fields: {'error_type': error.runtimeType.toString()},
+      await _handleSecurityUiFailure(
+        action: EvtLegacySecurityAction.authenticate,
+        error: error,
       );
-      if (mounted) {
-        AppToast.show(context, message: '$error');
-      }
     }
   }
 
@@ -1139,15 +1136,10 @@ class _AppShellState extends ConsumerState<AppShell>
         AppToast.show(context, message: '设备绑定完成');
       }
     } catch (error) {
-      _logSecurityUi(
-        'security_ui_operation_failed',
-        action: 'bind',
-        result: 'failed',
-        fields: {'error_type': error.runtimeType.toString()},
+      await _handleSecurityUiFailure(
+        action: EvtLegacySecurityAction.bind,
+        error: error,
       );
-      if (mounted) {
-        AppToast.show(context, message: '$error');
-      }
     }
   }
 
@@ -1198,15 +1190,10 @@ class _AppShellState extends ConsumerState<AppShell>
         AppToast.show(context, message: '设备已恢复初始认证码');
       }
     } catch (error) {
-      _logSecurityUi(
-        'security_ui_operation_failed',
-        action: 'reset',
-        result: 'failed',
-        fields: {'error_type': error.runtimeType.toString()},
+      await _handleSecurityUiFailure(
+        action: EvtLegacySecurityAction.reset,
+        error: error,
       );
-      if (mounted) {
-        AppToast.show(context, message: '$error');
-      }
     }
   }
 
@@ -1225,6 +1212,43 @@ class _AppShellState extends ConsumerState<AppShell>
       result: result,
       fields: {'action': action, ...fields},
     );
+  }
+
+  Future<void> _handleSecurityUiFailure({
+    required EvtLegacySecurityAction action,
+    required Object error,
+  }) async {
+    _logSecurityUi(
+      'security_ui_operation_failed',
+      action: action.name,
+      result: 'failed',
+      fields: {'error_type': error.runtimeType.toString()},
+    );
+    _logSecurityUi(
+      'security_ui_diagnostics_flush_requested',
+      action: action.name,
+      result: 'pending',
+      fields: const {'reason': 'security_operation_failed'},
+    );
+    try {
+      await ref
+          .read(appLogStoreProvider)
+          .flush()
+          .timeout(const Duration(seconds: 2));
+    } catch (flushError) {
+      _logSecurityUi(
+        'security_ui_diagnostics_flush_failed',
+        action: action.name,
+        result: 'failed',
+        fields: {'error_type': flushError.runtimeType.toString()},
+      );
+    }
+    if (mounted) {
+      AppToast.show(
+        context,
+        message: evtLegacySecurityFailureMessage(action: action, error: error),
+      );
+    }
   }
 
   Future<void> _openDeviceFiles(SessionController session) async {
