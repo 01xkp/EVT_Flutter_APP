@@ -23,6 +23,7 @@ import com.signify.hue.flutterreactiveble.converters.extractManufacturerData
 import com.signify.hue.flutterreactiveble.model.ScanMode
 import com.signify.hue.flutterreactiveble.model.toScanSettings
 import com.signify.hue.flutterreactiveble.utils.Duration
+import com.signify.hue.flutterreactiveble.utils.NativeBleLog
 import com.signify.hue.flutterreactiveble.utils.toBleState
 import io.reactivex.Completable
 import io.reactivex.Observable
@@ -34,21 +35,104 @@ import java.util.concurrent.TimeUnit
 import kotlin.collections.component1
 import kotlin.collections.component2
 
+private val EVT_FILE_TRANSFER_CHARACTERISTIC_UUID: UUID =
+    UUID.fromString("0000ff13-1212-efde-1523-785feabcd123")
+private const val hexadecimalRadix = 16
+
+@VisibleForTesting
+internal enum class EvtNotificationMode {
+    INDICATE,
+    NOTIFY,
+}
+
+private val EVT_INDICATE_CHARACTERISTIC_UUIDS =
+    setOf(
+        UUID.fromString("0000fa11-1212-efde-1523-785feabcd123"),
+        UUID.fromString("0000fa12-1212-efde-1523-785feabcd123"),
+        UUID.fromString("0000fa15-1212-efde-1523-785feabcd123"),
+        UUID.fromString("0000fa16-1212-efde-1523-785feabcd123"),
+        UUID.fromString("0000fa17-1212-efde-1523-785feabcd123"),
+        UUID.fromString("0000fa19-1212-efde-1523-785feabcd123"),
+        UUID.fromString("0000fb11-1212-efde-1523-785feabcd123"),
+        UUID.fromString("0000ff11-1212-efde-1523-785feabcd123"),
+        UUID.fromString("0000ff12-1212-efde-1523-785feabcd123"),
+    )
+
 /**
- * EVT response characteristics use indications for request/result ordering.
- *
- * Some firmware revisions expose both the Notify and Indicate property bits.
- * RxAndroidBle requires the App to choose one CCC value; most EVT response
- * characteristics use Indicate, while the V1.5 FF13 file stream must use
- * Notify even when a firmware advertises both bits.
+ * EVT V1.5 response channels must use a real Client Characteristic
+ * Configuration Descriptor. `NotificationSetupMode.COMPAT` only enables the
+ * local Android callback; it deliberately skips the remote CCCD write and is
+ * therefore invalid for a peripheral that sends Notify or Indicate packets.
+ */
+private val EVT_CCCD_REQUIRED_CHARACTERISTIC_UUIDS =
+    EVT_INDICATE_CHARACTERISTIC_UUIDS + EVT_FILE_TRANSFER_CHARACTERISTIC_UUID
+
+private val CLIENT_CHARACTERISTIC_CONFIGURATION_UUID: UUID =
+    UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
+@VisibleForTesting
+internal fun requiresEvtCccd(characteristicId: UUID): Boolean =
+    characteristicId in EVT_CCCD_REQUIRED_CHARACTERISTIC_UUIDS
+
+@VisibleForTesting
+internal fun evtNotificationModeFor(characteristicId: UUID): EvtNotificationMode? =
+    when (characteristicId) {
+        EVT_FILE_TRANSFER_CHARACTERISTIC_UUID -> EvtNotificationMode.NOTIFY
+        in EVT_INDICATE_CHARACTERISTIC_UUIDS -> EvtNotificationMode.INDICATE
+        else -> null
+    }
+
+/**
+ * EVT channels have a protocol-defined CCC value. Do not use a characteristic
+ * that merely has another response capability: that would acknowledge a
+ * subscription while configuring the wrong CCCD value on the peripheral.
+ */
+@VisibleForTesting
+internal fun requireEvtNotificationMode(
+    characteristicId: UUID,
+    properties: Int,
+): EvtNotificationMode? {
+    val expectedMode = evtNotificationModeFor(characteristicId) ?: return null
+    val requiredProperty =
+        if (expectedMode == EvtNotificationMode.INDICATE) {
+            BluetoothGattCharacteristic.PROPERTY_INDICATE
+        } else {
+            BluetoothGattCharacteristic.PROPERTY_NOTIFY
+        }
+    if ((properties and requiredProperty) == 0) {
+        val expectedName = expectedMode.name.lowercase()
+        throw IllegalStateException(
+            "EVT 特征 $characteristicId 必须提供 $expectedName 属性，" +
+                "当前 properties=0x${properties.toString(hexadecimalRadix)}。",
+        )
+    }
+    return expectedMode
+}
+
+/**
+ * EVT response characteristics use protocol-defined response modes. Generic
+ * plugin callers keep the historical property-driven behavior.
  */
 @VisibleForTesting
 internal fun shouldPreferIndication(characteristicId: UUID, properties: Int): Boolean =
-    characteristicId != EVT_FILE_TRANSFER_CHARACTERISTIC_UUID &&
-        (properties and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
+    when (evtNotificationModeFor(characteristicId)) {
+        EvtNotificationMode.INDICATE -> true
+        EvtNotificationMode.NOTIFY -> false
+        null -> (properties and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
+    }
 
-private val EVT_FILE_TRANSFER_CHARACTERISTIC_UUID: UUID =
-    UUID.fromString("0000ff13-1212-efde-1523-785feabcd123")
+@VisibleForTesting
+internal fun notificationSetupModeFor(
+    characteristicId: UUID,
+    descriptorUuids: Collection<UUID>,
+): NotificationSetupMode =
+    if (requiresEvtCccd(characteristicId)) {
+        NotificationSetupMode.DEFAULT
+    } else if (descriptorUuids.isEmpty()) {
+        NotificationSetupMode.COMPAT
+    } else {
+        NotificationSetupMode.DEFAULT
+    }
 
 @Suppress("TooManyFunctions")
 open class ReactiveBleClient(private val context: Context) : BleClient {
@@ -354,6 +438,7 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
             }.first(CharOperationFailed(deviceId, "Writechar timed-out"))
     }
 
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
     private fun setupNotificationOrIndication(
         deviceConnection: EstablishConnectionResult,
         characteristicId: UUID,
@@ -370,14 +455,70 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
                         characteristicId,
                         characteristicInstanceId,
                     ).flatMapObservable { characteristic ->
-                        val mode =
-                            if (characteristic.descriptors.isEmpty()) {
-                                NotificationSetupMode.COMPAT
-                            } else {
-                                NotificationSetupMode.DEFAULT
-                            }
+                        val descriptorUuids = characteristic.descriptors.map { it.uuid }
+                        val cccdPresent =
+                            descriptorUuids.any { it == CLIENT_CHARACTERISTIC_CONFIGURATION_UUID }
+                        val requiresCccd = requiresEvtCccd(characteristic.uuid)
+                        val mode = notificationSetupModeFor(
+                            characteristic.uuid,
+                            descriptorUuids,
+                        )
+                        val expectedEvtMode = try {
+                            requireEvtNotificationMode(
+                                characteristic.uuid,
+                                characteristic.properties,
+                            )
+                        } catch (error: IllegalStateException) {
+                            NativeBleLog.error(
+                                event = "ccc_configuration_rejected",
+                                message = "【AIPIN原生BLE】【CCC配置失败】EVT 特征属性与协议模式不一致",
+                                fields = mapOf(
+                                    "device_id" to deviceConnection.deviceId,
+                                    "characteristic_uuid" to characteristic.uuid.toString(),
+                                    "properties_hex" to "0x${characteristic.properties.toString(hexadecimalRadix)}",
+                                    "error" to (error.message ?: "unknown"),
+                                ),
+                            )
+                            return@flatMapObservable Observable.error(error)
+                        }
+                        val indication = expectedEvtMode == EvtNotificationMode.INDICATE ||
+                            (expectedEvtMode == null && shouldPreferIndication(
+                                characteristic.uuid,
+                                characteristic.properties,
+                            ))
+                        NativeBleLog.debug(
+                            event = "ccc_configuration_requested",
+                            message = "【AIPIN原生BLE】【CCC配置】准备订阅设备响应特征",
+                            fields = mapOf(
+                                "device_id" to deviceConnection.deviceId,
+                                "characteristic_uuid" to characteristic.uuid.toString(),
+                                "properties_hex" to "0x${characteristic.properties.toString(hexadecimalRadix)}",
+                                "response_mode" to if (indication) "indicate" else "notify",
+                                "expected_evt_mode" to expectedEvtMode?.name?.lowercase(),
+                                "setup_mode" to mode.name,
+                                "cccd_required" to requiresCccd,
+                                "cccd_present" to cccdPresent,
+                                "descriptors" to descriptorUuids.joinToString(prefix = "[", postfix = "]"),
+                            ),
+                        )
+                        if (requiresCccd && !cccdPresent) {
+                            val error = IllegalStateException(
+                                "EVT 特征 ${characteristic.uuid} 缺少 CCCD " +
+                                "(0x2902)，已拒绝使用 COMPAT 模式。请检查设备 GATT 表或清除 Android GATT 缓存后重连。",
+                            )
+                            NativeBleLog.error(
+                                event = "ccc_configuration_rejected",
+                                message = "【AIPIN原生BLE】【CCC配置失败】EVT 特征缺少 CCCD",
+                                fields = mapOf(
+                                    "device_id" to deviceConnection.deviceId,
+                                    "characteristic_uuid" to characteristic.uuid.toString(),
+                                    "error" to (error.message ?: "unknown"),
+                                ),
+                            )
+                            return@flatMapObservable Observable.error(error)
+                        }
 
-                        if (shouldPreferIndication(characteristic.uuid, characteristic.properties)) {
+                        val notification = if (indication) {
                             deviceConnection.rxConnection.setupIndication(
                                 characteristic,
                                 mode,
@@ -388,6 +529,34 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
                                 mode,
                             )
                         }
+                        notification
+                            .doOnNext {
+                                NativeBleLog.debug(
+                                    event = "ccc_configuration_completed",
+                                    message = "【AIPIN原生BLE】【CCC配置完成】系统已完成 EVT 响应特征订阅",
+                                    fields = mapOf(
+                                        "device_id" to deviceConnection.deviceId,
+                                        "characteristic_uuid" to characteristic.uuid.toString(),
+                                        "response_mode" to if (indication) "indicate" else "notify",
+                                        "expected_evt_mode" to expectedEvtMode?.name?.lowercase(),
+                                        "setup_mode" to mode.name,
+                                        "cccd_present" to cccdPresent,
+                                    ),
+                                )
+                            }
+                            .doOnError { error ->
+                                NativeBleLog.error(
+                                    event = "ccc_configuration_failed",
+                                    message = "【AIPIN原生BLE】【CCC配置异常】系统未能完成响应特征订阅",
+                                    fields = mapOf(
+                                        "device_id" to deviceConnection.deviceId,
+                                        "characteristic_uuid" to characteristic.uuid.toString(),
+                                        "setup_mode" to mode.name,
+                                        "error_type" to error.javaClass.simpleName,
+                                        "error" to (error.message ?: "unknown"),
+                                    ),
+                                )
+                            }
                     }
                 }
             }

@@ -98,6 +98,18 @@ class DeviceReconnectController extends ChangeNotifier {
   /// Evaluates one discovered candidate without retaining its raw identifier.
   Future<void> considerCandidate(DeviceCandidate candidate) async {
     final cycle = _cycleId;
+    if (!_isActive(cycle)) {
+      return;
+    }
+    if (_suppressedForForeground) {
+      return;
+    }
+    if (_pausedForBackground) {
+      return;
+    }
+    if (_state.phase != DeviceReconnectPhase.scanning) {
+      return;
+    }
     final remembered = _state.rememberedDevice;
     final candidateFields = _candidateLogFields(candidate);
     _logInfo(
@@ -107,46 +119,6 @@ class DeviceReconnectController extends ChangeNotifier {
       result: 'pending',
       fields: candidateFields,
     );
-    if (!_isActive(cycle)) {
-      _logInfo(
-        'reconnect_candidate_ignored',
-        reason: '忽略已结束或已替换回连会话返回的设备广播。',
-        cycle: cycle,
-        result: 'cancelled',
-        fields: candidateFields,
-      );
-      return;
-    }
-    if (_suppressedForForeground) {
-      _logInfo(
-        'reconnect_candidate_ignored',
-        reason: '用户已停止自动回连，本次前台不再使用扫描结果连接设备。',
-        cycle: cycle,
-        result: 'cancelled',
-        fields: candidateFields,
-      );
-      return;
-    }
-    if (_pausedForBackground) {
-      _logInfo(
-        'reconnect_candidate_ignored',
-        reason: '应用处于后台暂停状态，暂不处理自动回连扫描结果。',
-        cycle: cycle,
-        result: 'cancelled',
-        fields: candidateFields,
-      );
-      return;
-    }
-    if (_state.phase != DeviceReconnectPhase.scanning) {
-      _logInfo(
-        'reconnect_candidate_ignored',
-        reason: '当前没有等待自动回连的扫描任务，忽略该设备广播。',
-        cycle: cycle,
-        result: 'cancelled',
-        fields: candidateFields,
-      );
-      return;
-    }
     if (remembered == null) {
       _logInfo(
         'reconnect_candidate_ignored',

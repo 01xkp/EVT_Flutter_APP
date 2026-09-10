@@ -21,6 +21,7 @@ void main() {
             expect(call.arguments, <String, Object?>{
               'sourcePath': '/app/files/logs/aipin-2026-09-01.log',
               'filename': 'aipin-2026-09-01.log',
+              'requestPermission': false,
             });
             return <String, Object?>{
               'available': true,
@@ -49,6 +50,7 @@ void main() {
             expect(call.arguments, <String, Object?>{
               'sourcePath': '/app/files/logs/aipin-2026-09-01.log',
               'filename': 'aipin-2026-09-01.log',
+              'requestPermission': false,
             });
             return <String, Object?>{
               'available': true,
@@ -70,6 +72,31 @@ void main() {
       expect(status.relativePath, 'Documents/AIPIN/logs/aipin-2026-09-01.log');
     },
   );
+
+  test('marks a user-initiated log export as permission eligible', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          expect(call.arguments, <String, Object?>{
+            'sourcePath': '/app/files/logs/aipin-2026-09-01.log',
+            'filename': 'aipin-2026-09-01.log',
+            'requestPermission': true,
+          });
+          return <String, Object?>{
+            'available': false,
+            'failureCode': 'legacy_permission_denied',
+          };
+        });
+    final sink = PlatformPublicDiagnosticLogSink(isAndroid: () => true);
+
+    final status = await sink.mirrorCanonicalFile(
+      sourcePath: '/app/files/logs/aipin-2026-09-01.log',
+      filename: 'aipin-2026-09-01.log',
+      requestPermission: true,
+    );
+
+    expect(status.available, isFalse);
+    expect(status.failureCode, 'legacy_permission_denied');
+  });
 
   test(
     'uses a no-op status outside Android and iOS without invoking a channel',

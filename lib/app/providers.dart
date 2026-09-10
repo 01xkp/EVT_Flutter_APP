@@ -50,9 +50,11 @@ final scopedAppLoggerProvider = Provider.family<SafeAppLogger, String>((
 });
 
 final bleTransportProvider = Provider<BleTransport>((ref) {
-  return ReactiveBleTransport(
+  final transport = ReactiveBleTransport(
     logger: ref.watch(scopedAppLoggerProvider('BLE')),
   );
+  ref.onDispose(() => unawaited(transport.dispose()));
+  return transport;
 });
 
 final bluetoothEnableGatewayProvider = Provider<BluetoothEnableGateway>((ref) {

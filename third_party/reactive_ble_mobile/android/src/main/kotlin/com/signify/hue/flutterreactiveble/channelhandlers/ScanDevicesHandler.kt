@@ -1,6 +1,9 @@
 package com.signify.hue.flutterreactiveble.channelhandlers
 
 import android.os.ParcelUuid
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import com.signify.hue.flutterreactiveble.converters.ProtobufMessageConverter
 import com.signify.hue.flutterreactiveble.converters.UuidConverter
 import com.signify.hue.flutterreactiveble.model.ScanMode
@@ -15,9 +18,15 @@ class ScanDevicesHandler(
 ) : EventChannel.StreamHandler {
     private var scanDevicesSink: EventChannel.EventSink? = null
     private lateinit var scanForDevicesDisposable: Disposable
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var delayedStart: Runnable? = null
+    private var lastScanStoppedAt = 0L
     private val converter = ProtobufMessageConverter()
 
     companion object {
+        // Android can reject a new registration for a short period after the
+        // previous BluetoothLeScanner was stopped.
+        private const val SCAN_RESTART_COOLDOWN_MS = 250L
         private var scanParameters: ScanParameters? = null
     }
 
@@ -37,6 +46,21 @@ class ScanDevicesHandler(
     }
 
     private fun startDeviceScan() {
+        val remainingCooldown =
+            SCAN_RESTART_COOLDOWN_MS - (SystemClock.elapsedRealtime() - lastScanStoppedAt)
+        if (remainingCooldown > 0) {
+            val restart = Runnable {
+                delayedStart = null
+                if (scanDevicesSink != null) startDeviceScan()
+            }
+            delayedStart = restart
+            mainHandler.postDelayed(restart, remainingCooldown)
+            return
+        }
+        startDeviceScanNow()
+    }
+
+    private fun startDeviceScanNow() {
         scanParameters?.let { params ->
             scanForDevicesDisposable =
                 bleClient.scanForDevices(params.filter, params.mode, params.locationServiceIsMandatory)
@@ -54,14 +78,25 @@ class ScanDevicesHandler(
     }
 
     fun stopDeviceScan() {
+        val hadActiveScan =
+            delayedStart != null ||
+                (this::scanForDevicesDisposable.isInitialized &&
+                    !scanForDevicesDisposable.isDisposed)
+        delayedStart?.let {
+            mainHandler.removeCallbacks(it)
+            delayedStart = null
+        }
+        if (hadActiveScan) {
+            lastScanStoppedAt = SystemClock.elapsedRealtime()
+        }
         if (this::scanForDevicesDisposable.isInitialized) {
             scanForDevicesDisposable.let {
                 if (!it.isDisposed) {
                     it.dispose()
-                    scanParameters = null
                 }
             }
         }
+        scanParameters = null
     }
 
     fun prepareScan(scanMessage: pb.ScanForDevicesRequest) {

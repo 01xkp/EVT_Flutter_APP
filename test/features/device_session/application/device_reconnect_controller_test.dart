@@ -130,6 +130,25 @@ void main() {
   );
 
   test(
+    'ignores idle scan candidates without creating reconnect diagnostics',
+    () async {
+      final logger = _CapturingLogger();
+      final controller = DeviceReconnectController(
+        history: _InMemoryHistory(<RememberedDevice>[rememberedFor()]),
+        startScan: () async {},
+        stopScan: () async {},
+        connect: (_) async => true,
+        logger: logger,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.considerCandidate(candidateFor());
+
+      expect(logger.calls, isEmpty);
+    },
+  );
+
+  test(
     'does not reconnect when a remembered device has an invalid broadcast',
     () async {
       var connectCalls = 0;

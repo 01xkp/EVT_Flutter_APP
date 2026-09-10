@@ -19,6 +19,97 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../../support/fake_ble_transport.dart';
 
 void main() {
+  for (final command in [0x22, 0x23]) {
+    test(
+      'late file command $command failure cannot close the new connection',
+      () async {
+        final profile = _profileWithDeviceInfo();
+        final transport = _DeferredCommandWriteTransport(profile, command);
+        final logger = _CapturingLogger();
+        final controller = SessionController(
+          transport,
+          profile,
+          EvtProtocolCodec(),
+          logger: logger,
+        );
+        addTearDown(controller.dispose);
+        await controller.connect(FakeBleTransport.matchingCandidate);
+        await _completeAuthenticatedSession(controller, transport);
+        final oldRequest = command == 0x22
+            ? controller.listFiles()
+            : controller.downloadEvtFile(nameSlot: _fileNameSlot).toList();
+        final oldResult = expectLater(oldRequest, throwsA(isA<StateError>()));
+        await transport.writeStarted.future;
+
+        await controller.disconnect();
+        await controller.connect(FakeBleTransport.matchingCandidate);
+        final disconnects = transport.disconnectedDeviceIds.length;
+        transport.writeCompleted.complete();
+        await oldResult;
+
+        expect(controller.state.phase, SessionPhase.authenticationReady);
+        expect(controller.state.failure, isNull);
+        expect(transport.disconnectedDeviceIds, hasLength(disconnects));
+        expect(logger.events, contains('stale_session_cleanup_ignored'));
+      },
+    );
+  }
+
+  test('old V1 recovery cannot interrupt a reconnected GATT session', () async {
+    final profile = _profileWithDeviceInfo();
+    final transport = _DeferredRecoveryTransport(profile);
+    final logger = _CapturingLogger();
+    final controller = SessionController(
+      transport,
+      profile,
+      EvtProtocolCodec(),
+      logger: logger,
+      legacySecurityResponseTimeout: const Duration(milliseconds: 100),
+    );
+    addTearDown(controller.dispose);
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    final oldAuthentication = controller.executeEvtLegacySecurity(
+      EvtLegacySecurityRequest(
+        action: EvtLegacySecurityAction.authenticate,
+        securityCode: '123456',
+      ),
+    );
+    final oldResult = expectLater(
+      oldAuthentication,
+      throwsA(isA<EvtCommandTimeoutException>()),
+    );
+    await transport.recoveryStarted.future;
+    await controller.disconnect();
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    expect(controller.state.phase, SessionPhase.authenticationReady);
+    final disconnects = transport.disconnectedDeviceIds.length;
+
+    transport.recoveryResult.complete(BleGattCacheClearResult.cleared);
+    await oldResult;
+
+    expect(controller.state.phase, SessionPhase.authenticationReady);
+    expect(controller.state.failure, isNull);
+    expect(transport.disconnectedDeviceIds, hasLength(disconnects));
+    expect(logger.events, contains('stale_session_cleanup_ignored'));
+    final authentication = controller.executeEvtLegacySecurity(
+      EvtLegacySecurityRequest(
+        action: EvtLegacySecurityAction.authenticate,
+        securityCode: '654321',
+      ),
+    );
+    await _waitForCommand(
+      transport,
+      EvtProtocolCodec(),
+      command: 0x09,
+      minimumWriteCount: 2,
+    );
+    transport.emitSubscriptionBytesForCharacteristic(
+      _fa19,
+      EvtProtocolCodec().encodeRequest(0x89, const [1]),
+    );
+    expect(await authentication, isTrue);
+  });
+
   test('records safe, Chinese-marked EVT session setup milestones', () async {
     final profile = _profileWithDeviceInfo();
     final transport = FakeBleTransport(
@@ -1889,6 +1980,38 @@ DeviceProfile _profileWithDeviceInfo() {
       ),
     },
   );
+}
+
+class _DeferredRecoveryTransport extends FakeBleTransport {
+  _DeferredRecoveryTransport(DeviceProfile profile)
+    : super(profile: profile, deferRead: true, services: _servicesFor(profile));
+
+  final recoveryStarted = Completer<void>();
+  final recoveryResult = Completer<BleGattCacheClearResult>();
+
+  @override
+  Future<BleGattCacheClearResult> clearGattCache(String deviceId) {
+    recoveryStarted.complete();
+    return recoveryResult.future;
+  }
+}
+
+class _DeferredCommandWriteTransport extends FakeBleTransport {
+  _DeferredCommandWriteTransport(DeviceProfile profile, this.command)
+    : super(profile: profile, deferRead: true, services: _servicesFor(profile));
+
+  final int command;
+  final writeStarted = Completer<void>();
+  final writeCompleted = Completer<void>();
+
+  @override
+  Future<void> write(BleCharacteristic characteristic, Uint8List value) async {
+    await super.write(characteristic, value);
+    if (EvtProtocolCodec().decode(value).value?.command == command) {
+      writeStarted.complete();
+      await writeCompleted.future;
+    }
+  }
 }
 
 DeviceProfile _profileWithAuthoritativeStatusEndpoints() =>

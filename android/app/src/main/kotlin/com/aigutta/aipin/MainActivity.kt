@@ -71,11 +71,18 @@ class MainActivity : FlutterActivity() {
     private fun mirrorCanonicalLog(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
         val sourcePath = call.argument<String>("sourcePath")
         val filename = call.argument<String>("filename")
+        val requestPermission = call.argument<Boolean>("requestPermission") ?: false
         if (sourcePath.isNullOrBlank() || filename.isNullOrBlank()) {
             result.success(mirrorFailure("invalid_arguments"))
             return
         }
         if (requiresLegacyLogStoragePermission()) {
+            if (!requestPermission) {
+                // Automatic diagnostic persistence must not present a storage
+                // permission dialog while an unrelated BLE operation is active.
+                result.success(mirrorFailure("legacy_permission_required"))
+                return
+            }
             pendingLegacyLogMirrors.add(PendingLegacyLogMirror(sourcePath, filename, result))
             requestLegacyLogStoragePermissionIfNeeded()
             return

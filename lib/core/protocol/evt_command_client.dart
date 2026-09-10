@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/diagnostics/evt_packet_log_summary.dart';
+import 'package:aipin/core/diagnostics/evt_response_wait_log.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
@@ -168,7 +169,15 @@ class EvtCommandClient {
               controller: controller,
               isTerminal: isTerminal,
               idleTimeout: idleTimeout,
+              waitLog: EvtResponseWaitLog(
+                logger: _logger,
+                fields: _requestFields(request, attempt: 1),
+                timeout: idleTimeout,
+              ),
             );
+            // Observe early errors while awaiting the write. Awaiting done
+            // below still propagates the original failure to the caller.
+            pending.done.ignore();
             active = pending;
             _pending = pending;
             final bytes = _codec.encodeRequest(
@@ -183,6 +192,7 @@ class EvtCommandClient {
               fields: {
                 ...packet.fields,
                 ..._requestFields(request, timeout: idleTimeout),
+                'wait_id': pending.waitLog.id,
                 'reason': 'streaming',
               },
             );
@@ -195,12 +205,14 @@ class EvtCommandClient {
               fields: {
                 ...packet.fields,
                 ..._requestFields(request, timeout: idleTimeout),
+                'wait_id': pending.waitLog.id,
                 'reason': 'streaming',
               },
             );
-            // The device cannot send a file packet until the GATT write has
-            // completed, so do not count native write latency as idle time.
+            // Keep replies that precede the write callback, but do not count
+            // native write latency against the initial response idle timeout.
             pending.start();
+            pending.waitLog.writeCompleted();
             await pending.done;
             _logInfo(
               'evt_stream_command_completed',
@@ -246,6 +258,10 @@ class EvtCommandClient {
               controller.addError(error, stackTrace);
             }
           } finally {
+            pending?.waitLog.finish(
+              'failed',
+              reason: '【回包监听】【结束】连续命令已退出，停止剩余等待日志',
+            );
             if (pending != null && identical(_pending, pending)) {
               _pending = null;
             }
@@ -269,6 +285,7 @@ class EvtCommandClient {
             result: 'cancelled',
             fields: _requestFields(request, reason: 'stream_cancelled'),
           );
+          pending.waitLog.finish('cancelled', reason: '【回包监听】【取消】用户已取消连续命令');
           pending.completeError(StateError('连续命令已取消。'));
         }
       },
@@ -330,7 +347,15 @@ class EvtCommandClient {
         sequence: request.expectedSequence,
         sequenceOffset: request.sequenceOffset,
         responseMatcher: request.responseMatcher,
+        waitLog: EvtResponseWaitLog(
+          logger: _logger,
+          fields: _requestFields(request, attempt: attempt),
+          timeout: request.timeout,
+        ),
       );
+      // A receive failure can precede the native write callback. Attach an
+      // error observer now; the await below still receives the same failure.
+      pending.future.ignore();
       _pending = pending;
       try {
         _logInfo(
@@ -340,6 +365,7 @@ class EvtCommandClient {
           fields: {
             ...packet.fields,
             ..._requestFields(request, attempt: attempt),
+            'wait_id': pending.waitLog.id,
           },
         );
         await _transport.write(request.writeCharacteristic, bytes);
@@ -351,8 +377,10 @@ class EvtCommandClient {
           fields: {
             ...packet.fields,
             ..._requestFields(request, attempt: attempt),
+            'wait_id': pending.waitLog.id,
           },
         );
+        pending.waitLog.writeCompleted();
         final frame = await pending.future.timeout(request.timeout);
         _logInfo(
           'evt_command_completed',
@@ -367,6 +395,7 @@ class EvtCommandClient {
         return EvtCommandResponse(frame: frame, attempts: attempt);
       } on TimeoutException {
         lastError = EvtCommandTimeoutException(request.command, attempt);
+        pending.waitLog.finish('failed', reason: '【回包监听】【超时】未在规定时间内收到匹配响应');
         _logWarning(
           'evt_command_timeout',
           stage: 'response',
@@ -382,6 +411,7 @@ class EvtCommandClient {
         );
       } catch (error) {
         lastError = error;
+        pending.waitLog.finish('failed', reason: '【回包监听】【中断】写入或命令处理异常，停止等待');
         _logError(
           'evt_command_error',
           stage: 'response',
@@ -397,6 +427,7 @@ class EvtCommandClient {
           ),
         );
       } finally {
+        pending.waitLog.finish('cancelled', reason: '【回包监听】【结束】命令已退出，停止剩余等待日志');
         if (identical(_pending, pending)) {
           _pending = null;
         }
@@ -481,6 +512,7 @@ class EvtCommandClient {
         fields: {...fields, 'event_kind': 'acknowledged'},
       );
       pending!.accept(frame);
+      pending.waitLog.received(terminal: pending.isCompleted);
       return;
     }
     _logInfo(
@@ -519,6 +551,7 @@ class EvtCommandClient {
       return;
     }
     _closed = true;
+    _pending?.waitLog.finish('cancelled', reason: '【回包监听】【取消】当前连接或命令客户端已关闭');
     _logInfo(
       'evt_command_client_closing',
       stage: 'idle',
@@ -551,6 +584,9 @@ class EvtCommandClient {
       'expected_command': _commandHex(expectedCommand),
       'max_retries': request.maxRetries < 0 ? 0 : request.maxRetries,
       'timeout_ms': (timeout ?? request.timeout).inMilliseconds,
+      'characteristic': EvtPacketLogSummary.characteristicReference(
+        request.writeCharacteristic.characteristicUuid,
+      ),
       ..._optionalField(
         'sub_command',
         request.expectedSubCommand == null
@@ -575,6 +611,7 @@ class EvtCommandClient {
       ? const <String, Object?>{}
       : <String, Object?>{
           'expected_command': _commandHex(pending.expectedCommand),
+          'wait_id': pending.waitLog.id,
         };
 
   static Map<String, Object?> _optionalField(String key, Object? value) =>
@@ -644,6 +681,8 @@ class EvtCommandClient {
 
 abstract interface class _PendingRequest {
   int get expectedCommand;
+  bool get isCompleted;
+  EvtResponseWaitLog get waitLog;
 
   bool matches(EvtFrame frame);
 
@@ -659,6 +698,7 @@ class _PendingCommand implements _PendingRequest {
     required this.sequence,
     required this.sequenceOffset,
     required this.responseMatcher,
+    required this.waitLog,
   });
 
   final int command;
@@ -667,6 +707,12 @@ class _PendingCommand implements _PendingRequest {
   final int? sequenceOffset;
   final EvtResponseMatcher? responseMatcher;
   final Completer<EvtFrame> _completer = Completer<EvtFrame>();
+
+  @override
+  final EvtResponseWaitLog waitLog;
+
+  @override
+  bool get isCompleted => _completer.isCompleted;
 
   @override
   int get expectedCommand => command;
@@ -705,6 +751,7 @@ class _PendingCommand implements _PendingRequest {
   @override
   void completeError(Object error, [StackTrace? stackTrace]) {
     if (!_completer.isCompleted) {
+      waitLog.finish('failed', reason: '【回包监听】【中断】接收通道发生异常，停止等待设备响应');
       _completer.completeError(error, stackTrace);
     }
   }
@@ -716,6 +763,7 @@ class _PendingStreamingCommand implements _PendingRequest {
     required this.controller,
     required this.isTerminal,
     required this.idleTimeout,
+    required this.waitLog,
   }) : _expectedCommand =
            request.expectedResponseCommand ?? ((request.command | 0x80) & 0xFF);
 
@@ -726,6 +774,12 @@ class _PendingStreamingCommand implements _PendingRequest {
   final int _expectedCommand;
   final Completer<void> _done = Completer<void>();
   Timer? _idleTimer;
+
+  @override
+  final EvtResponseWaitLog waitLog;
+
+  @override
+  bool get isCompleted => _done.isCompleted;
 
   Future<void> get done => _done.future;
 
@@ -776,6 +830,12 @@ class _PendingStreamingCommand implements _PendingRequest {
   @override
   void completeError(Object error, [StackTrace? stackTrace]) {
     if (!_done.isCompleted) {
+      waitLog.finish(
+        'failed',
+        reason: error is EvtCommandTimeoutException
+            ? '【回包监听】【超时】连续回包超过空闲时限，未收到完整结束帧'
+            : '【回包监听】【中断】连续回包通道发生异常，停止等待',
+      );
       _done.completeError(error, stackTrace);
     }
   }

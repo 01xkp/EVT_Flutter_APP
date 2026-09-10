@@ -19,6 +19,9 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   static final _logFilenamePattern = RegExp(
     r'^aipin-\d{4}-\d{2}-\d{2}\.log(?:\.\d+)?$',
   );
+  static final _mirrorSnapshotFilenamePattern = RegExp(
+    r'^aipin-\d{4}-\d{2}-\d{2}\.log(?:\.\d+)?\.mirror-\d+-\d+$',
+  );
 
   FileAppLogStore({
     this._supportDirectoryProvider,
@@ -65,6 +68,8 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   Timer? _writeTimer;
   Timer? _mirrorTimer;
   var _mirrorPending = false;
+  var _mirrorSnapshotSequence = 0;
+  var _isClosing = false;
   var _disposed = false;
   var _closedStream = false;
   Future<void>? _closeFuture;
@@ -105,6 +110,7 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
       '${supportDirectory.path}${Platform.pathSeparator}logs',
     );
     await _logDirectory!.create(recursive: true);
+    await _pruneMirrorSnapshots();
     await _selectCurrentFile();
     await _pruneFiles();
   }
@@ -128,7 +134,7 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
 
   @override
   void record(AppLogEntry entry) {
-    if (!_enabled || _disposed || _closedStream) {
+    if (!_enabled || _isClosing || _disposed || _closedStream) {
       return;
     }
     final sanitizedEntry = AppLogEntry.fromEvent(
@@ -157,19 +163,32 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
 
   @override
   Future<void> flush() async {
-    _cancelScheduledWork();
-    _enqueuePendingWrite();
-    await _writeQueue;
-    _mirrorQueue = _mirrorQueue.then((_) => _mirrorPendingFile(force: true));
-    await _mirrorQueue;
-    await _writeQueue;
+    // A lifecycle or security-operation flush must only wait for the
+    // canonical app-private file. A public Download mirror can require user
+    // permission on Android 6-9 and must never delay or interrupt BLE work.
+    _cancelScheduledWrite();
+    await _drainPendingWrites();
   }
 
   @override
   Future<String?> exportPath() async {
     await initialize();
     await flush();
+    await _flushPublicMirror(requestPermission: true);
+    // Mirroring can add one bounded STORAGE diagnostic. Persist it before the
+    // caller receives the canonical path.
+    await flush();
     return currentFilePath;
+  }
+
+  /// Mirrors the current Debug log without opening a storage permission
+  /// dialog. Security-operation terminal states use this so an Android 10+
+  /// device exposes the complete BLE exchange in Download/AIPIN/logs while
+  /// Android 6-9 continues to keep the canonical log privately until export.
+  Future<void> syncPublicMirror() async {
+    await flush();
+    await _flushPublicMirror(requestPermission: false);
+    await flush();
   }
 
   @override
@@ -183,7 +202,7 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   /// callback while [flush], export, and disposal still persist every accepted
   /// line before they complete.
   void _scheduleWrite() {
-    if (_writeTimer != null) {
+    if (_isClosing || _disposed || _closedStream || _writeTimer != null) {
       return;
     }
     _writeTimer = Timer(_writeDebounce, () {
@@ -192,9 +211,32 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     });
   }
 
-  void _cancelScheduledWork() {
+  Future<void> _drainPendingWrites() async {
+    // A write completion can synchronously trigger a closely-following log
+    // event (for example, the background reconnect pause). Give that event
+    // one additional event-loop turn and drain it too, without turning a
+    // continuous diagnostic stream into an unbounded flush.
+    for (var pass = 0; pass < 2; pass += 1) {
+      _enqueuePendingWrite();
+      final queuedWrite = _writeQueue;
+      await queuedWrite;
+      await Future<void>.microtask(() {});
+      if (_pendingLines.isEmpty && identical(queuedWrite, _writeQueue)) {
+        return;
+      }
+      _cancelScheduledWrite();
+    }
+    _enqueuePendingWrite();
+    await _writeQueue;
+  }
+
+  void _cancelScheduledWrite() {
     _writeTimer?.cancel();
     _writeTimer = null;
+  }
+
+  void _cancelScheduledWork() {
+    _cancelScheduledWrite();
     _mirrorTimer?.cancel();
     _mirrorTimer = null;
   }
@@ -229,7 +271,10 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     if (length + bytes.length > maxFileBytes) {
       final rotated = await _rotateCurrentFile(file);
       if (rotated != null) {
-        await _mirrorRotatedFile(rotated);
+        await _queueRotatedFileMirror(
+          rotated,
+          filename: rotated.uri.pathSegments.last,
+        );
       }
       await _pruneFiles();
     }
@@ -251,7 +296,12 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     for (var index = keepFiles - 2; index >= 1; index -= 1) {
       final source = File('${file.path}.$index');
       if (await source.exists()) {
-        await source.rename('${file.path}.${index + 1}');
+        final target = File('${file.path}.${index + 1}');
+        await _queueRotatedFileMirror(
+          source,
+          filename: target.uri.pathSegments.last,
+        );
+        await source.rename(target.path);
       }
     }
     final rotated = File('${file.path}.1');
@@ -261,15 +311,61 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     return rotated;
   }
 
-  Future<void> _mirrorRotatedFile(File file) async {
+  Future<void> _queueRotatedFileMirror(
+    File file, {
+    required String filename,
+  }) async {
+    final sink = _publicDiagnosticLogSink;
+    if (!_enabled || sink == null || !await file.exists()) {
+      return;
+    }
+    final snapshot = await _createMirrorSnapshot(file);
+    if (snapshot == null) {
+      return;
+    }
+    _mirrorQueue = _mirrorQueue.then((_) async {
+      try {
+        await _mirrorRotatedFile(
+          snapshot,
+          filename: filename,
+          requestPermission: false,
+        );
+      } finally {
+        try {
+          await snapshot.delete();
+        } on Object {
+          // A stale mirror snapshot is removed on the next App start.
+        }
+      }
+    });
+  }
+
+  Future<File?> _createMirrorSnapshot(File file) async {
+    final snapshot = File(
+      '${file.path}.mirror-${_clock().microsecondsSinceEpoch}-${_mirrorSnapshotSequence++}',
+    );
+    try {
+      return await file.copy(snapshot.path);
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<void> _mirrorRotatedFile(
+    File file, {
+    required String filename,
+    required bool requestPermission,
+  }) async {
     final sink = _publicDiagnosticLogSink;
     if (!_enabled || sink == null || !await file.exists()) {
       return;
     }
     try {
-      _publicMirrorStatus = await sink.mirrorCanonicalFile(
+      _publicMirrorStatus = await _mirrorWithTimeout(
+        sink,
         sourcePath: file.path,
-        filename: file.uri.pathSegments.last,
+        filename: filename,
+        requestPermission: requestPermission,
       );
     } on Object {
       _publicMirrorStatus = PublicDiagnosticLogMirrorStatus.failure(
@@ -279,7 +375,10 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   }
 
   void _scheduleMirror() {
-    if (_publicDiagnosticLogSink == null) {
+    if (_isClosing ||
+        _disposed ||
+        _closedStream ||
+        _publicDiagnosticLogSink == null) {
       return;
     }
     _mirrorPending = true;
@@ -288,12 +387,34 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     }
     _mirrorTimer = Timer(_mirrorDebounce, () {
       _mirrorTimer = null;
-      _mirrorQueue = _mirrorQueue.then((_) => _mirrorPendingFile());
+      _queuePendingMirror(force: false, requestPermission: false);
     });
   }
 
-  Future<void> _mirrorPendingFile({bool force = false}) async {
-    if (!_mirrorPending) {
+  void _queuePendingMirror({
+    required bool force,
+    required bool requestPermission,
+  }) {
+    _mirrorQueue = _mirrorQueue.then(
+      (_) => _mirrorPendingFile(
+        force: force,
+        requestPermission: requestPermission,
+      ),
+    );
+  }
+
+  Future<void> _flushPublicMirror({required bool requestPermission}) async {
+    _mirrorTimer?.cancel();
+    _mirrorTimer = null;
+    _queuePendingMirror(force: true, requestPermission: requestPermission);
+    await _mirrorQueue;
+  }
+
+  Future<void> _mirrorPendingFile({
+    required bool force,
+    required bool requestPermission,
+  }) async {
+    if (!_mirrorPending && !force) {
       return;
     }
     _mirrorPending = false;
@@ -314,14 +435,19 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     _lastMirrorAttemptAt = now;
     final previousFailureCode = _lastMirrorFailureCode;
     try {
-      _publicMirrorStatus = await sink.mirrorCanonicalFile(
+      _publicMirrorStatus = await _mirrorWithTimeout(
+        sink,
         sourcePath: file.path,
         filename: file.uri.pathSegments.last,
+        requestPermission: requestPermission,
       );
     } on Object {
       _publicMirrorStatus = PublicDiagnosticLogMirrorStatus.failure(
         'storage_error',
       );
+    }
+    if (_closedStream) {
+      return;
     }
     if (_publicMirrorStatus?.failureCode != null) {
       await _recordMirrorFailure(_publicMirrorStatus!.failureCode!);
@@ -332,6 +458,22 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
       notifyListeners();
     }
   }
+
+  Future<PublicDiagnosticLogMirrorStatus> _mirrorWithTimeout(
+    PublicDiagnosticLogSink sink, {
+    required String sourcePath,
+    required String filename,
+    required bool requestPermission,
+  }) => sink
+      .mirrorCanonicalFile(
+        sourcePath: sourcePath,
+        filename: filename,
+        requestPermission: requestPermission,
+      )
+      .timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => PublicDiagnosticLogMirrorStatus.failure('timeout'),
+      );
 
   Future<void> _recordMirrorFailure(String failureCode) async {
     final now = _clock();
@@ -353,6 +495,9 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   }
 
   Future<void> _recordMirrorStatus(String event, String failureCode) async {
+    if (_closedStream) {
+      return;
+    }
     if (_entries.length >= maxEntries) {
       _entries.removeAt(0);
     }
@@ -428,10 +573,30 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     }
   }
 
+  Future<void> _pruneMirrorSnapshots() async {
+    final directory = _logDirectory;
+    if (directory == null) {
+      return;
+    }
+    await for (final entry in directory.list()) {
+      if (entry is File &&
+          _mirrorSnapshotFilenamePattern.hasMatch(
+            entry.uri.pathSegments.last,
+          )) {
+        try {
+          await entry.delete();
+        } on Object {
+          // A failed cleanup does not affect the canonical diagnostic log.
+        }
+      }
+    }
+  }
+
   @override
   Future<void> close() {
     // [dispose] cannot await this work. Stop timers synchronously so a page
     // teardown cannot leave delayed callbacks alive after its owner is gone.
+    _isClosing = true;
     _cancelScheduledWork();
     return _closeFuture ??= _close();
   }

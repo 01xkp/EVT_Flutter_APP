@@ -5,10 +5,12 @@ import com.signify.hue.flutterreactiveble.ble.RequestConnectionPriorityFailed
 import com.signify.hue.flutterreactiveble.channelhandlers.BleStatusHandler
 import com.signify.hue.flutterreactiveble.channelhandlers.CharNotificationHandler
 import com.signify.hue.flutterreactiveble.channelhandlers.DeviceConnectionHandler
+import com.signify.hue.flutterreactiveble.channelhandlers.NativeBleLogHandler
 import com.signify.hue.flutterreactiveble.channelhandlers.ScanDevicesHandler
 import com.signify.hue.flutterreactiveble.converters.ProtobufMessageConverter
 import com.signify.hue.flutterreactiveble.converters.UuidConverter
 import com.signify.hue.flutterreactiveble.model.ClearGattCacheErrorType
+import com.signify.hue.flutterreactiveble.utils.NativeBleLog
 import com.signify.hue.flutterreactiveble.utils.discard
 import com.signify.hue.flutterreactiveble.utils.toConnectionPriority
 import io.flutter.plugin.common.BinaryMessenger
@@ -48,10 +50,12 @@ class PluginController {
     private lateinit var scanchannel: EventChannel
     private lateinit var deviceConnectionChannel: EventChannel
     private lateinit var charNotificationChannel: EventChannel
+    private lateinit var nativeBleLogChannel: EventChannel
 
     private lateinit var scanDevicesHandler: ScanDevicesHandler
     private lateinit var deviceConnectionHandler: DeviceConnectionHandler
     private lateinit var charNotificationHandler: CharNotificationHandler
+    private lateinit var nativeBleLogHandler: NativeBleLogHandler
 
     private val uuidConverter = UuidConverter()
     private val protoConverter = ProtobufMessageConverter()
@@ -62,24 +66,31 @@ class PluginController {
         messenger: BinaryMessenger,
         context: Context,
     ) {
+        NativeBleLog.clearEventSink()
         if (::charNotificationHandler.isInitialized) {
             charNotificationHandler.dispose()
+        }
+        if (::nativeBleLogHandler.isInitialized) {
+            nativeBleLogHandler.dispose()
         }
         bleClient = com.signify.hue.flutterreactiveble.ble.ReactiveBleClient(context)
 
         scanchannel = EventChannel(messenger, "flutter_reactive_ble_scan")
         deviceConnectionChannel = EventChannel(messenger, "flutter_reactive_ble_connected_device")
         charNotificationChannel = EventChannel(messenger, "flutter_reactive_ble_char_update")
+        nativeBleLogChannel = EventChannel(messenger, "aipin/native_ble_logs")
         val bleStatusChannel = EventChannel(messenger, "flutter_reactive_ble_status")
 
         scanDevicesHandler = ScanDevicesHandler(bleClient)
         deviceConnectionHandler = DeviceConnectionHandler(bleClient)
         charNotificationHandler = CharNotificationHandler(bleClient)
+        nativeBleLogHandler = NativeBleLogHandler()
         val bleStatusHandler = BleStatusHandler(bleClient)
 
         scanchannel.setStreamHandler(scanDevicesHandler)
         deviceConnectionChannel.setStreamHandler(deviceConnectionHandler)
         charNotificationChannel.setStreamHandler(charNotificationHandler)
+        nativeBleLogChannel.setStreamHandler(nativeBleLogHandler)
         bleStatusChannel.setStreamHandler(bleStatusHandler)
     }
 
@@ -87,6 +98,9 @@ class PluginController {
         scanDevicesHandler.stopDeviceScan()
         if (::charNotificationHandler.isInitialized) {
             charNotificationHandler.dispose()
+        }
+        if (::nativeBleLogHandler.isInitialized) {
+            nativeBleLogHandler.dispose()
         }
         deviceConnectionHandler.disconnectAll()
     }

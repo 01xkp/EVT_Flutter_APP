@@ -583,6 +583,7 @@ class SessionController extends ChangeNotifier
   Future<bool> executeEvtLegacySecurity(
     EvtLegacySecurityRequest request,
   ) async {
+    final connectionAttempt = _connectionAttempt;
     final startedAt = DateTime.now();
     final operation = request.action == EvtLegacySecurityAction.bind
         ? 'device_bind'
@@ -593,6 +594,7 @@ class SessionController extends ChangeNotifier
       stage: 'fa19_write',
       result: 'pending',
       fields: _sessionFields('【会话认证】准备通过 FA19 发起 V1 认证或绑定交换', {
+        'connection_attempt': connectionAttempt,
         'action': request.action.name,
         'endpoint': BleLogicalEndpoint.fa10Fa19.name,
         'timeout_ms': _legacySecurityResponseTimeout.inMilliseconds,
@@ -611,6 +613,7 @@ class SessionController extends ChangeNotifier
       BleLogicalEndpoint.fa10Fa19,
       critical: true,
     );
+    _requireCurrentConnectionAttempt(connectionAttempt);
     _logger.info(
       'legacy_security_exchange_dispatching',
       operation: operation,
@@ -628,6 +631,7 @@ class SessionController extends ChangeNotifier
       final accepted = await _requireProtocol().executeEvtLegacySecurity(
         request,
       );
+      _requireCurrentConnectionAttempt(connectionAttempt);
       _logger.info(
         'legacy_security_exchange_result_received',
         operation: operation,
@@ -644,6 +648,7 @@ class SessionController extends ChangeNotifier
     } catch (error, stackTrace) {
       final cacheRefresh = await _recoverGattAfterLegacySecurityTimeout(
         error,
+        connectionAttempt: connectionAttempt,
         operation: operation,
         action: request.action,
       );
@@ -664,6 +669,7 @@ class SessionController extends ChangeNotifier
       // V1 only returns BindResult. Without an action or transaction id, a
       // late response cannot be distinguished from the next 0x09 operation.
       await _invalidateSessionForAmbiguousProtocolResult(
+        connectionAttempt: connectionAttempt,
         event: 'legacy_security_result_uncertain',
         message: '设备认证结果未确认，已断开连接，请重新连接后重试。',
         fields: _sessionFields('【会话认证】V1 认证响应无法关联，主动断开避免误用迟到数据', {
@@ -685,10 +691,12 @@ class SessionController extends ChangeNotifier
   /// layout. The cache action is best-effort and never replaces the timeout.
   Future<BleGattCacheClearResult?> _recoverGattAfterLegacySecurityTimeout(
     Object error, {
+    required int connectionAttempt,
     required String operation,
     required EvtLegacySecurityAction action,
   }) async {
-    if (error is! EvtCommandTimeoutException) {
+    if (error is! EvtCommandTimeoutException ||
+        !_isCurrentConnectionAttempt(connectionAttempt)) {
       return null;
     }
     final deviceId = _state.session?.candidate.connectionId;
@@ -977,6 +985,7 @@ class SessionController extends ChangeNotifier
     int offset = 0,
     int pageSize = 10,
   }) async {
+    final connectionAttempt = _connectionAttempt;
     final startedAt = DateTime.now();
     _logger.info(
       'file_list_requested',
@@ -997,8 +1006,10 @@ class SessionController extends ChangeNotifier
       BleLogicalEndpoint.ff10Ff12,
       critical: true,
     );
+    _requireCurrentConnectionAttempt(connectionAttempt);
     _requireDevicePermission(DevicePermission.files);
     final mtu = await _ensureAttMtu(31);
+    _requireCurrentConnectionAttempt(connectionAttempt);
     // The V1 authentication window can expire while CCC or MTU work is
     // pending. Check again immediately before the 0x22 command is written.
     _requireDevicePermission(DevicePermission.files);
@@ -1023,6 +1034,7 @@ class SessionController extends ChangeNotifier
         offset: offset,
         pageSize: effectivePageSize,
       );
+      _requireCurrentConnectionAttempt(connectionAttempt);
       _logger.info(
         'file_list_completed',
         operation: 'device_file_import',
@@ -1060,6 +1072,7 @@ class SessionController extends ChangeNotifier
         }),
       );
       await _invalidateSessionForAmbiguousProtocolResult(
+        connectionAttempt: connectionAttempt,
         event: timedOut
             ? 'file_list_response_timeout_requires_reconnect'
             : 'file_list_response_uncertain_requires_reconnect',
@@ -1087,6 +1100,7 @@ class SessionController extends ChangeNotifier
     int startOffset = 0,
     int chunkSize = 0,
   }) {
+    final connectionAttempt = _connectionAttempt;
     _logger.info(
       'file_transfer_requested',
       operation: 'device_file_import',
@@ -1124,6 +1138,7 @@ class SessionController extends ChangeNotifier
       }
       return incompleteTransferReset ??=
           _invalidateSessionForAmbiguousProtocolResult(
+            connectionAttempt: connectionAttempt,
             event: event,
             message: message,
             fields: _sessionFields('【会话文件】连续文件流未收到结束帧，主动关闭会话避免旧数据串入', {
@@ -1170,6 +1185,7 @@ class SessionController extends ChangeNotifier
       );
       transferSubscription =
           _downloadEvtFileInternal(
+            connectionAttempt: connectionAttempt,
             nameSlot: nameSlot,
             startOffset: startOffset,
             chunkSize: chunkSize,
@@ -1274,6 +1290,7 @@ class SessionController extends ChangeNotifier
   }
 
   Stream<EvtDeviceFileTransferEvent> _downloadEvtFileInternal({
+    required int connectionAttempt,
     required List<int> nameSlot,
     required int startOffset,
     required int chunkSize,
@@ -1283,6 +1300,7 @@ class SessionController extends ChangeNotifier
     required Future<void> Function(Object error) onIncompleteTransfer,
   }) async* {
     void requireActiveCaller() {
+      _requireCurrentConnectionAttempt(connectionAttempt);
       if (isCallerCancelled()) {
         throw StateError('设备文件传输已取消。');
       }
@@ -1293,6 +1311,7 @@ class SessionController extends ChangeNotifier
     var nextProgressLogBytes = 64 * 1024;
     var terminalReceived = false;
     try {
+      requireActiveCaller();
       _requireDevicePermission(DevicePermission.files);
       _requireCommandEndpoint(BleLogicalEndpoint.ff10Ff13, BleOperation.notify);
       await _ensureResponseSubscription(
@@ -1344,6 +1363,7 @@ class SessionController extends ChangeNotifier
         }),
       );
       await for (final event in transfer) {
+        requireActiveCaller();
         // The permission is checked immediately before the one and only 0x23
         // Write. Once the device has accepted that write, every following
         // Notify belongs to the same continuous transfer. A V1 auth window
@@ -2833,11 +2853,24 @@ class SessionController extends ChangeNotifier
   /// Clears a GATT session when V1.5 cannot correlate a delayed response or
   /// an old continuous file stream with a future request.
   Future<void> _invalidateSessionForAmbiguousProtocolResult({
+    required int connectionAttempt,
     required String event,
     required String message,
     required Map<String, Object?> fields,
   }) async {
-    final connectionAttempt = _connectionAttempt;
+    if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+      _logger.info(
+        'stale_session_cleanup_ignored',
+        operation: 'device_connect',
+        stage: 'connect',
+        result: 'cancelled',
+        fields: _sessionFields('【会话清理】旧请求已失效，跳过清理，不修改或断开当前连接', {
+          'connection_attempt': connectionAttempt,
+          'event_kind': event,
+        }),
+      );
+      return;
+    }
     final deviceId = _state.session?.candidate.connectionId;
     _logger.info(
       event,
@@ -2970,6 +3003,12 @@ class SessionController extends ChangeNotifier
 
   bool _isCurrentConnectionAttempt(int connectionAttempt) =>
       !_isDisposed && connectionAttempt == _connectionAttempt;
+
+  void _requireCurrentConnectionAttempt(int connectionAttempt) {
+    if (!_isCurrentConnectionAttempt(connectionAttempt)) {
+      throw StateError('设备连接已变更，旧请求已取消。');
+    }
+  }
 
   bool _ownsConnectionForCleanup(int? expectedConnectionAttempt) =>
       expectedConnectionAttempt == null ||

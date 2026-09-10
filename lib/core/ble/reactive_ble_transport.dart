@@ -11,6 +11,7 @@ import 'package:aipin/core/diagnostics/evt_packet_log_summary.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
+import 'package:flutter/services.dart' show EventChannel;
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart' as reactive;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:reactive_ble_mobile/reactive_ble_mobile.dart' as mobile;
@@ -25,20 +26,33 @@ class ReactiveBleTransport implements BleTransport {
   static const _notificationListenerSettleDelay = Duration(milliseconds: 16);
   static const _iosMtuReportRetryDelay = Duration(milliseconds: 250);
   static const _iosMtuReportAttempts = 4;
+  static const _nativeBleLogChannel = EventChannel('aipin/native_ble_logs');
 
   ReactiveBleTransport({
     reactive.FlutterReactiveBle? ble,
     SafeAppLogger? logger,
     AndroidSdkIntProvider? androidSdkIntProvider,
+    this.nativeBleLogStream,
+    bool? enableNativeBleLogBridge,
   }) : _client = ble,
        _logger = logger ?? const DebugSafeAppLogger(scope: 'BLE'),
        _androidSdkIntProvider =
-           androidSdkIntProvider ?? const PlatformAndroidSdkIntProvider();
+           androidSdkIntProvider ?? const PlatformAndroidSdkIntProvider(),
+       _enableNativeBleLogBridge =
+           enableNativeBleLogBridge ?? (kDebugMode && Platform.isAndroid);
 
   reactive.FlutterReactiveBle? _client;
   final Map<String, _ActiveConnection> _connections = {};
   final SafeAppLogger _logger;
   final AndroidSdkIntProvider _androidSdkIntProvider;
+
+  /// Optional injected native diagnostics source used by focused tests.
+  @visibleForTesting
+  final Stream<dynamic>? nativeBleLogStream;
+  final bool _enableNativeBleLogBridge;
+  StreamSubscription<dynamic>? _nativeBleLogSubscription;
+  var _nativeBleLogBridgeFailed = false;
+  var _disposed = false;
 
   String get _platformLabel {
     if (Platform.isAndroid) {
@@ -99,8 +113,287 @@ class ReactiveBleTransport implements BleTransport {
     }
   }
 
+  void _logWarning(
+    String event, {
+    required String operation,
+    required String stage,
+    required String result,
+    required String reason,
+    Duration? elapsed,
+    Map<String, Object?> fields = const {},
+  }) {
+    try {
+      _logger.warning(
+        event,
+        operation: operation,
+        stage: stage,
+        result: result,
+        elapsed: elapsed,
+        fields: {'reason': reason, ...fields},
+      );
+    } on Object {
+      // Diagnostic output must not affect BLE transport behavior.
+    }
+  }
+
+  void _ensureNativeBleLogBridge() {
+    if (_disposed ||
+        !_enableNativeBleLogBridge ||
+        _nativeBleLogBridgeFailed ||
+        _nativeBleLogSubscription != null) {
+      return;
+    }
+    try {
+      final stream =
+          nativeBleLogStream ?? _nativeBleLogChannel.receiveBroadcastStream();
+      _nativeBleLogSubscription = stream.listen(
+        _onNativeBleLogEvent,
+        onError: _onNativeBleLogError,
+        onDone: _onNativeBleLogDone,
+      );
+    } on Object catch (error) {
+      _nativeBleLogBridgeFailed = true;
+      _logWarning(
+        'native_ble_log_bridge_unavailable',
+        operation: 'device_connect',
+        stage: 'initialization',
+        result: 'failed',
+        reason: '【原生BLE日志】无法建立原生诊断事件通道，仍可使用 Dart 层日志联调',
+        fields: _safeFailureFields(error),
+      );
+    }
+  }
+
+  void _onNativeBleLogEvent(dynamic payload) {
+    if (_disposed) {
+      return;
+    }
+    if (payload is! Map) {
+      _logWarning(
+        'native_ble_log_payload_invalid',
+        operation: 'device_connect',
+        stage: 'response',
+        result: 'failed',
+        reason: '【原生BLE日志】收到无法解析的原生诊断事件，已忽略',
+        fields: {'type': payload.runtimeType.toString(), 'platform': 'android'},
+      );
+      return;
+    }
+    final event = _nativeDiagnosticEventName(payload['event']);
+    final fields = nativeDiagnosticFieldsFor(payload);
+    final level = payload['level']?.toString().toUpperCase();
+    final stage = fields.containsKey('raw_packet_hex')
+        ? 'response'
+        : 'connected';
+    switch (level) {
+      case 'E':
+        _logError(
+          event,
+          operation: 'device_connect',
+          stage: stage,
+          result: 'failed',
+          reason: fields['reason'] as String? ?? '【原生BLE日志】设备联调原生层报告异常',
+          fields: fields,
+        );
+      case 'W':
+        _logWarning(
+          event,
+          operation: 'device_connect',
+          stage: stage,
+          result: 'failed',
+          reason: fields['reason'] as String? ?? '【原生BLE日志】设备联调原生层报告警告',
+          fields: fields,
+        );
+      default:
+        _logInfo(
+          event,
+          operation: 'device_connect',
+          stage: stage,
+          result: 'success',
+          reason: fields['reason'] as String? ?? '【原生BLE日志】已收到原生 BLE 诊断事件',
+          fields: fields,
+        );
+    }
+  }
+
+  void _onNativeBleLogError(Object error, StackTrace stackTrace) {
+    if (_disposed) {
+      return;
+    }
+    _nativeBleLogBridgeFailed = true;
+    _logWarning(
+      'native_ble_log_bridge_failed',
+      operation: 'device_connect',
+      stage: 'response',
+      result: 'failed',
+      reason: '【原生BLE日志】原生诊断事件通道已中断，继续保留 Dart 层日志',
+      fields: _safeFailureFields(error),
+    );
+  }
+
+  void _onNativeBleLogDone() {
+    _nativeBleLogSubscription = null;
+    if (_disposed) {
+      return;
+    }
+    _nativeBleLogBridgeFailed = true;
+    _logWarning(
+      'native_ble_log_bridge_closed',
+      operation: 'device_connect',
+      stage: 'response',
+      result: 'failed',
+      reason: '【原生BLE日志】原生诊断事件通道已关闭，继续保留 Dart 层日志',
+    );
+  }
+
+  /// Makes native-only events safe for the same persistent Debug log used by
+  /// the Dart transport. Full MAC addresses and UUIDs are reduced before they
+  /// reach the shared diagnostic store; packet hex remains available only in
+  /// Debug through [DiagnosticSanitizer].
+  @visibleForTesting
+  static Map<String, Object?> nativeDiagnosticFieldsFor(
+    Map<dynamic, dynamic> payload,
+  ) {
+    final nativeFields = payload['fields'];
+    final fields = nativeFields is Map
+        ? nativeFields
+        : const <dynamic, dynamic>{};
+    final output = <String, Object?>{
+      'platform': 'android',
+      'event_kind': 'native_ble',
+    };
+    final message = _nativeString(payload['message']);
+    if (message != null) {
+      output['reason'] = message;
+    }
+    final timestamp = payload['timestamp_ms'];
+    if (timestamp is num) {
+      output['occurred_at'] = timestamp;
+    }
+    final deviceId = _nativeString(fields['device_id']);
+    if (deviceId != null) {
+      output['device_suffix'] = _safeDeviceReference(deviceId);
+    }
+    final characteristic = _nativeString(fields['characteristic_uuid']);
+    if (characteristic != null) {
+      output['characteristic'] = _safeCharacteristicReference(characteristic);
+    }
+    final instanceId = int.tryParse('${fields['instance_id']}');
+    if (instanceId != null && instanceId >= 0) {
+      output['instance_id'] = instanceId;
+    }
+    final setupCompleted = fields['setup_completed'];
+    if (setupCompleted is bool) {
+      output['setup_completed'] = setupCompleted;
+    }
+    final rawPacketHex = _normalizedNativeRawPacketHex(
+      payload['raw_packet_hex'],
+    );
+    if (rawPacketHex != null) {
+      output['raw_packet_hex'] = rawPacketHex;
+      output['bytes'] = rawPacketHex.split(' ').length;
+    }
+    final packetCount = fields['packet_count'];
+    if (packetCount is num) {
+      output['count'] = packetCount;
+    }
+    final cccdPresent = fields['cccd_present'];
+    if (cccdPresent is bool) {
+      output['configured'] = cccdPresent;
+    }
+    final cccdRequired = fields['cccd_required'];
+    if (cccdRequired is bool) {
+      output['required'] = cccdRequired;
+    }
+    final responseMode = _nativeString(
+      fields['response_mode'] ??
+          fields['expected_evt_mode'] ??
+          fields['expected_mode'],
+    );
+    if (responseMode != null) {
+      output['requested_mode'] = responseMode;
+    }
+    final setupMode = _nativeString(fields['setup_mode']);
+    if (setupMode != null) {
+      output['setup_mode'] = setupMode;
+    }
+    final properties = _nativeString(
+      fields['properties_hex'] ?? fields['properties'],
+    );
+    if (properties != null) {
+      output['gatt_status'] = properties;
+    }
+    final byteCount = fields['bytes'];
+    if (byteCount is num && !output.containsKey('bytes')) {
+      output['bytes'] = byteCount;
+    }
+    final fileTransfer = fields['file_transfer'];
+    if (fileTransfer is bool) {
+      output['file_transfer'] = fileTransfer;
+    }
+    final rawPacketHexOmitted = fields['raw_packet_hex_omitted'];
+    if (rawPacketHexOmitted is bool) {
+      output['raw_packet_hex_omitted'] = rawPacketHexOmitted;
+    }
+    final errorType = _nativeString(fields['error_type']);
+    if (errorType != null) {
+      output['error_type'] = errorType;
+    }
+    return output;
+  }
+
+  static String _nativeDiagnosticEventName(Object? value) {
+    final candidate = _nativeString(value);
+    if (candidate != null &&
+        RegExp(r'^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$').hasMatch(candidate)) {
+      return candidate;
+    }
+    return 'native_ble_diagnostic';
+  }
+
+  static String? _nativeString(Object? value) {
+    if (value is! String) {
+      return null;
+    }
+    final normalized = value.trim();
+    return normalized.isEmpty ? null : normalized;
+  }
+
+  static String? _normalizedNativeRawPacketHex(Object? value) {
+    final candidate = _nativeString(value)?.toUpperCase();
+    if (candidate == null ||
+        !RegExp(r'^(?:[0-9A-F]{2})(?: [0-9A-F]{2})*$').hasMatch(candidate)) {
+      return null;
+    }
+    return candidate;
+  }
+
+  /// Starts the injected native event stream in a focused transport test.
+  ///
+  /// Production call sites initialize the bridge before a scan, connection,
+  /// notification subscription, read, or write reaches the platform channel.
+  @visibleForTesting
+  void startNativeBleLogBridgeForTesting() => _ensureNativeBleLogBridge();
+
+  Future<void> dispose() async {
+    if (_disposed) {
+      return;
+    }
+    _disposed = true;
+    final subscription = _nativeBleLogSubscription;
+    _nativeBleLogSubscription = null;
+    if (subscription != null) {
+      try {
+        await subscription.cancel();
+      } on Object {
+        // Provider disposal must not leak an asynchronous EventChannel error.
+      }
+    }
+  }
+
   @override
   Stream<DeviceCandidate> scan() async* {
+    _ensureNativeBleLogBridge();
     final stopwatch = Stopwatch()..start();
     var result = 'cancelled';
     var namedDiscoveryCount = 0;
@@ -337,6 +630,7 @@ class ReactiveBleTransport implements BleTransport {
 
   @override
   Stream<BleConnectionState> connect(String deviceId) {
+    _ensureNativeBleLogBridge();
     final stopwatch = Stopwatch()..start();
     _logInfo(
       'connection_requested',
@@ -761,10 +1055,30 @@ class ReactiveBleTransport implements BleTransport {
 
   @override
   Stream<Uint8List> subscribe(BleCharacteristic characteristic) async* {
+    _ensureNativeBleLogBridge();
     final stopwatch = Stopwatch()..start();
     var notificationCount = 0;
     var result = 'cancelled';
     final characteristicFields = _safeCharacteristicFields(characteristic);
+    BleTransportException receiveFailure(Object error) {
+      final failure = gattOperationFailure(error, fallbackMessage: '状态订阅失败。');
+      result = 'failed';
+      _logError(
+        'notification_subscription_failed',
+        operation: 'device_connect',
+        stage: 'connected',
+        result: result,
+        elapsed: stopwatch.elapsed,
+        reason: '【通知订阅】通知订阅失败，已向上层返回可处理错误',
+        fields: {
+          ...characteristicFields,
+          'pairing_required': failure.message == _pairingRequiredMessage,
+          ..._safeFailureFields(error),
+        },
+      );
+      return BleTransportException(failure);
+    }
+
     try {
       _logInfo(
         'notification_subscription_requested',
@@ -783,43 +1097,38 @@ class ReactiveBleTransport implements BleTransport {
         reason: '【通知订阅】已调用系统通知订阅接口，等待首个数据包',
         fields: characteristicFields,
       );
-      await for (final bytes in _ble.subscribeToCharacteristic(
-        _qualifiedCharacteristic(characteristic),
-      )) {
-        notificationCount += 1;
-        _logInfo(
-          'notification_received',
-          operation: 'device_connect',
-          stage: 'connected',
-          result: 'success',
-          elapsed: stopwatch.elapsed,
-          reason: '【通知订阅】收到设备通知数据，完整原始十六进制已写入 Debug 日志',
-          fields: {
-            ...characteristicFields,
-            ...safeByteSummaryForDiagnostics(bytes),
-            'subscription_count': notificationCount,
-          },
-        );
-        yield Uint8List.fromList(bytes);
-      }
-      result = 'completed';
+      // Forward cancellation even while the peripheral is silent. An await-for
+      // wrapper can wait for another packet before cancelling its subscription.
+      yield* _ble
+          .subscribeToCharacteristic(_qualifiedCharacteristic(characteristic))
+          .map((bytes) {
+            notificationCount += 1;
+            _logInfo(
+              'notification_received',
+              operation: 'device_connect',
+              stage: 'connected',
+              result: 'success',
+              elapsed: stopwatch.elapsed,
+              reason: '【通知订阅】收到设备通知数据，完整原始十六进制已写入 Debug 日志',
+              fields: {
+                ...characteristicFields,
+                ...safeByteSummaryForDiagnostics(bytes),
+                'subscription_count': notificationCount,
+              },
+            );
+            return Uint8List.fromList(bytes);
+          })
+          .transform(
+            StreamTransformer<Uint8List, Uint8List>.fromHandlers(
+              handleError: (error, stackTrace, sink) {
+                sink.addError(receiveFailure(error), stackTrace);
+                sink.close();
+              },
+            ),
+          );
+      if (result != 'failed') result = 'completed';
     } catch (error, stackTrace) {
-      final failure = gattOperationFailure(error, fallbackMessage: '状态订阅失败。');
-      result = 'failed';
-      _logError(
-        'notification_subscription_failed',
-        operation: 'device_connect',
-        stage: 'connected',
-        result: result,
-        elapsed: stopwatch.elapsed,
-        reason: '【通知订阅】通知订阅失败，已向上层返回可处理错误',
-        fields: {
-          ...characteristicFields,
-          'pairing_required': failure.message == _pairingRequiredMessage,
-          ..._safeFailureFields(error),
-        },
-      );
-      Error.throwWithStackTrace(BleTransportException(failure), stackTrace);
+      Error.throwWithStackTrace(receiveFailure(error), stackTrace);
     } finally {
       stopwatch.stop();
       _logInfo(
@@ -953,6 +1262,7 @@ class ReactiveBleTransport implements BleTransport {
 
   @override
   Future<Uint8List> read(BleCharacteristic characteristic) async {
+    _ensureNativeBleLogBridge();
     final stopwatch = Stopwatch()..start();
     final characteristicFields = _safeCharacteristicFields(characteristic);
     try {
@@ -1016,6 +1326,7 @@ class ReactiveBleTransport implements BleTransport {
     Uint8List bytes, {
     required bool withoutResponse,
   }) async {
+    _ensureNativeBleLogBridge();
     final operation = withoutResponse ? 'write_without_response' : 'write';
     final stopwatch = Stopwatch()..start();
     final characteristicFields = _safeCharacteristicFields(characteristic);
@@ -1255,24 +1566,7 @@ class ReactiveBleTransport implements BleTransport {
   }
 
   static String _safeCharacteristicReference(String characteristicUuid) {
-    final normalized = characteristicUuid.replaceAll(
-      RegExp(r'[^a-zA-Z0-9]'),
-      '',
-    );
-    if (normalized.length == 4) {
-      return '0x${normalized.toUpperCase()}';
-    }
-    final evtMatch = RegExp(
-      r'^0000(FA11|FA12|FA15|FA16|FA17|FA19|FB11|FF11|FF12|FF13)1212EFDE1523785FEABCD123$',
-      caseSensitive: false,
-    ).firstMatch(normalized);
-    if (evtMatch != null) {
-      return '0x${evtMatch.group(1)!.toUpperCase()}';
-    }
-    if (normalized.length < 4) {
-      return 'characteristic_length_${normalized.length}';
-    }
-    return 'characteristic_suffix_${normalized.substring(normalized.length - 4).toUpperCase()}';
+    return EvtPacketLogSummary.characteristicReference(characteristicUuid);
   }
 
   static String _manufacturerPrefix(List<int> data) {

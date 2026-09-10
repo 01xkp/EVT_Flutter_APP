@@ -23,6 +23,7 @@ class PlatformPublicDiagnosticLogSink implements PublicDiagnosticLogSink {
   Future<PublicDiagnosticLogMirrorStatus> mirrorCanonicalFile({
     required String sourcePath,
     required String filename,
+    bool requestPermission = false,
   }) async {
     if (!_isAndroid() && !_isIOS()) {
       return const PublicDiagnosticLogMirrorStatus.unavailable();
@@ -30,7 +31,11 @@ class PlatformPublicDiagnosticLogSink implements PublicDiagnosticLogSink {
     try {
       final result = await _channel.invokeMapMethod<String, Object?>(
         'mirrorCanonicalLog',
-        <String, Object?>{'sourcePath': sourcePath, 'filename': filename},
+        <String, Object?>{
+          'sourcePath': sourcePath,
+          'filename': filename,
+          'requestPermission': requestPermission,
+        },
       );
       if (result == null || result['available'] != true) {
         return PublicDiagnosticLogMirrorStatus.failure(

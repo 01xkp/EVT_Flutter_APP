@@ -9,6 +9,7 @@ import com.polidea.rxandroidble2.RxBleClient
 import com.polidea.rxandroidble2.RxBleConnection
 import com.polidea.rxandroidble2.RxBleDevice
 import com.polidea.rxandroidble2.RxBleDeviceServices
+import com.polidea.rxandroidble2.NotificationSetupMode
 import com.signify.hue.flutterreactiveble.ble.extensions.resolveCharacteristic
 import com.signify.hue.flutterreactiveble.ble.extensions.writeCharWithResponse
 import com.signify.hue.flutterreactiveble.ble.extensions.writeCharWithoutResponse
@@ -27,6 +28,7 @@ import io.reactivex.subjects.BehaviorSubject
 import org.junit.After
 import org.junit.Before
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
@@ -120,17 +122,17 @@ class ReactiveBleClientTest {
                 BluetoothGattCharacteristic.PROPERTY_INDICATE
 
         assertThat(
+            requireEvtNotificationMode(
+                UUID.fromString("0000fa11-1212-efde-1523-785feabcd123"),
+                properties,
+            ),
+        ).isEqualTo(EvtNotificationMode.INDICATE)
+        assertThat(
             shouldPreferIndication(
                 UUID.fromString("0000fa11-1212-efde-1523-785feabcd123"),
                 properties,
             ),
         ).isTrue()
-        assertThat(
-            shouldPreferIndication(
-                UUID.fromString("0000fa11-1212-efde-1523-785feabcd123"),
-                BluetoothGattCharacteristic.PROPERTY_NOTIFY,
-            ),
-        ).isFalse()
     }
 
     @Test
@@ -145,6 +147,63 @@ class ReactiveBleClientTest {
                 properties,
             ),
         ).isFalse()
+    }
+
+    @Test
+    fun `rejects FA19 notify-only characteristic instead of downgrading to notify`() {
+        val error = assertThrows(IllegalStateException::class.java) {
+            requireEvtNotificationMode(
+                UUID.fromString("0000fa19-1212-efde-1523-785feabcd123"),
+                BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+            )
+        }
+
+        assertThat(error).hasMessageThat().contains("indicate")
+    }
+
+    @Test
+    fun `rejects FF13 indicate-only characteristic instead of downgrading to indicate`() {
+        val error = assertThrows(IllegalStateException::class.java) {
+            requireEvtNotificationMode(
+                UUID.fromString("0000ff13-1212-efde-1523-785feabcd123"),
+                BluetoothGattCharacteristic.PROPERTY_INDICATE,
+            )
+        }
+
+        assertThat(error).hasMessageThat().contains("notify")
+    }
+
+    @Test
+    fun `EVT response characteristics require a CCCD and never fall back to compat mode`() {
+        val evtResponseCharacteristics = listOf(
+            "0000fa11-1212-efde-1523-785feabcd123",
+            "0000fa12-1212-efde-1523-785feabcd123",
+            "0000fa15-1212-efde-1523-785feabcd123",
+            "0000fa16-1212-efde-1523-785feabcd123",
+            "0000fa17-1212-efde-1523-785feabcd123",
+            "0000fa19-1212-efde-1523-785feabcd123",
+            "0000fb11-1212-efde-1523-785feabcd123",
+            "0000ff11-1212-efde-1523-785feabcd123",
+            "0000ff12-1212-efde-1523-785feabcd123",
+            "0000ff13-1212-efde-1523-785feabcd123",
+        ).map(UUID::fromString)
+
+        evtResponseCharacteristics.forEach { characteristicId ->
+            assertThat(requiresEvtCccd(characteristicId)).isTrue()
+            assertThat(notificationSetupModeFor(characteristicId, emptyList()))
+                .isEqualTo(NotificationSetupMode.DEFAULT)
+        }
+    }
+
+    @Test
+    fun `non EVT characteristics retain compatibility fallback without descriptors`() {
+        val genericCharacteristic = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
+
+        assertThat(requiresEvtCccd(genericCharacteristic)).isFalse()
+        assertThat(notificationSetupModeFor(genericCharacteristic, emptyList()))
+            .isEqualTo(NotificationSetupMode.COMPAT)
+        assertThat(notificationSetupModeFor(genericCharacteristic, listOf(UUID.randomUUID())))
+            .isEqualTo(NotificationSetupMode.DEFAULT)
     }
 
     @DisplayName("Establishing a connection")

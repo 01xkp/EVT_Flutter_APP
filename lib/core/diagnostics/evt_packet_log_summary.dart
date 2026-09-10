@@ -17,6 +17,28 @@ class EvtPacketLogSummary {
   });
 
   static const _frameHead = 0xED;
+
+  static String characteristicReference(String characteristicUuid) {
+    final normalized = characteristicUuid.replaceAll(
+      RegExp(r'[^a-zA-Z0-9]'),
+      '',
+    );
+    if (normalized.length == 4) {
+      return '0x${normalized.toUpperCase()}';
+    }
+    final evtMatch = RegExp(
+      r'^0000(FA11|FA12|FA15|FA16|FA17|FA19|FB11|FF11|FF12|FF13)1212EFDE1523785FEABCD123$',
+      caseSensitive: false,
+    ).firstMatch(normalized);
+    if (evtMatch != null) {
+      return '0x${evtMatch.group(1)!.toUpperCase()}';
+    }
+    if (normalized.length < 4) {
+      return 'characteristic_length_${normalized.length}';
+    }
+    return 'characteristic_suffix_${normalized.substring(normalized.length - 4).toUpperCase()}';
+  }
+
   static const _omittedSummaries = <String>{
     'evt_malformed_content_omitted',
     'evt_authentication_content_redacted',

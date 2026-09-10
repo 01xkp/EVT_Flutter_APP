@@ -17,6 +17,177 @@ void main() {
     characteristicUuid: '0000FA11-0000-1000-8000-00805F9B34FB',
   );
 
+  test(
+    'wait heartbeat distinguishes native write and response, then stops',
+    () async {
+      final transport = _DeferredWriteBleTransport();
+      final logger = _CapturingLogger();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: EvtProtocolCodec(),
+        responses: transport.subscriptionStream,
+        logger: logger,
+      );
+      addTearDown(client.close);
+      addTearDown(transport.completeWrite);
+      final operation = client.execute(
+        const EvtCommandRequest(
+          command: 0x01,
+          writeCharacteristic: characteristic,
+          timeout: Duration(seconds: 6),
+          maxRetries: 0,
+        ),
+      );
+      operation.ignore();
+      await transport.writeStarted;
+      final writing = await logger.nextEvent('evt_response_waiting');
+      expect(writing.fields['state'], 'write_pending');
+      expect(writing.fields, isNot(contains('remaining_ms')));
+      transport.completeWrite();
+      final waiting = await logger.nextEvent('evt_response_waiting');
+      expect(waiting.fields['state'], 'waiting_response');
+      expect(waiting.fields['remaining_ms'], inInclusiveRange(0, 6000));
+      expect(waiting.fields['expected_command'], '0x81');
+      expect(waiting.fields['wait_id'], writing.fields['wait_id']);
+
+      transport.emitSubscriptionBytes(
+        EvtProtocolCodec().encodeRequest(0x81, [0]),
+      );
+      await operation;
+      final terminal = logger.events.singleWhere(
+        (event) => event.name == 'evt_response_wait_finished',
+      );
+      expect(terminal.fields['state'], 'success');
+      final count = logger.events.length;
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(logger.events, hasLength(count));
+    },
+  );
+
+  test('each timed out retry closes its own response wait', () async {
+    final transport = FakeBleTransport();
+    final logger = _CapturingLogger();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: EvtProtocolCodec(),
+      responses: transport.subscriptionStream,
+      logger: logger,
+    );
+    addTearDown(client.close);
+    await expectLater(
+      client.execute(
+        const EvtCommandRequest(
+          command: 0x01,
+          writeCharacteristic: characteristic,
+          timeout: Duration(milliseconds: 20),
+          maxRetries: 1,
+        ),
+      ),
+      throwsA(isA<EvtCommandTimeoutException>()),
+    );
+    final terminal = logger.events
+        .where((event) => event.name == 'evt_response_wait_finished')
+        .toList();
+    expect(terminal, hasLength(2));
+    expect(terminal.map((event) => event.fields['attempt']), [1, 2]);
+    expect(
+      terminal.map((event) => event.fields['wait_id']).toSet(),
+      hasLength(2),
+    );
+    expect(
+      terminal.every((event) => event.fields['state'] == 'failed'),
+      isTrue,
+    );
+    expect(
+      terminal.every((event) => '${event.fields['reason']}'.contains('超时')),
+      isTrue,
+    );
+  });
+
+  test(
+    'stream wait continues after a partial frame until the terminal frame',
+    () async {
+      final transport = FakeBleTransport();
+      final logger = _CapturingLogger();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: EvtProtocolCodec(),
+        responses: transport.subscriptionStream,
+        logger: logger,
+      );
+      addTearDown(client.close);
+      final result = client
+          .executeStreaming(
+            const EvtCommandRequest(
+              command: 0x23,
+              writeCharacteristic: characteristic,
+              maxRetries: 0,
+            ),
+            isTerminal: (frame) => frame.content.first == 0xFF,
+            idleTimeout: const Duration(seconds: 4),
+          )
+          .toList();
+      result.ignore();
+      await Future<void>.delayed(Duration.zero);
+      transport.emitSubscriptionBytes(
+        EvtProtocolCodec().encodeRequest(0xA3, [1]),
+      );
+      final waiting = await logger.nextEvent('evt_response_waiting');
+      expect(waiting.fields['response_count'], 1);
+      expect(
+        logger.events.where(
+          (event) => event.name == 'evt_response_wait_finished',
+        ),
+        isEmpty,
+      );
+      transport.emitSubscriptionBytes(
+        EvtProtocolCodec().encodeRequest(0xA3, [0xFF]),
+      );
+      expect(await result, hasLength(2));
+      final terminal = logger.events.singleWhere(
+        (event) => event.name == 'evt_response_wait_finished',
+      );
+      expect(terminal.fields['state'], 'success');
+      expect(terminal.fields['response_count'], 2);
+      final count = logger.events.length;
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(logger.events, hasLength(count));
+    },
+  );
+
+  test('closing during native write ends response logging once', () async {
+    final transport = _DeferredWriteBleTransport();
+    final logger = _CapturingLogger();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: EvtProtocolCodec(),
+      responses: transport.subscriptionStream,
+      logger: logger,
+    );
+    addTearDown(client.close);
+    addTearDown(transport.completeWrite);
+    final result = client.execute(
+      const EvtCommandRequest(
+        command: 0x01,
+        writeCharacteristic: characteristic,
+        maxRetries: 0,
+      ),
+    );
+    result.ignore();
+    await transport.writeStarted;
+    await client.close();
+    transport.completeWrite();
+    await expectLater(result, throwsA(isA<StateError>()));
+    final terminal = logger.events.singleWhere(
+      (event) => event.name == 'evt_response_wait_finished',
+    );
+    expect(terminal.fields['state'], 'cancelled');
+    expect(
+      logger.events.map((event) => event.name),
+      isNot(contains('evt_response_wait_armed')),
+    );
+  });
+
   test('matches a validated response and reports attempts', () async {
     final transport = FakeBleTransport();
     final codec = EvtProtocolCodec();
@@ -44,6 +215,53 @@ void main() {
     await client.close();
   });
 
+  test('accepts FA19 bind indication before native write completes', () async {
+    final transport = _DeferredWriteBleTransport();
+    final logger = _CapturingLogger();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: EvtProtocolCodec(),
+      responses: transport.subscriptionStream,
+      logger: logger,
+    );
+    addTearDown(client.close);
+    const bindingCharacteristic = BleCharacteristic(
+      deviceId: 'device-1',
+      serviceUuid: '0000FA10-0000-1000-8000-00805F9B34FB',
+      characteristicUuid: '0000FA19-0000-1000-8000-00805F9B34FB',
+    );
+    final result = client.execute(
+      const EvtCommandRequest(
+        command: 0x09,
+        content: [1, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30],
+        expectedResponseCommand: 0x89,
+        writeCharacteristic: bindingCharacteristic,
+        maxRetries: 0,
+      ),
+    );
+    await transport.writeStarted;
+    transport.emitSubscriptionBytes(
+      Uint8List.fromList([0xED, 4, 0, 0x89, 1, 0x2E, 0xAC]),
+    );
+    await Future<void>.delayed(Duration.zero);
+    transport.completeWrite();
+
+    final response = await result;
+    expect(response.frame.command, 0x89);
+    expect(response.frame.content, [1]);
+    expect(response.attempts, 1);
+    final waitFinished = logger.events.singleWhere(
+      (event) => event.name == 'evt_response_wait_finished',
+    );
+    expect(waitFinished.fields['state'], 'success');
+    expect(waitFinished.fields['response_count'], 1);
+    expect(
+      logger.events.map((event) => event.name),
+      isNot(contains('evt_response_wait_armed')),
+    );
+    expect(transport.writes, hasLength(1));
+  });
+
   test('publishes unmatched valid frames as unsolicited events', () async {
     final transport = FakeBleTransport();
     final client = EvtCommandClient(
@@ -64,6 +282,37 @@ void main() {
     await eventSubscription.cancel();
     await client.close();
   });
+
+  for (final streaming in [false, true]) {
+    test(
+      'handles receive failure during native write (streaming=$streaming)',
+      () async {
+        final transport = _DeferredWriteBleTransport();
+        final client = EvtCommandClient(
+          transport: transport,
+          codec: EvtProtocolCodec(),
+          responses: transport.subscriptionStream,
+        );
+        addTearDown(client.close);
+        final failure = StateError('Native indication subscription ended');
+        const request = EvtCommandRequest(
+          command: 0x09,
+          writeCharacteristic: characteristic,
+          maxRetries: 0,
+        );
+        final Future<Object?> operation = streaming
+            ? client.executeStreaming(request, isTerminal: (_) => true).toList()
+            : client.execute(request);
+        final expectation = expectLater(operation, throwsA(same(failure)));
+        await transport.writeStarted;
+        transport.emitSubscriptionError(failure);
+        await Future<void>.delayed(Duration.zero);
+        transport.completeWrite();
+        await expectation;
+        expect(transport.writes, hasLength(1));
+      },
+    );
+  }
 
   test('retries once after timeout and then fails', () async {
     final transport = FakeBleTransport();
@@ -444,6 +693,9 @@ void main() {
           'evt_command_response_received',
           'evt_command_response_matched',
           'evt_command_completed',
+          'evt_response_wait_started',
+          'evt_response_wait_armed',
+          'evt_response_wait_finished',
         ]),
       );
       final transmit = logger.events.firstWhere(
@@ -458,6 +710,7 @@ void main() {
         (event) => event.name == 'evt_command_response_matched',
       );
       expect(acknowledgement.fields['event_kind'], 'acknowledged');
+      expect(acknowledgement.fields['wait_id'], transmit.fields['wait_id']);
       final decoded = logger.events.firstWhere(
         (event) => event.name == 'evt_command_frame_decoded',
       );
@@ -539,6 +792,11 @@ class _CapturedLogEvent {
 
 class _CapturingLogger implements SafeAppLogger {
   final events = <_CapturedLogEvent>[];
+  final _updates = StreamController<_CapturedLogEvent>.broadcast();
+
+  Future<_CapturedLogEvent> nextEvent(String name) => _updates.stream
+      .firstWhere((event) => event.name == name)
+      .timeout(const Duration(seconds: 3));
 
   @override
   void error(
@@ -574,9 +832,12 @@ class _CapturingLogger implements SafeAppLogger {
   }) => _record(event, fields);
 
   void _record(String event, Map<String, Object?> fields) {
-    events.add(
-      _CapturedLogEvent(name: event, fields: Map<String, Object?>.from(fields)),
+    final record = _CapturedLogEvent(
+      name: event,
+      fields: Map<String, Object?>.from(fields),
     );
+    events.add(record);
+    _updates.add(record);
   }
 }
 

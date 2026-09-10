@@ -29,10 +29,13 @@ class EvtLegacyAuthController extends ChangeNotifier
   Object? _error;
   Timer? _authenticationExpiryTimer;
   EvtLegacySecurityAction? _activeAction;
+  int _operation = 0;
+  bool _isDisposed = false;
 
   DeviceAuthState get state => _state;
   Object? get error => _error;
-  bool get isAuthenticated => _state == DeviceAuthState.authenticated;
+  bool get isAuthenticated =>
+      !_isDisposed && _state == DeviceAuthState.authenticated;
 
   @override
   bool allows(DevicePermission permission) {
@@ -86,6 +89,9 @@ class EvtLegacyAuthController extends ChangeNotifier
     required String securityCode,
     required bool completesAuthenticated,
   }) async {
+    if (_isDisposed) {
+      throw StateError('设备认证控制器已关闭。');
+    }
     if (_state == DeviceAuthState.authenticating) {
       _logWarning(
         'legacy_authentication_rejected_busy',
@@ -94,11 +100,16 @@ class EvtLegacyAuthController extends ChangeNotifier
       );
       throw const EvtLegacyAuthenticationException('认证操作正在进行。');
     }
+    final operation = ++_operation;
     _logInfo(
       'legacy_authentication_requested',
       action: action,
       result: 'pending',
-      fields: {'length': securityCode.length, 'state': _state.name},
+      fields: {
+        'attempt': operation,
+        'length': securityCode.length,
+        'state': _state.name,
+      },
     );
     _cancelAuthenticationExpiryTimer();
     _activeAction = action;
@@ -112,6 +123,7 @@ class EvtLegacyAuthController extends ChangeNotifier
       fields: {'state': _state.name},
     );
     try {
+      _requireCurrentOperation(operation);
       _logInfo(
         'legacy_authentication_protocol_dispatch',
         action: action,
@@ -120,6 +132,7 @@ class EvtLegacyAuthController extends ChangeNotifier
       final succeeded = await gateway.executeEvtLegacySecurity(
         EvtLegacySecurityRequest(action: action, securityCode: securityCode),
       );
+      _requireCurrentOperation(operation);
       if (!succeeded) {
         _logWarning(
           'legacy_authentication_device_rejected',
@@ -129,7 +142,7 @@ class EvtLegacyAuthController extends ChangeNotifier
         throw const EvtLegacyAuthenticationException('设备拒绝认证码。');
       }
       if (completesAuthenticated) {
-        _markAuthenticated(action);
+        _markAuthenticated(action, operation);
       } else {
         _state = DeviceAuthState.unbound;
       }
@@ -141,6 +154,20 @@ class EvtLegacyAuthController extends ChangeNotifier
         fields: {'state': _state.name},
       );
     } catch (error) {
+      if (!_isCurrentOperation(operation)) {
+        _logInfo(
+          'legacy_authentication_stale_result_ignored',
+          action: action,
+          result: 'cancelled',
+          fields: {
+            'reason': '【认证回调】请求已因断连、重新认证或释放失效，忽略旧结果，不修改当前认证状态',
+            'attempt': operation,
+            'current_operation': _operation,
+            'error_type': error.runtimeType.toString(),
+          },
+        );
+        rethrow;
+      }
       _cancelAuthenticationExpiryTimer();
       _state = DeviceAuthState.failed;
       _error = error;
@@ -158,7 +185,21 @@ class EvtLegacyAuthController extends ChangeNotifier
     }
   }
 
+  bool _isCurrentOperation(int operation) =>
+      !_isDisposed && operation == _operation;
+
+  void _requireCurrentOperation(int operation) {
+    if (!_isCurrentOperation(operation)) {
+      // Do not report a stale success to the caller and start post-auth sync.
+      throw StateError('设备认证请求已失效，请在当前连接重新认证。');
+    }
+  }
+
   void revokeForConnectionLoss() {
+    if (_isDisposed) {
+      return;
+    }
+    _operation++;
     _cancelAuthenticationExpiryTimer();
     if (_state == DeviceAuthState.unbound) {
       return;
@@ -175,7 +216,7 @@ class EvtLegacyAuthController extends ChangeNotifier
     _activeAction = null;
   }
 
-  void _markAuthenticated(EvtLegacySecurityAction action) {
+  void _markAuthenticated(EvtLegacySecurityAction action, int operation) {
     _state = DeviceAuthState.authenticated;
     if (authenticationWindow <= Duration.zero) {
       _expireAuthentication();
@@ -183,7 +224,11 @@ class EvtLegacyAuthController extends ChangeNotifier
     }
     _authenticationExpiryTimer = _authenticationExpiryTimerFactory(
       authenticationWindow,
-      _expireAuthentication,
+      () {
+        if (_isCurrentOperation(operation)) {
+          _expireAuthentication();
+        }
+      },
     );
     _logInfo(
       'legacy_authentication_window_started',
@@ -297,6 +342,11 @@ class EvtLegacyAuthController extends ChangeNotifier
 
   @override
   void dispose() {
+    if (_isDisposed) {
+      return;
+    }
+    _isDisposed = true;
+    _operation++;
     _cancelAuthenticationExpiryTimer();
     super.dispose();
   }

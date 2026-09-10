@@ -10,6 +10,39 @@ import 'package:aipin/features/device_logs/domain/app_log_store.dart';
 import 'package:aipin/features/device_logs/domain/public_diagnostic_log_sink.dart';
 
 void main() {
+  test(
+    'response wait details keep Chinese markers and reach persistent logs',
+    () {
+      final store = _FakeAppLogStore();
+      PersistentAppLogger(store, scope: 'CMD').info(
+        'evt_response_waiting',
+        stage: 'response',
+        result: 'pending',
+        fields: const {
+          'wait_id': 8,
+          'elapsed_ms': 1020,
+          'idle_ms': 1000,
+          'remaining_ms': 1000,
+          'response_count': 0,
+          'expected_command': '0x89',
+          'reason': '【回包监听】【等待中】继续监听',
+        },
+      );
+      expect(store.entries.single.fields['wait_id'], 8);
+      expect(store.entries.single.fields['remaining_ms'], 1000);
+      expect(store.entries.single.fields['idle_ms'], 1000);
+      expect(store.entries.single.fields['response_count'], 0);
+      expect(store.entries.single.event, 'evt_response_waiting');
+      final formatted = DiagnosticEvent(
+        timestamp: DateTime.now(),
+        level: DiagnosticLevel.info,
+        scope: 'CMD',
+        event: 'evt_response_waiting',
+      ).formatLine();
+      expect(formatted, contains('【回包监听：等待设备响应】'));
+    },
+  );
+
   test('debug logger writes a sanitized structured event', () {
     final messages = <String>[];
     final previous = debugPrint;

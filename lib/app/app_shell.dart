@@ -8,6 +8,7 @@ import 'package:aipin/core/ble/device_profile.dart';
 import 'package:aipin/core/design_system/evt_theme.dart';
 import 'package:aipin/core/design_system/widgets/app_navigation_bar.dart';
 import 'package:aipin/core/design_system/widgets/app_toast.dart';
+import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_session/application/device_reconnect_controller.dart';
 import 'package:aipin/features/device_session/application/device_reconnect_state.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
@@ -129,16 +130,34 @@ class _AppShellState extends ConsumerState<AppShell>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    ref
-        .read(scopedAppLoggerProvider('APP_LIFECYCLE'))
-        .info(
-          'app_lifecycle_changed',
-          fields: {
-            'state': state.name,
-            'foreground_before': _isAppForeground,
-            'reconnect_paused_for_background': _reconnectPausedForBackground,
-          },
-        );
+    final lifecycleLogger = ref.read(scopedAppLoggerProvider('APP_LIFECYCLE'));
+    lifecycleLogger.info(
+      'app_lifecycle_changed',
+      fields: {
+        'state': state.name,
+        'foreground_before': _isAppForeground,
+        'reconnect_paused_for_background': _reconnectPausedForBackground,
+      },
+    );
+    if (_shouldFlushDiagnosticsForLifecycle(state)) {
+      final logStore = ref.read(appLogStoreProvider);
+      lifecycleLogger.info(
+        'app_lifecycle_diagnostics_flush_requested',
+        fields: {'state': state.name},
+      );
+      unawaited(
+        _flushDiagnostics(
+          logStore: logStore,
+          onError: (error) => lifecycleLogger.warning(
+            'app_lifecycle_diagnostics_flush_failed',
+            fields: {
+              'state': state.name,
+              'error_type': error.runtimeType.toString(),
+            },
+          ),
+        ),
+      );
+    }
     if (state == AppLifecycleState.resumed) {
       _isAppForeground = true;
       if (_reconnectPausedForBackground) {
@@ -154,7 +173,18 @@ class _AppShellState extends ConsumerState<AppShell>
     _isAppForeground = false;
     if (_isReconnectBackgroundState(state)) {
       _reconnectPausedForBackground = true;
-      unawaited(_pauseReconnectForBackground());
+      final pause = _pauseReconnectForBackground();
+      if (_shouldFlushDiagnosticsForLifecycle(state)) {
+        final logStore = ref.read(appLogStoreProvider);
+        unawaited(
+          _flushDiagnosticsAfterBackgroundPause(
+            pause,
+            logStore: logStore,
+            logger: lifecycleLogger,
+            state: state,
+          ),
+        );
+      }
     }
   }
 
@@ -431,6 +461,35 @@ class _AppShellState extends ConsumerState<AppShell>
     });
   }
 
+  Future<void> _flushDiagnosticsAfterBackgroundPause(
+    Future<void> pause, {
+    required FileAppLogStore logStore,
+    required SafeAppLogger logger,
+    required AppLifecycleState state,
+  }) async {
+    try {
+      await pause;
+    } catch (error) {
+      logger.warning(
+        'app_lifecycle_background_pause_failed',
+        fields: {
+          'state': state.name,
+          'error_type': error.runtimeType.toString(),
+        },
+      );
+    }
+    await _flushDiagnostics(
+      logStore: logStore,
+      onError: (error) => logger.warning(
+        'app_lifecycle_diagnostics_flush_failed',
+        fields: {
+          'state': state.name,
+          'error_type': error.runtimeType.toString(),
+        },
+      ),
+    );
+  }
+
   /// Reads current device state after foreground restore when the existing
   /// V1 authorization window remains valid. A disconnect, session replacement
   /// or expired authorization simply leaves the next user action to re-auth.
@@ -484,6 +543,9 @@ class _AppShellState extends ConsumerState<AppShell>
     final state = _discoveryController.state;
     if (!state.isScanning) {
       _reconnectController.notifyScanStopped();
+    }
+    if (_reconnectController.state.phase != DeviceReconnectPhase.scanning) {
+      return;
     }
     for (final candidate in state.candidates) {
       unawaited(_reconnectController.considerCandidate(candidate));
@@ -939,6 +1001,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (!mounted || !identical(_sessionController, controller)) {
       return;
     }
+    _deviceAuthController?.revokeForConnectionLoss();
     await controller.connect(candidate);
   }
 
@@ -948,6 +1011,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (!mounted || !identical(_sessionController, controller)) {
       return;
     }
+    _deviceAuthController?.revokeForConnectionLoss();
     await controller.disconnect();
     _discoveryController.setExcludedDeviceIds(const []);
     if (mounted) {
@@ -1061,41 +1125,84 @@ class _AppShellState extends ConsumerState<AppShell>
     SessionController session,
     EvtLegacyAuthController auth,
   ) async {
-    _logSecurityUi('security_code_sheet_opened', action: 'authenticate');
+    final connectionOperation = _sessionConnectionOperation;
+    final logger = ref.read(scopedAppLoggerProvider('AUTH'));
+    final logStore = ref.read(appLogStoreProvider);
+    _logSecurityUi(
+      'security_code_sheet_opened',
+      action: 'authenticate',
+      logger: logger,
+    );
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '认证设备',
       message: '请输入该设备当前的 6 位认证码。EVT 阶段直接使用设备的 V1 安全码，不会请求云端认证服务。',
       confirmLabel: '开始认证',
     );
-    if (code == null || !mounted || !identical(_sessionController, session)) {
-      _logSecurityUi('security_code_sheet_cancelled', action: 'authenticate');
+    if (code == null ||
+        !_isCurrentSecurityUiOperation(session, connectionOperation)) {
+      _logSecurityUi(
+        'security_code_sheet_cancelled',
+        action: 'authenticate',
+        logger: logger,
+      );
+      await _flushSecurityDiagnostics(
+        EvtLegacySecurityAction.authenticate,
+        reason: 'security_code_sheet_cancelled',
+        logger: logger,
+        logStore: logStore,
+      );
       return;
     }
     _logSecurityUi(
       'security_code_sheet_confirmed',
       action: 'authenticate',
       fields: {'length': code.length},
+      logger: logger,
     );
     try {
       await auth.authenticate(session, securityCode: code);
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+        return;
+      }
+      _requestSecurityPrivateDiagnosticsFlush(
+        EvtLegacySecurityAction.authenticate,
+        reason: 'v1_security_exchange_completed',
+        logger: logger,
+        logStore: logStore,
+      );
       _logSecurityUi(
         'security_post_auth_synchronization_started',
         action: 'authenticate',
+        logger: logger,
       );
       await session.synchronizeAfterAuthentication(auth.grantedPermissions);
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+        return;
+      }
       _logSecurityUi(
         'security_ui_operation_completed',
         action: 'authenticate',
         result: 'success',
+        logger: logger,
       );
       if (mounted) {
         AppToast.show(context, message: '设备认证完成');
       }
     } catch (error) {
       await _handleSecurityUiFailure(
+        session: session,
+        connectionOperation: connectionOperation,
         action: EvtLegacySecurityAction.authenticate,
         error: error,
+        logger: logger,
+      );
+    } finally {
+      await _flushSecurityDiagnostics(
+        EvtLegacySecurityAction.authenticate,
+        reason: 'security_operation_terminal',
+        logger: logger,
+        logStore: logStore,
       );
     }
   }
@@ -1104,41 +1211,84 @@ class _AppShellState extends ConsumerState<AppShell>
     SessionController session,
     EvtLegacyAuthController auth,
   ) async {
-    _logSecurityUi('security_code_sheet_opened', action: 'bind');
+    final connectionOperation = _sessionConnectionOperation;
+    final logger = ref.read(scopedAppLoggerProvider('AUTH'));
+    final logStore = ref.read(appLogStoreProvider);
+    _logSecurityUi(
+      'security_code_sheet_opened',
+      action: 'bind',
+      logger: logger,
+    );
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '首次绑定设备',
       message: '首次绑定仅在设备仍使用初始认证码时可用。请输入希望写入设备的 6 位认证码。',
       confirmLabel: '确认绑定',
     );
-    if (code == null || !mounted || !identical(_sessionController, session)) {
-      _logSecurityUi('security_code_sheet_cancelled', action: 'bind');
+    if (code == null ||
+        !_isCurrentSecurityUiOperation(session, connectionOperation)) {
+      _logSecurityUi(
+        'security_code_sheet_cancelled',
+        action: 'bind',
+        logger: logger,
+      );
+      await _flushSecurityDiagnostics(
+        EvtLegacySecurityAction.bind,
+        reason: 'security_code_sheet_cancelled',
+        logger: logger,
+        logStore: logStore,
+      );
       return;
     }
     _logSecurityUi(
       'security_code_sheet_confirmed',
       action: 'bind',
       fields: {'length': code.length},
+      logger: logger,
     );
     try {
       await auth.bind(session, securityCode: code);
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+        return;
+      }
+      _requestSecurityPrivateDiagnosticsFlush(
+        EvtLegacySecurityAction.bind,
+        reason: 'v1_security_exchange_completed',
+        logger: logger,
+        logStore: logStore,
+      );
       _logSecurityUi(
         'security_post_auth_synchronization_started',
         action: 'bind',
+        logger: logger,
       );
       await session.synchronizeAfterAuthentication(auth.grantedPermissions);
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+        return;
+      }
       _logSecurityUi(
         'security_ui_operation_completed',
         action: 'bind',
         result: 'success',
+        logger: logger,
       );
       if (mounted) {
         AppToast.show(context, message: '设备绑定完成');
       }
     } catch (error) {
       await _handleSecurityUiFailure(
+        session: session,
+        connectionOperation: connectionOperation,
         action: EvtLegacySecurityAction.bind,
         error: error,
+        logger: logger,
+      );
+    } finally {
+      await _flushSecurityDiagnostics(
+        EvtLegacySecurityAction.bind,
+        reason: 'security_operation_terminal',
+        logger: logger,
+        logStore: logStore,
       );
     }
   }
@@ -1147,52 +1297,99 @@ class _AppShellState extends ConsumerState<AppShell>
     SessionController session,
     EvtLegacyAuthController auth,
   ) async {
-    _logSecurityUi('security_code_sheet_opened', action: 'reset');
+    var connectionOperation = _sessionConnectionOperation;
+    final logger = ref.read(scopedAppLoggerProvider('AUTH'));
+    final logStore = ref.read(appLogStoreProvider);
+    final checkpoints = ref.read(
+      deviceFileDownloadCheckpointRepositoryProvider,
+    );
+    _logSecurityUi(
+      'security_code_sheet_opened',
+      action: 'reset',
+      logger: logger,
+    );
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '恢复初始认证码',
       message: '请输入当前 6 位认证码。设备会恢复初始认证码，并格式化设备录音和配置，无法恢复。',
       confirmLabel: '确认恢复',
     );
-    if (code == null || !mounted || !identical(_sessionController, session)) {
-      _logSecurityUi('security_code_sheet_cancelled', action: 'reset');
+    if (code == null ||
+        !_isCurrentSecurityUiOperation(session, connectionOperation)) {
+      _logSecurityUi(
+        'security_code_sheet_cancelled',
+        action: 'reset',
+        logger: logger,
+      );
+      await _flushSecurityDiagnostics(
+        EvtLegacySecurityAction.reset,
+        reason: 'security_code_sheet_cancelled',
+        logger: logger,
+        logStore: logStore,
+      );
       return;
     }
     _logSecurityUi(
       'security_code_sheet_confirmed',
       action: 'reset',
       fields: {'length': code.length},
+      logger: logger,
     );
     try {
       await auth.reset(session, securityCode: code);
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+        return;
+      }
+      _requestSecurityPrivateDiagnosticsFlush(
+        EvtLegacySecurityAction.reset,
+        reason: 'v1_security_exchange_completed',
+        logger: logger,
+        logStore: logStore,
+      );
       _logSecurityUi(
         'security_ui_operation_completed',
         action: 'reset',
         result: 'success',
+        logger: logger,
       );
       final candidate = session.state.session?.candidate;
       final deviceId = candidate?.physicalDeviceId;
       if (deviceId != null) {
-        await ref
-            .read(deviceFileDownloadCheckpointRepositoryProvider)
-            .removeAllForDevice(deviceId);
+        await checkpoints.removeAllForDevice(deviceId);
+      }
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+        return;
       }
       if (candidate != null) {
         await _reconnectController.forgetSuccessfulClear(candidate);
       }
-      _sessionConnectionOperation += 1;
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+        return;
+      }
+      connectionOperation = ++_sessionConnectionOperation;
       await _reconnectController.suppressForForeground();
-      if (!mounted || !identical(_sessionController, session)) {
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
         return;
       }
       await session.disconnect();
-      if (mounted) {
+      if (mounted &&
+          _isCurrentSecurityUiOperation(session, connectionOperation)) {
         AppToast.show(context, message: '设备已恢复初始认证码');
       }
     } catch (error) {
       await _handleSecurityUiFailure(
+        session: session,
+        connectionOperation: connectionOperation,
         action: EvtLegacySecurityAction.reset,
         error: error,
+        logger: logger,
+      );
+    } finally {
+      await _flushSecurityDiagnostics(
+        EvtLegacySecurityAction.reset,
+        reason: 'security_operation_terminal',
+        logger: logger,
+        logStore: logStore,
       );
     }
   }
@@ -1202,10 +1399,12 @@ class _AppShellState extends ConsumerState<AppShell>
     required String action,
     String? result,
     Map<String, Object?> fields = const {},
+    SafeAppLogger? logger,
   }) {
-    final logger = ref.read(scopedAppLoggerProvider('AUTH'));
+    final SafeAppLogger resolvedLogger =
+        logger ?? ref.read(scopedAppLoggerProvider('AUTH'));
     final operation = action == 'bind' ? 'device_bind' : 'device_authenticate';
-    logger.info(
+    resolvedLogger.info(
       event,
       operation: operation,
       stage: 'challenge',
@@ -1215,39 +1414,133 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   Future<void> _handleSecurityUiFailure({
+    required SessionController session,
+    required int connectionOperation,
     required EvtLegacySecurityAction action,
     required Object error,
+    required SafeAppLogger logger,
   }) async {
+    if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+      _logSecurityUi(
+        'security_ui_stale_result_ignored',
+        action: action.name,
+        result: 'cancelled',
+        fields: {
+          'reason': '【认证界面】连接已更换或用户已主动断开，旧请求仅记录日志，不再弹出失败提示',
+          'attempt': connectionOperation,
+          'error_type': error.runtimeType.toString(),
+        },
+        logger: logger,
+      );
+      return;
+    }
     _logSecurityUi(
       'security_ui_operation_failed',
       action: action.name,
       result: 'failed',
       fields: {'error_type': error.runtimeType.toString()},
+      logger: logger,
     );
-    _logSecurityUi(
-      'security_ui_diagnostics_flush_requested',
-      action: action.name,
-      result: 'pending',
-      fields: const {'reason': 'security_operation_failed'},
-    );
-    try {
-      await ref
-          .read(appLogStoreProvider)
-          .flush()
-          .timeout(const Duration(seconds: 2));
-    } catch (flushError) {
-      _logSecurityUi(
-        'security_ui_diagnostics_flush_failed',
-        action: action.name,
-        result: 'failed',
-        fields: {'error_type': flushError.runtimeType.toString()},
-      );
-    }
     if (mounted) {
       AppToast.show(
         context,
         message: evtLegacySecurityFailureMessage(action: action, error: error),
       );
+    }
+  }
+
+  bool _isCurrentSecurityUiOperation(
+    SessionController session,
+    int connectionOperation,
+  ) =>
+      _isCurrentSessionConnectionOperation(connectionOperation) &&
+      identical(_sessionController, session);
+
+  static bool _shouldFlushDiagnosticsForLifecycle(AppLifecycleState state) =>
+      state == AppLifecycleState.paused || state == AppLifecycleState.detached;
+
+  void _requestSecurityPrivateDiagnosticsFlush(
+    EvtLegacySecurityAction action, {
+    required String reason,
+    required SafeAppLogger logger,
+    required FileAppLogStore logStore,
+  }) {
+    unawaited(
+      _flushDiagnostics(
+        logStore: logStore,
+        onError: (error) => _logSecurityUi(
+          'security_ui_diagnostics_flush_failed',
+          action: action.name,
+          result: 'failed',
+          fields: {
+            'reason': reason,
+            'error_type': error.runtimeType.toString(),
+          },
+          logger: logger,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _flushSecurityDiagnostics(
+    EvtLegacySecurityAction action, {
+    required String reason,
+    required SafeAppLogger logger,
+    required FileAppLogStore logStore,
+  }) async {
+    _logSecurityUi(
+      'security_ui_diagnostics_flush_requested',
+      action: action.name,
+      result: 'pending',
+      fields: {'reason': reason},
+      logger: logger,
+    );
+    await _flushDiagnostics(
+      logStore: logStore,
+      onError: (error) => _logSecurityUi(
+        'security_ui_diagnostics_flush_failed',
+        action: action.name,
+        result: 'failed',
+        fields: {'reason': reason, 'error_type': error.runtimeType.toString()},
+        logger: logger,
+      ),
+    );
+    await _syncSecurityPublicDiagnostics(
+      action,
+      reason: reason,
+      logger: logger,
+      logStore: logStore,
+    );
+  }
+
+  Future<void> _syncSecurityPublicDiagnostics(
+    EvtLegacySecurityAction action, {
+    required String reason,
+    required SafeAppLogger logger,
+    required FileAppLogStore logStore,
+  }) async {
+    try {
+      await logStore.syncPublicMirror().timeout(const Duration(seconds: 2));
+    } catch (error) {
+      _logSecurityUi(
+        'security_ui_public_diagnostics_sync_failed',
+        action: action.name,
+        result: 'failed',
+        fields: {'reason': reason, 'error_type': error.runtimeType.toString()},
+        logger: logger,
+      );
+      await _flushDiagnostics(logStore: logStore, onError: (_) {});
+    }
+  }
+
+  Future<void> _flushDiagnostics({
+    required FileAppLogStore logStore,
+    required void Function(Object error) onError,
+  }) async {
+    try {
+      await logStore.flush().timeout(const Duration(seconds: 2));
+    } catch (error) {
+      onError(error);
     }
   }
 

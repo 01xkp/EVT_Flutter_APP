@@ -44,3 +44,19 @@ registered immediately before or after the stream subscription and reject
 replacement, cancellation, disconnect, invalid arguments, and unsupported
 platforms with explicit errors. The application must still apply its own
 timeout when no stream subscription is ever requested.
+
+## Persistent Android receive subscription and diagnostics
+
+Keep the outer RxAndroidBle setup observable subscribed for the whole GATT
+subscription lifetime. Do not apply `take(1)`: its disposal unregisters the
+local listener and disables the CCC. Subscribe to the inner values before
+reporting readiness, propagate errors and unexpected completion, and prevent
+obsolete instances from removing a replacement subscription.
+
+The native debug bridge forwards CCC, writes, packet receipt and dropped-sink
+diagnostics into the App's existing local logger. Control packets retain their
+Debug hex bytes; FF13 native logs are sampled because Dart already records the
+full file-transfer packet stream.
+
+Android scan restarts wait for a 250 ms cooldown after a real stop. Cancelling
+the scan also cancels a scheduled restart.

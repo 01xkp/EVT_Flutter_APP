@@ -62,6 +62,26 @@ void main() {
 
     expect(path, '/app/logs/aipin-2026-09-08.log');
   });
+
+  testWidgets(
+    'disposing the store cancels its pending write debounce during teardown',
+    (tester) async {
+      final store = FileAppLogStore(
+        enabled: true,
+        supportDirectoryProvider: () async {
+          throw StateError('Storage is intentionally unavailable in this test');
+        },
+      );
+      addTearDown(store.dispose);
+
+      await tester.pumpWidget(MaterialApp(home: DeviceLogPage(store: store)));
+      store.info('queued_before_widget_teardown', scope: 'BLE');
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      store.dispose();
+      await tester.pump();
+    },
+  );
 }
 
 class _StubLogStore extends FileAppLogStore {

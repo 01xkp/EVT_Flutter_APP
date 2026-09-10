@@ -101,6 +101,10 @@ class DiagnosticEvent {
       'notification_frame_decode_failed' ||
       'notification_endpoint_mismatch' => '【接收：设备到App】【异常：回包处理】',
       'evt_command_timeout' || 'evt_stream_command_timeout' => '【等待：设备响应】',
+      'evt_response_wait_started' ||
+      'evt_response_wait_armed' ||
+      'evt_response_waiting' ||
+      'evt_response_wait_finished' => '【回包监听：等待设备响应】',
       'evt_command_error' when stage == 'write' => '【发送：App到设备】【异常：写入失败】',
       'evt_command_error' => '【等待：设备响应】【异常：命令处理】',
       _ => '',
@@ -249,6 +253,7 @@ class DiagnosticEvent {
       'admitted' => '准入通过',
       'aggregate' => '汇总',
       'app' => '应用',
+      'armed' => '计时开始',
       'attempt' => '尝试',
       'authentication' => '认证',
       'battery' => '电量',

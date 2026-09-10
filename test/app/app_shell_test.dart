@@ -15,6 +15,100 @@ import '../support/fake_ble_transport.dart';
 import '../support/fake_onboarding_store.dart';
 
 void main() {
+  testWidgets(
+    'manual disconnect suppresses the old authentication failure toast',
+    (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final transport = FakeBleTransport.withGattReadyProfile();
+      final appLogStore = _FlushTrackingAppLogStore();
+      addTearDown(transport.dispose);
+      addTearDown(appLogStore.dispose);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            onboardingStoreProvider.overrideWithValue(
+              FakeOnboardingStore(completed: true),
+            ),
+            bleTransportProvider.overrideWithValue(transport),
+            deviceConnectionHistoryRepositoryProvider.overrideWithValue(
+              _MemoryConnectionHistory(const <RememberedDevice>[]),
+            ),
+            appLogStoreProvider.overrideWithValue(appLogStore),
+          ],
+          child: const EvtApp(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(find.text('连接设备').first);
+      await tester.pump();
+      await tester.pump();
+      transport.emitCandidate(FakeBleTransport.matchingCandidate);
+      await tester.pump();
+      await tester.tap(find.text(FakeBleTransport.matchingCandidate.name));
+      await tester.pump();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(DiscoveryPage),
+          matching: find.widgetWithText(AppButton, '连接设备'),
+        ),
+      );
+      await tester.pump();
+      await tester.runAsync(() async {
+        final deadline = DateTime.now().add(const Duration(seconds: 3));
+        while (transport.discoveryRequests.isEmpty &&
+            DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      expect(find.widgetWithText(AppButton, '认证设备'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(AppButton, '认证设备'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.enterText(find.byType(TextField), '123456');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(AppButton, '开始认证'));
+      await tester.pump();
+      await tester.runAsync(() async {
+        final deadline = DateTime.now().add(const Duration(seconds: 3));
+        while (transport.writes.isEmpty && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(transport.writes, hasLength(1));
+
+      final disconnect = find.widgetWithText(AppButton, '断开设备');
+      await tester.ensureVisible(disconnect);
+      await tester.tap(disconnect);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.widgetWithText(AppButton, '断开设备').last);
+      await tester.pump();
+      for (
+        var attempt = 0;
+        attempt < 30 && transport.disconnectedDeviceIds.isEmpty;
+        attempt++
+      ) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+      }
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      expect(transport.disconnectedDeviceIds, hasLength(1));
+      expect(find.text('设备认证失败，请重新连接后重试。'), findsNothing);
+      expect(find.textContaining('命令客户端已关闭'), findsNothing);
+      expect(transport.writes, hasLength(1));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
+
   testWidgets('completed onboarding exposes only EVT device navigation', (
     tester,
   ) async {
@@ -250,6 +344,42 @@ void main() {
     },
   );
 
+  testWidgets('flushes diagnostics before the App is backgrounded', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final transport = FakeBleTransport.withGattReadyProfile();
+    final appLogStore = _FlushTrackingAppLogStore();
+    addTearDown(transport.dispose);
+    addTearDown(appLogStore.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          onboardingStoreProvider.overrideWithValue(
+            FakeOnboardingStore(completed: true),
+          ),
+          bleTransportProvider.overrideWithValue(transport),
+          appLogStoreProvider.overrideWithValue(appLogStore),
+        ],
+        child: const EvtApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final flushesBeforeBackground = appLogStore.flushCount;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    expect(appLogStore.flushCount, flushesBeforeBackground);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    expect(appLogStore.flushCount, greaterThan(flushesBeforeBackground));
+  });
+
   testWidgets(
     'pauses remembered-device scan in background and restores it on foreground',
     (tester) async {
@@ -365,7 +495,7 @@ void main() {
     (tester) async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final transport = FakeBleTransport.withGattReadyProfile();
-      final appLogStore = FileAppLogStore(enabled: false);
+      final appLogStore = _FlushTrackingAppLogStore();
       final candidate = FakeBleTransport.matchingCandidate;
       final history = _MemoryConnectionHistory(const <RememberedDevice>[]);
       addTearDown(transport.dispose);
@@ -423,6 +553,25 @@ void main() {
       expect(find.byType(TextField), findsOneWidget);
       expect(find.text('6 字节认证码'), findsOneWidget);
 
+      final mirrorsBeforeCancel = appLogStore.publicMirrorSyncCount;
+      await tester.tap(find.widgetWithText(AppButton, '取消'));
+      await tester.pump();
+      await tester.runAsync(() async {
+        final timeoutAt = DateTime.now().add(const Duration(seconds: 3));
+        while (appLogStore.publicMirrorSyncCount == mirrorsBeforeCancel &&
+            DateTime.now().isBefore(timeoutAt)) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump();
+
+      expect(transport.writes, isEmpty);
+      expect(appLogStore.publicMirrorSyncCount, mirrorsBeforeCancel + 1);
+
+      await tester.tap(find.widgetWithText(AppButton, '认证设备'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
       await tester.enterText(find.byType(TextField), '123456');
       await tester.pump();
       await tester.tap(find.widgetWithText(AppButton, '开始认证'));
@@ -459,12 +608,19 @@ void main() {
 
       // Resolve the pending authentication request so the test proves the
       // outbound path without leaving its response-timeout timer active.
+      final flushesBeforeTerminalResponse = appLogStore.flushCount;
       transport.emitSubscriptionBytesForCharacteristic(
         '0000FA19-1212-EFDE-1523-785FEABCD123',
         EvtProtocolCodec().encodeRequest(0x89, const [0]),
       );
       await tester.pump();
       await tester.pump();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+      expect(
+        appLogStore.flushCount,
+        greaterThan(flushesBeforeTerminalResponse),
+      );
 
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
@@ -514,5 +670,24 @@ class _MemoryConnectionHistory implements DeviceConnectionHistoryRepository {
     );
     _records.add(record);
     upserts.add(record);
+  }
+}
+
+class _FlushTrackingAppLogStore extends FileAppLogStore {
+  _FlushTrackingAppLogStore() : super(enabled: false);
+
+  var flushCount = 0;
+  var publicMirrorSyncCount = 0;
+
+  @override
+  Future<void> flush() async {
+    flushCount += 1;
+    await super.flush();
+  }
+
+  @override
+  Future<void> syncPublicMirror() async {
+    publicMirrorSyncCount += 1;
+    await super.syncPublicMirror();
   }
 }

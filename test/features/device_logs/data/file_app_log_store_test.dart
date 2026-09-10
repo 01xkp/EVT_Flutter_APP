@@ -73,6 +73,50 @@ void main() {
     },
   );
 
+  test(
+    'close cancels a delayed write and drains accepted logs before returning',
+    () async {
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        writeDebounce: const Duration(hours: 1),
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
+      addTearDown(store.dispose);
+
+      store.info('queued_before_close', scope: 'BLE');
+      await store.close().timeout(const Duration(seconds: 1));
+
+      final path = await store.exportPath();
+      expect(path, isNotNull);
+      expect(await File(path!).readAsString(), contains('queued_before_close'));
+    },
+  );
+
+  test(
+    'flush drains a log accepted while asynchronous initialization is pending',
+    () async {
+      final supportDirectory = Completer<Directory>();
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () => supportDirectory.future,
+        enabled: true,
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
+      addTearDown(store.dispose);
+
+      store.info('before_initialization', scope: 'BLE');
+      final flush = store.flush();
+      store.info('while_initialization_pending', scope: 'BLE');
+      supportDirectory.complete(root);
+      await flush;
+
+      final path = await store.exportPath();
+      final content = await File(path!).readAsString();
+      expect(content, contains('before_initialization'));
+      expect(content, contains('while_initialization_pending'));
+    },
+  );
+
   test('rotates when the current file exceeds the configured size', () async {
     final store = FileAppLogStore(
       supportDirectoryProvider: () async => root,
@@ -108,11 +152,11 @@ void main() {
       );
 
       store.info('first_segment');
-      await store.flush();
+      await store.exportPath();
       store.info('second_segment');
-      await store.flush();
+      await store.exportPath();
       store.info('third_segment');
-      await store.flush();
+      await store.exportPath();
 
       final directory = Directory('${root.path}${Platform.pathSeparator}logs');
       final current = File(
@@ -246,7 +290,7 @@ void main() {
   );
 
   test(
-    'mirrors the completed canonical daily file once for rapid log events',
+    'exports the completed canonical daily file after rapid log events',
     () async {
       final sink = _FakePublicDiagnosticLogSink();
       final store = FileAppLogStore(
@@ -258,7 +302,7 @@ void main() {
 
       store.info('first');
       store.info('second');
-      await store.flush();
+      await store.exportPath();
 
       expect(sink.calls, hasLength(1));
       expect(sink.calls.single.filename, 'aipin-2026-09-01.log');
@@ -276,7 +320,7 @@ void main() {
   );
 
   test(
-    'flush forces a pending public mirror inside the debounce window',
+    'user export forces a pending public mirror inside the debounce window',
     () async {
       final sink = _FakePublicDiagnosticLogSink();
       final store = FileAppLogStore(
@@ -287,9 +331,9 @@ void main() {
       );
 
       store.info('first');
-      await store.flush();
+      await store.exportPath();
       store.info('second');
-      await store.flush();
+      await store.exportPath();
 
       expect(sink.calls, hasLength(2));
       await store.close();
@@ -298,7 +342,7 @@ void main() {
   );
 
   test(
-    'allows a delayed public mirror to finish after disposal without notifying',
+    'allows a delayed user-export mirror to finish after disposal without notifying',
     () async {
       final sink = _DelayedPublicDiagnosticLogSink();
       final store = FileAppLogStore(
@@ -309,7 +353,7 @@ void main() {
       );
 
       store.info('mirror_before_dispose');
-      final flush = store.flush();
+      final export = store.exportPath();
       await sink.started.future;
       store.dispose();
       sink.complete(
@@ -319,7 +363,7 @@ void main() {
         ),
       );
 
-      await flush;
+      await export;
       await store.close();
       expect(sink.calls, hasLength(1));
     },
@@ -337,7 +381,7 @@ void main() {
       );
 
       store.info('product_operation_completed');
-      await store.flush();
+      await store.exportPath();
 
       final path = await store.exportPath();
       final content = await File(path!).readAsString();
@@ -363,21 +407,22 @@ void main() {
         supportDirectoryProvider: () async => root,
         enabled: true,
         publicDiagnosticLogSink: sink,
+        mirrorDebounce: const Duration(hours: 1),
         clock: () => now,
       );
 
       store.info('first_operation');
-      await store.flush();
+      await store.exportPath();
       now = now.add(const Duration(minutes: 1));
       store.info('second_operation');
-      await store.flush();
+      await store.exportPath();
 
       sink.shouldFail = false;
       now = now.add(const Duration(minutes: 1));
       store.info('third_operation');
-      await store.flush();
+      await store.exportPath();
 
-      final path = await store.exportPath();
+      final path = store.currentFilePath;
       final content = await File(path!).readAsString();
       expect(RegExp('public_mirror_failed').allMatches(content), hasLength(1));
       expect(
@@ -387,6 +432,90 @@ void main() {
       expect(sink.calls, hasLength(3));
       await store.close();
       store.dispose();
+    },
+  );
+
+  test(
+    'background flush stays private until the user exports the log',
+    () async {
+      final sink = _FakePublicDiagnosticLogSink();
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        publicDiagnosticLogSink: sink,
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
+      addTearDown(store.dispose);
+
+      store.info('security_operation_completed', scope: 'AUTH');
+      await store.flush();
+
+      expect(sink.calls, isEmpty);
+      await store.exportPath();
+      expect(sink.calls, hasLength(1));
+      expect(sink.calls.single.requestPermission, isTrue);
+    },
+  );
+
+  test(
+    'syncs the current debug log publicly without requesting permission',
+    () async {
+      final sink = _FakePublicDiagnosticLogSink();
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        publicDiagnosticLogSink: sink,
+        mirrorDebounce: const Duration(hours: 1),
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
+      addTearDown(store.dispose);
+
+      store.info('legacy_security_timeout', scope: 'AUTH');
+      await store.syncPublicMirror();
+
+      expect(sink.calls, hasLength(1));
+      expect(sink.calls.single.requestPermission, isFalse);
+      expect(
+        await File(sink.calls.single.sourcePath).readAsString(),
+        contains('legacy_security_timeout'),
+      );
+    },
+  );
+
+  test(
+    'snapshots rotated logs before queued public mirrors observe later rotations',
+    () async {
+      final sink = _BlockingCapturingPublicDiagnosticLogSink();
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        maxFileBytes: 1,
+        keepFiles: 3,
+        publicDiagnosticLogSink: sink,
+        mirrorDebounce: const Duration(hours: 1),
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
+      addTearDown(store.dispose);
+
+      store.info('first_segment');
+      await store.flush();
+      store.info('second_segment');
+      await store.flush();
+      await sink.started.future;
+
+      store.info('third_segment');
+      await store.flush();
+      sink.release();
+      await store.syncPublicMirror();
+
+      final movedFirstSegment = sink.calls.lastWhere(
+        (call) => call.filename.endsWith('.2'),
+      );
+      final latestFirstSlot = sink.calls.lastWhere(
+        (call) => call.filename.endsWith('.1'),
+      );
+      expect(movedFirstSegment.contents, contains('first_segment'));
+      expect(latestFirstSlot.contents, contains('second_segment'));
     },
   );
 }
@@ -401,8 +530,15 @@ class _FakePublicDiagnosticLogSink implements PublicDiagnosticLogSink {
   Future<PublicDiagnosticLogMirrorStatus> mirrorCanonicalFile({
     required String sourcePath,
     required String filename,
+    bool requestPermission = false,
   }) async {
-    calls.add(_MirrorCall(sourcePath: sourcePath, filename: filename));
+    calls.add(
+      _MirrorCall(
+        sourcePath: sourcePath,
+        filename: filename,
+        requestPermission: requestPermission,
+      ),
+    );
     if (shouldFail) {
       return PublicDiagnosticLogMirrorStatus.failure('storage_error');
     }
@@ -422,8 +558,15 @@ class _DelayedPublicDiagnosticLogSink implements PublicDiagnosticLogSink {
   Future<PublicDiagnosticLogMirrorStatus> mirrorCanonicalFile({
     required String sourcePath,
     required String filename,
+    bool requestPermission = false,
   }) {
-    calls.add(_MirrorCall(sourcePath: sourcePath, filename: filename));
+    calls.add(
+      _MirrorCall(
+        sourcePath: sourcePath,
+        filename: filename,
+        requestPermission: requestPermission,
+      ),
+    );
     if (!started.isCompleted) {
       started.complete();
     }
@@ -437,9 +580,53 @@ class _DelayedPublicDiagnosticLogSink implements PublicDiagnosticLogSink {
   }
 }
 
+class _BlockingCapturingPublicDiagnosticLogSink
+    implements PublicDiagnosticLogSink {
+  final started = Completer<void>();
+  final _release = Completer<void>();
+  final List<_MirrorCall> calls = <_MirrorCall>[];
+
+  @override
+  Future<PublicDiagnosticLogMirrorStatus> mirrorCanonicalFile({
+    required String sourcePath,
+    required String filename,
+    bool requestPermission = false,
+  }) async {
+    calls.add(
+      _MirrorCall(
+        sourcePath: sourcePath,
+        filename: filename,
+        requestPermission: requestPermission,
+        contents: await File(sourcePath).readAsString(),
+      ),
+    );
+    if (!started.isCompleted) {
+      started.complete();
+      await _release.future;
+    }
+    return PublicDiagnosticLogMirrorStatus.success(
+      relativePath: 'Download/AIPIN/logs/$filename',
+      lastUpdatedAt: DateTime.utc(2026, 9, 1, 12),
+    );
+  }
+
+  void release() {
+    if (!_release.isCompleted) {
+      _release.complete();
+    }
+  }
+}
+
 class _MirrorCall {
-  const _MirrorCall({required this.sourcePath, required this.filename});
+  const _MirrorCall({
+    required this.sourcePath,
+    required this.filename,
+    required this.requestPermission,
+    this.contents,
+  });
 
   final String sourcePath;
   final String filename;
+  final bool requestPermission;
+  final String? contents;
 }
