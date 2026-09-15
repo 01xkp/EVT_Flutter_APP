@@ -13,7 +13,7 @@ import 'package:flutter/foundation.dart';
 /// of this source name is retained only for compatibility with the earlier
 /// EVT prototype; this controller does not execute the retired V1.5/V2 flow.
 class EvtLegacyAuthController extends ChangeNotifier
-    implements DevicePermissionGate {
+    implements DevicePermissionGate, DeviceUnbindPermissionGate {
   EvtLegacyAuthController({
     // Kept as source-compatible constructor parameters for integrations that
     // still supplied the old local permission-TTL settings. V1.6 defines the
@@ -42,6 +42,7 @@ class EvtLegacyAuthController extends ChangeNotifier
   EvtLegacySecurityAction? _activeAction;
   bool _unbindRecoveryPending;
   int _operation = 0;
+  int? _authorizedUnbindOperation;
   bool _isDisposed = false;
 
   DeviceAuthState get state => _state;
@@ -62,6 +63,13 @@ class EvtLegacyAuthController extends ChangeNotifier
   bool get hasUnbindRecoveryPending => _unbindRecoveryPending;
   bool get isAuthenticated =>
       !_isDisposed && _state == DeviceAuthState.authenticated;
+
+  @override
+  bool get allowsPendingUnbind =>
+      !_isDisposed &&
+      _state == DeviceAuthState.authenticating &&
+      _activeAction == EvtLegacySecurityAction.unbind &&
+      _authorizedUnbindOperation == _operation;
 
   @override
   bool allows(DevicePermission permission) {
@@ -214,7 +222,21 @@ class EvtLegacyAuthController extends ChangeNotifier
     if (recovery && !_unbindRecoveryPending) {
       throw const EvtLegacyAuthenticationException('当前没有待恢复的解绑操作。');
     }
+    // Validate before revoking permissions or retaining recovery intent: a
+    // malformed local value has never reached firmware and cannot be pending.
+    final request = EvtLegacySecurityRequest(
+      action: action,
+      securityCode: securityCode,
+      recovery: recovery,
+    );
+    final beganAuthenticated = isAuthenticated;
     final operation = ++_operation;
+    _authorizedUnbindOperation =
+        action == EvtLegacySecurityAction.unbind &&
+            !recovery &&
+            beganAuthenticated
+        ? operation
+        : null;
     _logInfo(
       'legacy_authentication_requested',
       action: action,
@@ -251,13 +273,7 @@ class EvtLegacyAuthController extends ChangeNotifier
         // a disconnect cannot safely be interpreted as a rollback.
         _unbindRecoveryPending = true;
       }
-      var succeeded = await gateway.executeEvtLegacySecurity(
-        EvtLegacySecurityRequest(
-          action: action,
-          securityCode: securityCode,
-          recovery: recovery,
-        ),
-      );
+      var succeeded = await gateway.executeEvtLegacySecurity(request);
       _requireCurrentOperation(operation);
       if (!succeeded) {
         _logWarning(

@@ -21,6 +21,10 @@ typedef EvtStreamTerminalMatcher = bool Function(EvtFrame frame);
 /// cannot become stale in an await gap between the check and the write.
 typedef EvtCommandWriteAdmission = void Function(EvtCommandRequest request);
 
+/// Clears transport-owned partial response bytes after an attempt expires,
+/// synchronously before the client admits a retry or the next queued command.
+typedef EvtCommandResponseTimeout = void Function(EvtCommandRequest request);
+
 class EvtCommandRequest {
   const EvtCommandRequest({
     required this.command,
@@ -79,11 +83,13 @@ class EvtCommandClient {
     required this._codec,
     required Stream<Uint8List> responses,
     this._beforeWrite,
+    this._onResponseTimeout,
     SafeAppLogger? logger,
   }) : _logger = logger ?? const DebugSafeAppLogger(scope: 'CMD') {
     _responseSubscription = responses.listen(
       _onBytes,
       onError: _onTransportError,
+      onDone: _onTransportDone,
     );
     _logInfo(
       'evt_command_client_opened',
@@ -96,10 +102,13 @@ class EvtCommandClient {
   final BleTransport _transport;
   final EvtProtocolCodec _codec;
   final EvtCommandWriteAdmission? _beforeWrite;
+  final EvtCommandResponseTimeout? _onResponseTimeout;
   final SafeAppLogger _logger;
   final StreamController<EvtFrame> _events =
       StreamController<EvtFrame>.broadcast();
-  final EvtFrameAssembler _frameAssembler = EvtFrameAssembler();
+  final EvtFrameAssembler _frameAssembler = EvtFrameAssembler(
+    maxLengthField: EvtProtocolContract.maxResponseLengthField,
+  );
   StreamSubscription<Uint8List>? _responseSubscription;
   Future<void> _queue = Future<void>.value();
   _PendingRequest? _pending;
@@ -195,6 +204,7 @@ class EvtCommandClient {
     }
     late final StreamController<EvtFrame> controller;
     _PendingStreamingCommand? active;
+    var cancelled = false;
     controller = StreamController<EvtFrame>(
       onListen: () {
         _logInfo(
@@ -211,6 +221,12 @@ class EvtCommandClient {
           _PendingStreamingCommand? pending;
           final stopwatch = Stopwatch();
           try {
+            // A file transfer can be cancelled while an earlier request owns
+            // the queue. Never start device-side Notify traffic after its
+            // consumer has gone away.
+            if (cancelled) {
+              return;
+            }
             _ensureUsable();
             _admitWrite(request);
             stopwatch.start();
@@ -339,6 +355,7 @@ class EvtCommandClient {
         );
       },
       onCancel: () {
+        cancelled = true;
         final pending = active;
         if (pending != null && identical(_pending, pending)) {
           _logInfo(
@@ -471,6 +488,9 @@ class EvtCommandClient {
         );
         return EvtCommandResponse(frame: frame, attempts: attempt);
       } on TimeoutException {
+        // A truncated response from this attempt must not prefix a retry.
+        _frameAssembler.reset();
+        _onResponseTimeout?.call(request);
         lastError = EvtCommandTimeoutException(request.command, attempt);
         pending.waitLog.finish('failed', reason: '【回包监听】【超时】未在规定时间内收到匹配响应');
         _logWarning(
@@ -689,6 +709,12 @@ class EvtCommandClient {
     if (!_events.isClosed) {
       _events.add(frame);
     }
+  }
+
+  void _onTransportDone() {
+    // A closed receive channel cannot acknowledge another request. Treat it
+    // like a transport failure so queued writes cannot outlive the channel.
+    _onTransportError(StateError('设备响应通道已关闭。'), StackTrace.current);
   }
 
   void _onTransportError(Object error, StackTrace stackTrace) {

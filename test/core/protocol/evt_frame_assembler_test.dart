@@ -57,11 +57,39 @@ void main() {
     expect(result.frames.single, orderedEquals(valid));
   });
 
-  test('resynchronizes when a corrupt length precedes a valid frame', () {
+  test('preserves embedded frame bytes inside a split file payload', () {
+    final embedded = codec.encodeRequest(0x89, const [1]);
+    final payload = <int>[...embedded, 0x12, 0x34];
+    final fileFrame = codec.encodeRequest(0xA3, <int>[
+      0,
+      0,
+      0,
+      0,
+      payload.length,
+      0,
+      ...payload,
+    ]);
+    final assembler = EvtFrameAssembler();
+    // Receive the file header and a complete CRC-valid ED sequence that is
+    // file content, before the outer file frame's final bytes arrive.
+    final split = 10 + embedded.length;
+    final first = assembler.add(fileFrame.sublist(0, split));
+    expect(first.frames, isEmpty);
+    expect(first.bufferedByteCount, split);
+    final second = assembler.add(fileFrame.sublist(split));
+    expect(second.frames, hasLength(1));
+    expect(second.frames.single, orderedEquals(fileFrame));
+    expect(second.rejectedFrames, isEmpty);
+    expect(second.bufferedByteCount, 0);
+  });
+
+  test('resynchronizes when a length exceeds the configured limit', () {
     // Declared length is intentionally larger than the available prefix.
     final corrupt = <int>[0xED, 0xFF, 0x7F, 0x01, 0xAA];
     final valid = codec.encodeRequest(0x81, const [0x02]);
-    final result = EvtFrameAssembler().add(<int>[...corrupt, ...valid]);
+    final result = EvtFrameAssembler(
+      maxLengthField: 512,
+    ).add(<int>[...corrupt, ...valid]);
 
     expect(result.frames.single, orderedEquals(valid));
     expect(result.discardedByteCount, greaterThan(0));

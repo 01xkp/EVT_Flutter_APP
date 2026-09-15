@@ -9,6 +9,7 @@ import 'package:aipin/core/protocol/evt_command_client.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:aipin/features/device_session/application/session_controller.dart';
+import 'package:aipin/features/device_session/application/evt_legacy_auth_controller.dart';
 import 'package:aipin/features/device_session/domain/device_permission.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
@@ -20,6 +21,55 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../../support/fake_ble_transport.dart';
 
 void main() {
+  test(
+    'authenticated controller can dispatch normal unbind through session',
+    () async {
+      final profile = _profileWithDeviceInfo();
+      final transport = FakeBleTransport(
+        profile: profile,
+        services: _servicesFor(profile),
+      );
+      final auth = EvtLegacyAuthController();
+      final controller = SessionController(
+        transport,
+        profile,
+        EvtProtocolCodec(),
+        permissionGate: auth,
+      );
+      addTearDown(auth.dispose);
+      addTearDown(controller.dispose);
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      final authentication = auth.authenticate(
+        controller,
+        securityCode: '123456',
+      );
+      await _waitForCommand(transport, EvtProtocolCodec(), command: 0x09);
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa19,
+        EvtProtocolCodec().encodeRequest(0x89, const [1]),
+      );
+      await authentication;
+      expect(auth.isAuthenticated, isTrue);
+
+      final unbind = auth.unbind(controller, securityCode: '123456');
+      final outcome = expectLater(unbind, completes);
+      await _waitForCommand(
+        transport,
+        EvtProtocolCodec(),
+        command: 0x09,
+        minimumMatchingCommandCount: 2,
+      );
+      expect(auth.grantedPermissions, isEmpty);
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa19,
+        EvtProtocolCodec().encodeRequest(0x89, const [1]),
+      );
+      await outcome;
+      expect(auth.hasUnbindRecoveryPending, isFalse);
+      expect(auth.isAuthenticated, isFalse);
+    },
+  );
+
   for (final command in [0x22, 0x23]) {
     test(
       'late file command $command failure cannot close the new connection',
@@ -1492,6 +1542,111 @@ void main() {
       );
 
       expect((await status).recordConsent, isTrue);
+    },
+  );
+
+  test(
+    'status retry clears only the timed-out characteristic partial frame',
+    () async {
+      final profile = _profileWithAuthoritativeStatusEndpoints();
+      final codec = EvtProtocolCodec();
+      final transport = FakeBleTransport(
+        profile: profile,
+        deferRead: true,
+        services: _servicesFor(profile),
+      );
+      final controller = SessionController(transport, profile, codec);
+      addTearDown(controller.dispose);
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await _completeAuthenticatedSession(controller, transport);
+
+      final status = controller.readStatus();
+      final outcome = expectLater(
+        status.then((value) => value.recordConsent),
+        completion(isTrue),
+      );
+      await _waitForCommand(transport, codec, command: 0x06);
+      transport.emitSubscriptionBytesForCharacteristic(_fa16, [
+        0xED,
+        100,
+        0,
+        0x86,
+      ]);
+      // An unrelated characteristic's legitimate split event must survive.
+      final battery = codec.encodeRequest(0x91, [73, 1, 1]);
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fb11,
+        battery.sublist(0, 4),
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 2050));
+      await _waitForCommand(
+        transport,
+        codec,
+        command: 0x06,
+        minimumMatchingCommandCount: 2,
+      );
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa16,
+        codec.encodeRequest(0x86, [1, 0, 5, 0, 0, 0, 1, 0]),
+      );
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fb11,
+        battery.sublist(4),
+      );
+      await outcome;
+      expect(controller.state.deviceBattery?.percent, 73);
+      expect(
+        _writtenCommands(transport, codec).where((command) => command == 0x06),
+        hasLength(2),
+      );
+      expect(transport.disconnectedDeviceIds, isEmpty);
+    },
+  );
+
+  test(
+    'old status timeout cannot clear a reconnected characteristic partial frame',
+    () async {
+      final profile = _profileWithAuthoritativeStatusEndpoints();
+      final codec = EvtProtocolCodec();
+      final transport = _DeferredCommandWriteTransport(profile, 0x06);
+      final controller = SessionController(transport, profile, codec);
+      addTearDown(controller.dispose);
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await _completeAuthenticatedSession(controller, transport);
+      final oldStatus = controller.readStatus();
+      final oldOutcome = expectLater(oldStatus, throwsA(isA<StateError>()));
+      await transport.writeStarted.future;
+
+      await controller.disconnect();
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await _completeAuthenticatedSession(controller, transport);
+      final statusEvent = codec.encodeRequest(0x86, [
+        0x80,
+        0,
+        5,
+        0,
+        0,
+        0,
+        1,
+        0,
+      ]);
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa16,
+        statusEvent.sublist(0, 5),
+      );
+      await Future<void>.delayed(Duration.zero);
+      transport.writeCompleted.completeError(
+        TimeoutException('old native write'),
+      );
+      await oldOutcome;
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa16,
+        statusEvent.sublist(5),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.state.deviceStatus?.recordConsent, isTrue);
+      expect(controller.state.isObservable, isTrue);
     },
   );
 

@@ -168,6 +168,45 @@ void main() {
     );
   });
 
+  test('normal unbind admission expires on connection loss', () async {
+    final controller = EvtLegacyAuthController();
+    addTearDown(controller.dispose);
+    await controller.authenticate(_SecurityGateway(), securityCode: '123456');
+    final gateway = _DeferredUnbindGateway();
+
+    final unbind = controller.unbind(gateway, securityCode: '123456');
+    final outcome = expectLater(unbind, throwsA(isA<StateError>()));
+    await gateway.started.future;
+    expect(controller.allowsPendingUnbind, isTrue);
+    expect(controller.grantedPermissions, isEmpty);
+
+    controller.revokeForConnectionLoss();
+    expect(controller.allowsPendingUnbind, isFalse);
+    gateway.result.complete(true);
+    await outcome;
+    expect(controller.hasUnbindRecoveryPending, isTrue);
+  });
+
+  test(
+    'invalid local unbind code does not invent a pending device clear',
+    () async {
+      final controller = EvtLegacyAuthController();
+      addTearDown(controller.dispose);
+      final gateway = _SecurityGateway();
+      await controller.authenticate(gateway, securityCode: '123456');
+
+      await expectLater(
+        controller.unbind(gateway, securityCode: 'invalid'),
+        throwsA(isA<FormatException>()),
+      );
+
+      expect(gateway.requests, hasLength(1));
+      expect(controller.isAuthenticated, isTrue);
+      expect(controller.hasUnbindRecoveryPending, isFalse);
+      expect(controller.allowsPendingUnbind, isFalse);
+    },
+  );
+
   test(
     'bind switches its transient action to AUTH after device confirmation',
     () async {

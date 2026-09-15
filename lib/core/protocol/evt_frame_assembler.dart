@@ -84,16 +84,13 @@ class EvtFrameAssembler {
 
       final totalLength = declaredLength + 3;
       if (_buffer.length < totalLength) {
-        // A corrupt length can otherwise hold the parser forever.  If a
-        // later, fully available CRC-valid frame is already in the buffer,
-        // discard the incomplete prefix and resynchronize at that frame.
-        final recoverableHead = _findValidFrameStart(start: 1);
-        if (recoverableHead == null) {
-          break;
-        }
-        discardedByteCount += recoverableHead;
-        _buffer.removeRange(0, recoverableHead);
-        continue;
+        // FileData is arbitrary binary content and can itself contain an
+        // entire CRC-valid ED frame. Honor the outer length until its CRC
+        // can be checked; searching inside a partial payload corrupts files
+        // and can misroute file bytes as an authentication/state response.
+        // Impossible lengths are rejected above using maxLengthField. A
+        // stalled partial frame is discarded when its connection is reset.
+        break;
       }
 
       final candidate = Uint8List.fromList(_buffer.sublist(0, totalLength));
@@ -121,30 +118,6 @@ class EvtFrameAssembler {
   /// Clears an incomplete frame.  Call this when a GATT session is closed so
   /// bytes from an old connection can never prefix a new connection's frame.
   void reset() => _buffer.clear();
-
-  int? _findValidFrameStart({required int start}) {
-    for (var index = start; index <= _buffer.length - 6; index += 1) {
-      if (_buffer[index] != head || index + 3 > _buffer.length) {
-        continue;
-      }
-      final declaredLength = _buffer[index + 1] | (_buffer[index + 2] << 8);
-      if (declaredLength < minimumLengthField ||
-          declaredLength > maxLengthField) {
-        continue;
-      }
-      final totalLength = declaredLength + 3;
-      if (index + totalLength > _buffer.length) {
-        continue;
-      }
-      final candidate = Uint8List.fromList(
-        _buffer.sublist(index, index + totalLength),
-      );
-      if (_hasValidCrc(candidate, declaredLength)) {
-        return index;
-      }
-    }
-    return null;
-  }
 
   static bool _hasValidCrc(Uint8List frame, int declaredLength) {
     final contentEnd = 4 + declaredLength - minimumLengthField;

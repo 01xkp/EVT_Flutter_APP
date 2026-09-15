@@ -39,7 +39,7 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
   final _progress = <String, DeviceFileImportProgress>{};
   final _importing = <String>{};
   String? _error;
-  var _loading = true;
+  var _loading = false;
 
   @override
   void initState() {
@@ -61,7 +61,9 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
             ),
           IconButton(
             tooltip: '刷新文件列表',
-            onPressed: _loading ? null : () => unawaited(_load()),
+            onPressed: _loading || _importing.isNotEmpty
+                ? null
+                : () => unawaited(_load()),
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -100,7 +102,9 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
                             file: file,
                             progress: _progress[file.name],
                             isImporting: _importing.contains(file.name),
-                            onImport: () => unawaited(_import(file)),
+                            onImport: _loading || _importing.isNotEmpty
+                                ? null
+                                : () => unawaited(_import(file)),
                           );
                         },
                       ),
@@ -110,13 +114,15 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
   }
 
   Future<void> _load() async {
-    if (mounted) setState(() => _loading = true);
+    if (!mounted || _loading || _importing.isNotEmpty) return;
+    setState(() => _loading = true);
     try {
       final loaded = <DeviceFile>[];
       final seenFileSlots = <String>{};
       var offset = 0;
       while (true) {
         final page = await widget.onListFiles(offset: offset, pageSize: 20);
+        if (!mounted) return;
         if (page.isEmpty) break;
         for (final file in page) {
           if (!seenFileSlots.add(file.nameSlot.join(','))) {
@@ -149,7 +155,9 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
   }
 
   Future<void> _import(DeviceFile file) async {
-    if (_importing.contains(file.name)) return;
+    // V1.6 permits one active file transfer per connection. Reserve the
+    // browser before awaiting local checkpoint or BLE work.
+    if (!mounted || _loading || _importing.isNotEmpty) return;
     setState(() {
       _importing.add(file.name);
       _progress.remove(file.name);
@@ -194,7 +202,7 @@ class _DeviceFileTile extends StatelessWidget {
   final DeviceFile file;
   final DeviceFileImportProgress? progress;
   final bool isImporting;
-  final VoidCallback onImport;
+  final VoidCallback? onImport;
 
   @override
   Widget build(BuildContext context) {

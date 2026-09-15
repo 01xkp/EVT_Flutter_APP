@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:aipin/features/device_session/presentation/device_file_browser_page.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
 import 'package:aipin/features/device_session/domain/device_file_import_progress.dart';
@@ -6,6 +8,77 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'serializes imports and list refresh while a transfer is active',
+    (tester) async {
+      final pending = Completer<LocalRecording>();
+      final imported = <String>[];
+      var listCalls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DeviceFileBrowserPage(
+            onListFiles: ({required offset, required pageSize}) async {
+              listCalls++;
+              return offset == 0
+                  ? const [
+                      DeviceFile(name: 'first.ogg', nameSlot: [1], length: 10),
+                      DeviceFile(name: 'second.ogg', nameSlot: [2], length: 10),
+                    ]
+                  : const [];
+            },
+            onImport: (file, {onProgress}) {
+              imported.add(file.name);
+              return pending.future;
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('保存到 App').first);
+      await tester.pump();
+      await tester.tap(find.text('保存到 App'));
+      await tester.tap(find.byTooltip('刷新文件列表'));
+      await tester
+          .widget<RefreshIndicator>(find.byType(RefreshIndicator))
+          .onRefresh();
+      await tester.pump();
+      expect(imported, ['first.ogg']);
+      expect(listCalls, 2);
+      pending.completeError(StateError('connection lost'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widgetList<OutlinedButton>(find.byType(OutlinedButton))
+            .every((button) => button.onPressed != null),
+        isTrue,
+      );
+    },
+  );
+
+  testWidgets('stops requesting file pages after the browser is disposed', (
+    tester,
+  ) async {
+    final page = Completer<List<DeviceFile>>();
+    var calls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceFileBrowserPage(
+          onListFiles: ({required offset, required pageSize}) {
+            calls++;
+            return calls == 1 ? page.future : Future.value(const []);
+          },
+          onImport: (_, {onProgress}) => throw UnimplementedError(),
+        ),
+      ),
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    page.complete(const [
+      DeviceFile(name: 'first.ogg', nameSlot: [1], length: 10),
+    ]);
+    await tester.pump();
+    expect(calls, 1);
+  });
+
   testWidgets('loads device files and imports a selected file', (tester) async {
     var calls = 0;
     var imported = false;

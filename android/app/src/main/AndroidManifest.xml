@@ -12,13 +12,13 @@
         android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
     <!--
-         RxAndroidBle contributes `neverForLocation` on this permission. EVT
-         discovery must receive the complete system scan result set, so remove
-         the dependency attribute during manifest merge.
+         Keep this consistent with AndroidBleScanPermissionPolicy: Android 12+
+         requests nearby-device access without location. Removing this flag
+         makes RxAndroidBle also require fine location and report UNAUTHORIZED.
     -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
-        tools:remove="android:usesPermissionFlags" />
+        android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission
         android:name="android.permission.ACCESS_FINE_LOCATION"

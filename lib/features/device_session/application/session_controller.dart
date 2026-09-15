@@ -86,6 +86,7 @@ class SessionController extends ChangeNotifier
   final Set<String> _subscribedEndpointKeys = <String>{};
   final Map<String, Future<void>> _subscriptionReadiness =
       <String, Future<void>>{};
+  final Map<String, EvtFrameAssembler> _notificationFrameAssemblers = {};
   StreamController<Uint8List>? _responseController;
   EvtCommandClient? _commandClient;
   DeviceProtocolRepository? _protocolRepository;
@@ -2092,6 +2093,17 @@ class SessionController extends ChangeNotifier
         responses: _responseController!.stream,
         logger: _commandLogger,
         beforeWrite: _admitEvtCommandWrite,
+        onResponseTimeout: (request) {
+          // Old native writes can finish after a reconnect. Their timeout
+          // must never discard bytes belonging to the replacement session.
+          if (!_isCurrentConnectionAttempt(connectionAttempt)) return;
+          final characteristic = request.writeCharacteristic;
+          if (characteristic.deviceId != candidate.connectionId) return;
+          final key =
+              '${characteristic.serviceUuid}|${characteristic.characteristicUuid}'
+                  .toUpperCase();
+          _notificationFrameAssemblers[key]?.reset();
+        },
       );
       _protocolRepository = DeviceProtocolRepository(
         deviceId: candidate.connectionId,
@@ -2816,7 +2828,10 @@ class SessionController extends ChangeNotifier
     // Native BLE values may split or coalesce EVT business frames. Keep one
     // assembler per characteristic so bytes from separate endpoints can
     // never be joined into a false frame.
-    final frameAssembler = EvtFrameAssembler();
+    final frameAssembler = EvtFrameAssembler(
+      maxLengthField: EvtProtocolContract.maxResponseLengthField,
+    );
+    _notificationFrameAssemblers[key.toUpperCase()] = frameAssembler;
     late final StreamSubscription<Uint8List> subscription;
     subscription = _transport
         .subscribe(_characteristic(session.candidate.connectionId, endpoint))
@@ -2912,6 +2927,7 @@ class SessionController extends ChangeNotifier
             }
             _subscribedEndpointKeys.remove(key);
             _subscriptionReadiness.remove(key);
+            _notificationFrameAssemblers.remove(key.toUpperCase());
             _notificationSubscriptions.remove(subscription);
             _logger.info(
               'notification_subscription_failed',
@@ -2942,6 +2958,7 @@ class SessionController extends ChangeNotifier
             }
             _subscribedEndpointKeys.remove(key);
             _subscriptionReadiness.remove(key);
+            _notificationFrameAssemblers.remove(key.toUpperCase());
             _notificationSubscriptions.remove(subscription);
             _logger.info(
               'notification_subscription_closed',
@@ -3035,6 +3052,7 @@ class SessionController extends ChangeNotifier
       }
       if (key != null && identical(_subscriptionReadiness[key], readiness)) {
         _subscriptionReadiness.remove(key);
+        _notificationFrameAssemblers.remove(key.toUpperCase());
         _subscribedEndpointKeys.remove(key);
       }
       if (subscription != null) {
@@ -3408,6 +3426,7 @@ class SessionController extends ChangeNotifier
   }
 
   Future<void> _cancelNotificationSubscriptions() async {
+    _notificationFrameAssemblers.clear();
     if (_notificationSubscriptions.isEmpty) {
       _subscribedEndpointKeys.clear();
       _subscriptionReadiness.clear();
@@ -3551,7 +3570,12 @@ class SessionController extends ChangeNotifier
         // and it grants no DevicePermission.
         if (request.content.first == EvtLegacySecurityAction.unbind.wireValue) {
           if (!request.allowUnauthenticatedUnbindRecovery) {
-            _requireDevicePermission(DevicePermission.status);
+            final gate = _permissionGate;
+            final pendingUnbindAllowed =
+                gate is DeviceUnbindPermissionGate && gate.allowsPendingUnbind;
+            if (!pendingUnbindAllowed) {
+              _requireDevicePermission(DevicePermission.status);
+            }
           }
         }
         return;
