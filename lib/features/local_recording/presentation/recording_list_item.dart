@@ -36,8 +36,6 @@ class RecordingListItem extends StatelessWidget {
           padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 6, 12),
           child: Row(
             children: [
-              const Icon(Icons.graphic_eq_outlined),
-              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -52,17 +50,21 @@ class RecordingListItem extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       _detail(),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      maxLines: 3,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
                 ),
               ),
+              if (onOpen != null)
+                TextButton(onPressed: onOpen, child: const Text('播放')),
               if (showActions && (canRename || canDeleteFromMenu))
                 PopupMenuButton<_RecordingAction>(
                   tooltip: '更多操作',
-                  icon: const Icon(Icons.more_horiz),
+                  child: const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text('管理'),
+                  ),
                   onSelected: (action) {
                     switch (action) {
                       case _RecordingAction.rename:
@@ -102,15 +104,15 @@ class RecordingListItem extends StatelessWidget {
     final created =
         '${createdAt.year.toString().padLeft(4, '0')}-${createdAt.month.toString().padLeft(2, '0')}-${createdAt.day.toString().padLeft(2, '0')} ${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}';
     if (!recording.isPlayable) {
-      return '$created · ${_statusLabel()} · ${recording.failureReason ?? '录音不可播放'}';
+      return '保存于 $created · ${_statusLabel()} · ${recording.failureReason ?? '录音不可播放'}';
     }
     final duration = recording.duration!;
     if (duration == Duration.zero) {
-      return '$created · 时长未知 · ${_formatSize(recording.sizeBytes!)} · ${_statusLabel()}';
+      return '保存于 $created · 时长未知 · ${_formatSize(recording.sizeBytes!)} · ${_statusLabel()}';
     }
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$created · ${duration.inHours.toString().padLeft(2, '0')}:$minutes:$seconds · ${_formatSize(recording.sizeBytes!)} · ${_statusLabel()}';
+    return '保存于 $created · ${duration.inHours.toString().padLeft(2, '0')}:$minutes:$seconds · ${_formatSize(recording.sizeBytes!)} · ${_statusLabel()}';
   }
 
   String _statusLabel() => switch (recording.status) {

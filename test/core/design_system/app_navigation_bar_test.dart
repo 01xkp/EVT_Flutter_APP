@@ -18,7 +18,7 @@ void main() {
       ),
     );
 
-    await tester.tap(find.text('设备活动'));
+    await tester.tap(find.text('检查记录'));
 
     expect(selected, AppDestination.records);
     expect(AppDestination.values, const [

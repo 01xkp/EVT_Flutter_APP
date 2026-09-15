@@ -11,6 +11,7 @@ import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway
 import 'package:aipin/features/device_session/presentation/device_status_view_model.dart';
 import 'package:aipin/features/device_session/presentation/session_failure_panel.dart';
 import 'package:flutter/material.dart';
+import 'package:aipin/core/design_system/widgets/app_text_action.dart';
 
 class DeviceDetailPage extends StatelessWidget {
   const DeviceDetailPage({
@@ -21,6 +22,7 @@ class DeviceDetailPage extends StatelessWidget {
     this.onOpenChecking,
     this.onOpenLogs,
     this.onOpenFiles,
+    this.onOpenSavedRecordings,
     this.onRecordAction,
     this.onRefreshDeviceDetails,
     this.onRecordConsentChanged,
@@ -43,6 +45,7 @@ class DeviceDetailPage extends StatelessWidget {
   final VoidCallback? onOpenChecking;
   final VoidCallback? onOpenLogs;
   final VoidCallback? onOpenFiles;
+  final VoidCallback? onOpenSavedRecordings;
   final ValueChanged<int>? onRecordAction;
   final VoidCallback? onRefreshDeviceDetails;
   final ValueChanged<bool>? onRecordConsentChanged;
@@ -62,148 +65,128 @@ class DeviceDetailPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = DeviceStatusViewModel.from(state);
     final deviceName = state.session?.candidate.name ?? '我的设备';
+    final authentication = _AuthenticationPanel(
+      state: authState,
+      authenticatingAction: authenticatingAction,
+      onAuthenticate: onAuthenticate,
+      onBind: onBind,
+      onUnbind: onUnbind,
+      onUnbindRecovery: onUnbindRecovery,
+    );
     return Scaffold(
       appBar: AppBar(
         title: const Text('设备详情'),
-        actions: [
-          IconButton(
-            tooltip: '实时日志',
-            onPressed: onOpenLogs,
-            icon: const Icon(Icons.receipt_long_outlined),
-          ),
-        ],
+        actions: [AppTextAction(label: '实时日志', onPressed: onOpenLogs)],
       ),
       body: SafeArea(
         top: false,
-        child: LayoutBuilder(
-          builder: (context, constraints) => Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: constraints.maxWidth > 600 ? 640 : double.infinity,
-              ),
-              child: ListView(
-                padding: const EdgeInsets.all(20),
-                children: [
-                  Text(
-                    deviceName,
-                    style: Theme.of(context).textTheme.titleLarge,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Text(deviceName, style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                AppSurfaceCard(
+                  child: Column(
+                    children: [
+                      _DetailRow(label: '连接状态', value: status.connectionLabel),
+                      const SizedBox(height: 8),
+                      _DetailRow(label: '设备录音状态', value: status.recordingLabel),
+                      if (authState == DeviceAuthState.authenticated) ...[
+                        const SizedBox(height: 8),
+                        const _DetailRow(label: '安全码认证', value: '已认证'),
+                      ],
+                    ],
                   ),
-                  const SizedBox(height: 16),
+                ),
+                if (state.failure case final failure?) ...[
+                  const SizedBox(height: 12),
+                  SessionFailurePanel(
+                    failure: failure,
+                    lastSnapshot: state.latestSnapshot,
+                    onRetry: onRetry,
+                  ),
+                ],
+                if (state.isAuthenticationReady &&
+                    authState != DeviceAuthState.authenticated) ...[
+                  const SizedBox(height: 12),
+                  authentication,
+                ],
+                if (state.isObservable) ...[
+                  const SizedBox(height: 12),
+                  _RecordingControls(
+                    state: state,
+                    onAction: onRecordAction,
+                    onOpenFiles: onOpenFiles,
+                    canOpenFiles: canOpenFiles,
+                    canControlRecording: canControlRecording,
+                    canConfigure: canConfigureDevice,
+                    onRecordConsentChanged: onRecordConsentChanged,
+                  ),
+                ],
+                if (onOpenSavedRecordings != null) ...[
+                  const SizedBox(height: 8),
+                  AppButton.secondary(
+                    label: '已保存录音',
+                    onPressed: onOpenSavedRecordings,
+                  ),
+                ],
+                if (state.isObservable) ...[
+                  const SizedBox(height: 12),
+                  _DeviceStatusPanel(
+                    state: state,
+                    canConfigure: canConfigureDevice,
+                    canRefresh: canRefreshDeviceDetails,
+                    onRefresh: onRefreshDeviceDetails,
+                    onPrivacyDurationChanged: onPrivacyDurationChanged,
+                  ),
+                ],
+                if (state.deviceInfo case final info?) ...[
+                  const SizedBox(height: 12),
                   AppSurfaceCard(
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _DetailRow(
-                          label: '连接状态',
-                          value: status.connectionLabel,
-                        ),
-                        const Divider(height: 24),
-                        _DetailRow(
-                          label: '设备录音状态',
-                          value: status.recordingLabel,
-                        ),
-                        if (status.batteryLabel case final battery?) ...[
-                          const Divider(height: 24),
-                          _DetailRow(label: '电量', value: '$battery%'),
-                        ],
-                        if (status.updatedAt case final updatedAt?) ...[
-                          const Divider(height: 24),
+                        _DetailRow(label: '设备编号', value: info.deviceCode),
+                        const SizedBox(height: 8),
+                        _DetailRow(label: '固件版本', value: info.softwareVersion),
+                        if (status.updatedAt case final time?) ...[
+                          const SizedBox(height: 8),
                           _DetailRow(
-                            label: '最近更新',
-                            value: TimeOfDay.fromDateTime(
-                              updatedAt,
-                            ).format(context),
+                            label: '状态采样时间',
+                            value:
+                                '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:${time.second.toString().padLeft(2, '0')}',
                           ),
                         ],
                       ],
                     ),
                   ),
-                  if (state.deviceInfo case final info?) ...[
-                    const SizedBox(height: 16),
-                    AppSurfaceCard(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _DetailRow(label: '设备编号', value: info.deviceCode),
-                          const Divider(height: 24),
-                          _DetailRow(
-                            label: '固件版本',
-                            value: info.softwareVersion,
-                          ),
-                          const Divider(height: 24),
-                          _DetailRow(
-                            label: '存储空间',
-                            value:
-                                '${info.remainDiskSpaceMb}/${info.totalDiskSpaceMb} MB',
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  if (state.failure case final failure?) ...[
-                    const SizedBox(height: 16),
-                    SessionFailurePanel(
-                      failure: failure,
-                      lastSnapshot: state.latestSnapshot,
-                      onRetry: onRetry,
-                    ),
-                  ],
-                  if (state.isAuthenticationReady) ...[
-                    const SizedBox(height: 16),
-                    _AuthenticationPanel(
-                      state: authState,
-                      authenticatingAction: authenticatingAction,
-                      onAuthenticate: onAuthenticate,
-                      onBind: onBind,
-                      onUnbind: onUnbind,
-                      onUnbindRecovery: onUnbindRecovery,
-                    ),
-                  ],
-                  if (state.isObservable) ...[
-                    const SizedBox(height: 16),
-                    _DeviceStatusPanel(
-                      state: state,
-                      canConfigure: canConfigureDevice,
-                      canRefresh: canRefreshDeviceDetails,
-                      onRefresh: onRefreshDeviceDetails,
-                      onRecordConsentChanged: onRecordConsentChanged,
-                      onPrivacyDurationChanged: onPrivacyDurationChanged,
-                    ),
-                    const SizedBox(height: 16),
-                    _RecordingControls(
-                      state: state,
-                      onAction: onRecordAction,
-                      onOpenFiles: onOpenFiles,
-                      canOpenFiles: canOpenFiles,
-                      canControlRecording: canControlRecording,
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  if (state.isObservable) ...[
-                    const SizedBox(height: 8),
-                    AppButton.secondary(
-                      label: '设备检查',
-                      onPressed: onOpenChecking,
-                      icon: Icons.fact_check_outlined,
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  if (status.canReconnect)
-                    AppButton.primary(
-                      label: '重新连接',
-                      onPressed: onRetry,
-                      icon: Icons.refresh,
-                    )
-                  else
-                    AppButton.secondary(
-                      label: '断开设备',
-                      onPressed: onDisconnect == null
-                          ? null
-                          : () => _confirmDisconnect(context),
-                      icon: Icons.bluetooth_disabled_outlined,
-                    ),
                 ],
-              ),
+                if (state.isObservable) ...[
+                  const SizedBox(height: 12),
+                  AppButton.secondary(label: '设备检查', onPressed: onOpenChecking),
+                  const Text('手动记录联调结果，可在首页的检查记录中查看。'),
+                ],
+                const SizedBox(height: 12),
+                if (status.canReconnect)
+                  AppButton.primary(label: '重新连接', onPressed: onRetry)
+                else
+                  AppButton.secondary(
+                    label: '断开设备',
+                    onPressed: onDisconnect == null
+                        ? null
+                        : () => _confirmDisconnect(context),
+                  ),
+                if (authState == DeviceAuthState.authenticated) ...[
+                  const SizedBox(height: 12),
+                  ExpansionTile(
+                    title: const Text('设备管理'),
+                    subtitle: const Text('解绑会清除设备数据'),
+                    children: [authentication],
+                  ),
+                ],
+              ],
             ),
           ),
         ),
@@ -230,7 +213,6 @@ class _DeviceStatusPanel extends StatelessWidget {
     required this.canConfigure,
     required this.canRefresh,
     this.onRefresh,
-    this.onRecordConsentChanged,
     this.onPrivacyDurationChanged,
   });
 
@@ -238,7 +220,6 @@ class _DeviceStatusPanel extends StatelessWidget {
   final bool canConfigure;
   final bool canRefresh;
   final VoidCallback? onRefresh;
-  final ValueChanged<bool>? onRecordConsentChanged;
   final ValueChanged<int>? onPrivacyDurationChanged;
 
   @override
@@ -247,7 +228,6 @@ class _DeviceStatusPanel extends StatelessWidget {
     final storage = state.deviceStorage;
     final status = state.deviceStatus;
     final privacyDuration = state.privacyDurationCode;
-    final canEditConsent = canConfigure && status != null;
     final canEditPrivacy =
         canConfigure &&
         privacyDuration != null &&
@@ -264,10 +244,10 @@ class _DeviceStatusPanel extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              IconButton(
+              AppTextAction(
+                label: '刷新状态',
                 tooltip: '刷新设备状态',
                 onPressed: canRefresh ? onRefresh : null,
-                icon: const Icon(Icons.refresh_outlined),
               ),
             ],
           ),
@@ -288,7 +268,7 @@ class _DeviceStatusPanel extends StatelessWidget {
           ),
           const Divider(height: 24),
           _DetailRow(
-            label: '设备文件',
+            label: '文件数量（上次）',
             value: state.fileCount == null ? '暂未读取' : '${state.fileCount} 个文件',
           ),
           const Divider(height: 24),
@@ -296,14 +276,6 @@ class _DeviceStatusPanel extends StatelessWidget {
           const Divider(height: 24),
           _DetailRow(label: '同步状态', value: _syncLabel(status)),
           const Divider(height: 24),
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('允许设备录音'),
-            value: status?.recordConsent ?? false,
-            onChanged: canEditConsent && onRecordConsentChanged != null
-                ? onRecordConsentChanged
-                : null,
-          ),
           const Divider(height: 24),
           PopupMenuButton<int>(
             tooltip: '默认隐私时长',
@@ -371,6 +343,8 @@ class _RecordingControls extends StatelessWidget {
     this.onOpenFiles,
     required this.canOpenFiles,
     required this.canControlRecording,
+    required this.canConfigure,
+    this.onRecordConsentChanged,
   });
 
   final SessionState state;
@@ -378,10 +352,15 @@ class _RecordingControls extends StatelessWidget {
   final VoidCallback? onOpenFiles;
   final bool canOpenFiles;
   final bool canControlRecording;
+  final bool canConfigure;
+  final ValueChanged<bool>? onRecordConsentChanged;
 
   @override
   Widget build(BuildContext context) {
     final snapshot = state.latestSnapshot;
+    final status = state.deviceStatus;
+    final canEditConsent =
+        canConfigure && status != null && !state.isRecordActionInFlight;
     final action = switch (snapshot?.state) {
       DeviceState.recording => (2, '暂停录音', Icons.pause_outlined),
       DeviceState.paused => (3, '继续录音', Icons.play_arrow_outlined),
@@ -392,16 +371,39 @@ class _RecordingControls extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text('设备录音', style: Theme.of(context).textTheme.titleMedium),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('允许设备录音'),
+            subtitle: Text(
+              status == null
+                  ? '暂未读取'
+                  : status.recordConsent
+                  ? '已允许'
+                  : '已关闭，开启后才能开始录音',
+            ),
+            value: status?.recordConsent ?? false,
+            onChanged: canEditConsent && onRecordConsentChanged != null
+                ? onRecordConsentChanged
+                : null,
+          ),
+
+          if (state.deviceStatus?.recordConsent == false)
+            const Text('请先开启“允许设备录音”。'),
+          if (state.deviceStatus?.privacy == true)
+            const Text('设备处于隐私模式，请先在设备端退出。'),
           const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
                 child: AppButton.primary(
                   label: action.$2,
-                  icon: action.$3,
+
                   onPressed:
                       state.isRecordActionInFlight ||
                           !canControlRecording ||
+                          (action.$1 != 2 &&
+                              (state.deviceStatus?.recordConsent == false ||
+                                  state.deviceStatus?.privacy == true)) ||
                           onAction == null
                       ? null
                       : () => onAction!(action.$1),
@@ -413,7 +415,7 @@ class _RecordingControls extends StatelessWidget {
                 Expanded(
                   child: AppButton.secondary(
                     label: '结束录音',
-                    icon: Icons.stop_outlined,
+
                     onPressed:
                         state.isRecordActionInFlight ||
                             !canControlRecording ||
@@ -428,7 +430,7 @@ class _RecordingControls extends StatelessWidget {
           const SizedBox(height: 8),
           AppButton.secondary(
             label: '设备录音文件',
-            icon: Icons.folder_open_outlined,
+
             onPressed: canOpenFiles ? onOpenFiles : null,
           ),
           if (state.isRecordActionInFlight) ...[
@@ -481,6 +483,8 @@ class _AuthenticationPanel extends StatelessWidget {
           Text('设备认证（EVT）', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(label, style: Theme.of(context).textTheme.bodyMedium),
+          if (!authenticated && !inFlight && !recoveryPending)
+            const Text('已绑定设备选择“认证设备”；新设备选择“首次绑定设备”。'),
           if (inFlight &&
               authenticatingAction == EvtLegacySecurityAction.bind) ...[
             const SizedBox(height: 8),
@@ -496,22 +500,21 @@ class _AuthenticationPanel extends StatelessWidget {
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
-            AppButton.secondary(
-              label: '恢复解绑',
-              icon: Icons.restore_outlined,
-              onPressed: onUnbindRecovery,
-            ),
+            AppButton.secondary(label: '恢复解绑', onPressed: onUnbindRecovery),
+          ] else if (inFlight) ...[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(),
           ] else if (!authenticated) ...[
             const SizedBox(height: 12),
             AppButton.secondary(
               label: inFlight ? inFlightLabel : '认证设备',
-              icon: Icons.verified_user_outlined,
+
               onPressed: inFlight ? null : onAuthenticate,
             ),
             const SizedBox(height: 8),
             AppButton.secondary(
               label: inFlight ? inFlightLabel : '首次绑定设备',
-              icon: Icons.link_outlined,
+
               onPressed: inFlight ? null : onBind,
             ),
           ],
@@ -519,7 +522,7 @@ class _AuthenticationPanel extends StatelessWidget {
             const SizedBox(height: 12),
             AppButton.destructive(
               label: '解绑设备',
-              icon: Icons.link_off_outlined,
+
               onPressed: onUnbind == null
                   ? null
                   : () => unawaited(_confirmUnbind(context)),
@@ -558,7 +561,13 @@ class _DetailRow extends StatelessWidget {
           child: Text(label, style: Theme.of(context).textTheme.bodyMedium),
         ),
         const SizedBox(width: 16),
-        Text(value, style: Theme.of(context).textTheme.titleSmall),
+        Flexible(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+        ),
       ],
     );
   }

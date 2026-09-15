@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:aipin/core/design_system/widgets/app_text_action.dart';
 
 import '../data/file_app_log_store.dart';
 import '../domain/app_log_entry.dart';
@@ -16,6 +17,7 @@ class DeviceLogPage extends StatefulWidget {
 class _DeviceLogPageState extends State<DeviceLogPage> {
   final _scrollController = ScrollController();
   var _paused = false;
+  var _exporting = false;
   List<AppLogEntry> entries = const [];
 
   @override
@@ -47,29 +49,39 @@ class _DeviceLogPageState extends State<DeviceLogPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('实时日志'),
-        actions: [
-          IconButton(
-            tooltip: _paused ? '继续跟随' : '暂停跟随',
-            onPressed: () => setState(() => _paused = !_paused),
-            icon: Icon(_paused ? Icons.play_arrow : Icons.pause),
-          ),
-          IconButton(
-            tooltip: '清空视图',
-            onPressed: () => widget.store.clearView(),
-            icon: const Icon(Icons.clear_all),
-          ),
-          IconButton(
-            tooltip: '导出日志',
-            onPressed: _export,
-            icon: const Icon(Icons.ios_share),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('实时日志')),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Wrap(
+            spacing: 8,
+            children: [
+              AppTextAction(
+                label: _paused ? '继续跟随' : '暂停跟随',
+                onPressed: () {
+                  setState(() => _paused = !_paused);
+                  if (!_paused) _onStoreChanged();
+                },
+              ),
+              AppTextAction(
+                label: '清空视图',
+                onPressed: () {
+                  widget.store.clearView();
+                  setState(() => entries = widget.store.entries);
+                },
+              ),
+              AppTextAction(
+                label: _exporting ? '正在导出' : '导出日志',
+                onPressed: _exporting ? null : _export,
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              _paused ? '已暂停显示，日志仍持续记录。清空视图不会删除日志文件。' : '实时显示连接、认证、录音、传输和播放事件。',
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
@@ -101,9 +113,21 @@ class _DeviceLogPageState extends State<DeviceLogPage> {
   }
 
   Future<void> _export() async {
-    final path = await widget.store.exportPath();
-    if (path != null) {
+    if (_exporting) return;
+    setState(() => _exporting = true);
+    try {
+      final path = await widget.store.exportPath();
+      if (!mounted) return;
+      if (path == null) throw StateError('No log file');
       await widget.onExport?.call(path);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('日志导出失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _exporting = false);
     }
   }
 

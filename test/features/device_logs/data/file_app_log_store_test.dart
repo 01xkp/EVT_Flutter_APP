@@ -41,7 +41,7 @@ void main() {
 
     expect(store.entries, hasLength(2));
     final path = await store.exportPath();
-    expect(path, endsWith('logs${Platform.pathSeparator}aipin-2026-09-01.log'));
+    expect(path, endsWith('aipin-2026-09-01-12-00-00.log'));
     final content = await File(path!).readAsString();
     expect(content, contains(' | INFO | BLE | - | - | - | connected | - | -'));
     expect(content, isNot(contains('AA:BB:CC:DD')));
@@ -203,7 +203,10 @@ void main() {
       expect(await firstDay.readAsString(), contains('before_midnight'));
       expect(await firstDay.readAsString(), isNot(contains('after_midnight')));
       expect(await secondDay.readAsString(), contains('after_midnight'));
-      expect(await store.exportPath(), secondDay.path);
+      expect(
+        await store.exportPath(),
+        endsWith('aipin-2026-09-02-00-00-00.log'),
+      );
 
       await store.close();
       store.dispose();
@@ -289,33 +292,98 @@ void main() {
     },
   );
 
+  test('exports a timestamped snapshot after rapid log events', () async {
+    final sink = _FakePublicDiagnosticLogSink();
+    final store = FileAppLogStore(
+      supportDirectoryProvider: () async => root,
+      enabled: true,
+      publicDiagnosticLogSink: sink,
+      clock: () => DateTime.utc(2026, 9, 1, 12),
+    );
+
+    store.info('first');
+    store.info('second');
+    await store.exportPath();
+
+    expect(sink.calls, hasLength(1));
+    expect(sink.calls.single.filename, 'aipin-2026-09-01-12-00-00.log');
+    expect(
+      await File(sink.calls.single.sourcePath).readAsString(),
+      contains('second'),
+    );
+    expect(
+      store.publicMirrorStatus?.relativePath,
+      'Download/AIPIN/logs/aipin-2026-09-01-12-00-00.log',
+    );
+    await store.close();
+    store.dispose();
+  });
+
   test(
-    'exports the completed canonical daily file after rapid log events',
+    'repeated exports use seconds and preserve earlier snapshot contents',
     () async {
+      var now = DateTime(2026, 9, 15, 17, 25, 49);
       final sink = _FakePublicDiagnosticLogSink();
       final store = FileAppLogStore(
         supportDirectoryProvider: () async => root,
-        enabled: true,
+        clock: () => now,
         publicDiagnosticLogSink: sink,
-        clock: () => DateTime.utc(2026, 9, 1, 12),
       );
+      addTearDown(store.dispose);
+      store.info('first_export');
+      final first = await store.exportPath();
+      store.info('second_export');
+      final second = await store.exportPath();
+      now = now.add(const Duration(seconds: 1));
+      final third = await store.exportPath();
 
-      store.info('first');
-      store.info('second');
-      await store.exportPath();
-
-      expect(sink.calls, hasLength(1));
-      expect(sink.calls.single.filename, 'aipin-2026-09-01.log');
+      expect(first, endsWith('aipin-2026-09-15-17-25-49.log'));
+      expect(second, endsWith('aipin-2026-09-15-17-25-49-01.log'));
+      expect(third, endsWith('aipin-2026-09-15-17-25-50.log'));
       expect(
-        await File(sink.calls.single.sourcePath).readAsString(),
-        contains('second'),
+        await File(first!).readAsString(),
+        isNot(contains('second_export')),
       );
+      expect(await File(second!).readAsString(), contains('second_export'));
+      expect(sink.calls.map((call) => call.filename).toSet(), hasLength(3));
+      expect(sink.calls.last.sourcePath, third);
+      expect(store.currentFilePath, endsWith('aipin-2026-09-15.log'));
+    },
+  );
+
+  test(
+    'concurrent exports stay unique after pruning and reopening the store',
+    () async {
+      FileAppLogStore createStore() => FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        clock: () => DateTime(2026, 9, 15, 17, 25, 49),
+        keepFiles: 2,
+      );
+      final store = createStore();
+      store.info('retained_event');
+      final paths = await Future.wait(
+        List.generate(10, (_) => store.exportPath()),
+      );
+      expect(paths.toSet(), hasLength(10));
+      expect(paths.last, endsWith('-09.log'));
       expect(
-        store.publicMirrorStatus?.relativePath,
-        'Download/AIPIN/logs/aipin-2026-09-01.log',
+        await File(paths.last!).readAsString(),
+        contains('retained_event'),
+      );
+      final exports = File(paths.last!).parent;
+      expect(await exports.list().toList(), hasLength(2));
+      expect(
+        await File(store.currentFilePath!).readAsString(),
+        contains('retained_event'),
       );
       await store.close();
       store.dispose();
+
+      final reopened = createStore();
+      addTearDown(reopened.dispose);
+      final next = await reopened.exportPath();
+      expect(next, endsWith('-10.log'));
+      expect(await File(next!).readAsString(), contains('retained_event'));
     },
   );
 

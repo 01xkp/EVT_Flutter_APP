@@ -160,6 +160,9 @@ class _RecordObservationSheetState extends State<RecordObservationSheet> {
     } catch (_) {
       if (mounted) {
         setState(() => _isSaving = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('保存失败，请重试。')));
       }
     }
   }

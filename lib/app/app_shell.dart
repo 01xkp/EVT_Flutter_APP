@@ -227,6 +227,21 @@ class _AppShellState extends ConsumerState<AppShell>
                 device: _deviceSummary(),
                 onConnectDevice: _openConnectionJourney,
                 onOpenSettings: _openSettings,
+                onOpenSavedRecordings: () =>
+                    unawaited(_openSavedDeviceRecordings()),
+                onOpenLogs: () => unawaited(_openDeviceLogs()),
+                onOpenFiles: () {
+                  if (session == null) {
+                    _openConnectionJourney();
+                  } else if (_deviceAuthController?.allows(
+                        DevicePermission.files,
+                      ) !=
+                      true) {
+                    _openSessionDashboard(session);
+                  } else {
+                    unawaited(_openDeviceFiles(session));
+                  }
+                },
                 onOpenDevice: session == null
                     ? null
                     : () => _openSessionDashboard(session),
@@ -571,6 +586,8 @@ class _AppShellState extends ConsumerState<AppShell>
               onOpenChecking: () => _openObservation(session.state),
               onOpenLogs: _openDeviceLogs,
               onOpenFiles: () => unawaited(_openDeviceFiles(session)),
+              onOpenSavedRecordings: () =>
+                  unawaited(_openSavedDeviceRecordings()),
               onRecordAction: (action) =>
                   unawaited(_setHardwareRecordAction(session, action)),
               onRefreshDeviceDetails: () =>
@@ -1180,7 +1197,9 @@ class _AppShellState extends ConsumerState<AppShell>
       return;
     }
     try {
-      await session.refreshDeviceDetails(const {DevicePermission.status});
+      await session.refreshDeviceDetails(
+        _deviceAuthController!.grantedPermissions,
+      );
     } catch (_) {
       if (mounted) {
         AppToast.show(context, message: '设备状态刷新失败，请重试');
@@ -1241,7 +1260,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '认证设备',
-      message: '请输入该设备当前的 12 位十六进制安全码（每 2 位代表 1 个字节）。',
+      message: '请输入该设备当前的安全码。',
       confirmLabel: '开始认证',
     );
     if (code == null ||
@@ -1327,7 +1346,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '首次绑定设备',
-      message: '请输入待绑定的 12 位十六进制安全码。提交后请在 60 秒内短按设备按键确认。',
+      message: '请输入待绑定的安全码。提交后请在 60 秒内短按设备按键确认。',
       confirmLabel: '确认绑定',
     );
     if (code == null ||
@@ -1451,8 +1470,8 @@ class _AppShellState extends ConsumerState<AppShell>
       context,
       title: recovery ? '恢复解绑' : '解绑设备',
       message: recovery
-          ? '设备上一次解绑尚未确认完成。请输入同一设备当前的 12 位十六进制安全码，继续恢复清除流程。'
-          : '请输入当前 12 位十六进制安全码。解绑前请先完成设备文件同步；设备会清除设备数据，最长等待 120 秒。',
+          ? '设备上一次解绑尚未确认完成。请输入同一设备当前的安全码，继续恢复清除流程。'
+          : '请输入当前安全码。解绑前请先完成设备文件同步；设备会清除设备数据，最长等待 120 秒。',
       confirmLabel: recovery ? '恢复解绑' : '确认解绑',
     );
     if (code == null ||
@@ -1796,6 +1815,11 @@ class _AppShellState extends ConsumerState<AppShell>
               session.listFiles(offset: offset, pageSize: pageSize),
           onImport: importer.import,
           onOpenSavedRecordings: _openSavedDeviceRecordings,
+          isSavedRecordingAvailable: (recording) => ref
+              .read(recordingFileStoreProvider)
+              .exists(recording.relativePath),
+          onOpenRecording: (recording) =>
+              _openDeviceRecordingDetail(recording, [recording]),
         ),
       ),
     );

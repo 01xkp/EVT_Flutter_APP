@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
+import 'package:aipin/core/design_system/widgets/app_text_action.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
 import 'package:aipin/features/device_session/domain/device_file_import_progress.dart';
 import 'package:aipin/features/local_recording/domain/local_recording.dart';
@@ -24,11 +25,16 @@ class DeviceFileBrowserPage extends StatefulWidget {
     required this.onListFiles,
     required this.onImport,
     this.onOpenSavedRecordings,
+    this.onOpenRecording,
+    this.isSavedRecordingAvailable,
   });
 
   final DeviceFilePageLoader onListFiles;
   final DeviceFilePageImporter onImport;
   final Future<void> Function()? onOpenSavedRecordings;
+  final Future<void> Function(LocalRecording recording)? onOpenRecording;
+  final Future<bool> Function(LocalRecording recording)?
+  isSavedRecordingAvailable;
 
   @override
   State<DeviceFileBrowserPage> createState() => _DeviceFileBrowserPageState();
@@ -38,6 +44,7 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
   final _files = <DeviceFile>[];
   final _progress = <String, DeviceFileImportProgress>{};
   final _importing = <String>{};
+  final _saved = <String, LocalRecording>{};
   String? _error;
   var _loading = false;
 
@@ -51,22 +58,31 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('设备录音文件'),
+        title: const Text('设备文件'),
         actions: [
           if (widget.onOpenSavedRecordings case final openSaved?)
-            IconButton(
+            AppTextAction(
+              label: '已保存录音',
               tooltip: '查看已保存录音',
-              onPressed: () => unawaited(openSaved()),
-              icon: const Icon(Icons.folder_open_outlined),
+              onPressed: () => unawaited(_openSavedRecordings(openSaved)),
             ),
-          IconButton(
+          AppTextAction(
+            label: '刷新',
             tooltip: '刷新文件列表',
             onPressed: _loading || _importing.isNotEmpty
                 ? null
                 : () => unawaited(_load()),
-            icon: const Icon(Icons.refresh),
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              _loading ? '正在读取设备文件…' : '设备上共 ${_files.length} 个文件。保存到手机后可直接播放。',
+            ),
+          ),
+        ),
       ),
       body: SafeArea(
         top: false,
@@ -102,6 +118,12 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
                             file: file,
                             progress: _progress[file.name],
                             isImporting: _importing.contains(file.name),
+                            isSaved: _saved.containsKey(file.name),
+                            onPlay:
+                                _saved.containsKey(file.name) &&
+                                    widget.onOpenRecording != null
+                                ? () => unawaited(_openRecording(file.name))
+                                : null,
                             onImport: _loading || _importing.isNotEmpty
                                 ? null
                                 : () => unawaited(_import(file)),
@@ -111,6 +133,46 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
               ),
       ),
     );
+  }
+
+  Future<void> _openSavedRecordings(Future<void> Function() openSaved) async {
+    await openSaved();
+    await _reconcileSavedRecordings();
+  }
+
+  Future<void> _openRecording(String name) async {
+    if (!await _reconcileSavedRecordings() || !mounted) return;
+    final recording = _saved[name];
+    if (recording == null) return;
+    await widget.onOpenRecording?.call(recording);
+    await _reconcileSavedRecordings();
+  }
+
+  Future<bool> _reconcileSavedRecordings() async {
+    final isAvailable = widget.isSavedRecordingAvailable;
+    if (!mounted || isAvailable == null) return mounted;
+    try {
+      final missing = <String>[];
+      for (final entry in _saved.entries.toList()) {
+        if (!await isAvailable(entry.value)) missing.add(entry.key);
+        if (!mounted) return false;
+      }
+      if (missing.isNotEmpty) {
+        setState(() {
+          for (final name in missing) {
+            _saved.remove(name);
+          }
+        });
+      }
+      return true;
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('手机录音暂时不可读取，请重试')));
+      }
+      return false;
+    }
   }
 
   Future<void> _load() async {
@@ -135,6 +197,7 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
         loaded.addAll(page);
         offset += page.length;
       }
+      await _reconcileSavedRecordings();
       if (mounted) {
         setState(() {
           _files
@@ -163,13 +226,14 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
       _progress.remove(file.name);
     });
     try {
-      await widget.onImport(
+      final saved = await widget.onImport(
         file,
         onProgress: (progress) {
           if (mounted) setState(() => _progress[file.name] = progress);
         },
       );
       if (mounted) {
+        setState(() => _saved[file.name] = saved);
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('设备录音已保存到 App')));
@@ -197,12 +261,16 @@ class _DeviceFileTile extends StatelessWidget {
     required this.progress,
     required this.isImporting,
     required this.onImport,
+    required this.isSaved,
+    this.onPlay,
   });
 
   final DeviceFile file;
   final DeviceFileImportProgress? progress;
   final bool isImporting;
   final VoidCallback? onImport;
+  final bool isSaved;
+  final VoidCallback? onPlay;
 
   @override
   Widget build(BuildContext context) {
@@ -212,8 +280,6 @@ class _DeviceFileTile extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.audio_file_outlined),
-              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   file.name,
@@ -226,19 +292,21 @@ class _DeviceFileTile extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          AppButton.secondary(
-            label: isImporting ? '正在保存' : '保存到 App',
-            icon: isImporting
-                ? Icons.downloading_outlined
-                : Icons.download_outlined,
-            onPressed: isImporting ? null : onImport,
-          ),
+          if (isSaved) ...[
+            const Text('已保存到手机'),
+            if (onPlay != null)
+              AppButton.primary(label: '播放', onPressed: onPlay),
+          ] else
+            AppButton.secondary(
+              label: isImporting ? '正在保存' : '保存到 App',
+              onPressed: isImporting ? null : onImport,
+            ),
           if (progress case final value?) ...[
             const SizedBox(height: 8),
             LinearProgressIndicator(value: value.fraction),
             const SizedBox(height: 4),
             Text(
-              '${value.received}/${value.total} B',
+              '${(value.fraction * 100).toStringAsFixed(0)}% · ${value.received}/${value.total} B',
               textAlign: TextAlign.right,
             ),
           ],

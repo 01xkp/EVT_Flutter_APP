@@ -41,12 +41,12 @@ class DeviceRecordingDetailPage extends StatelessWidget {
               ),
             )
           : AudioPlaybackPanel(
+              key: ValueKey(recording.id),
               duration: duration,
               resolvePath: () => files.absolutePathFor(recording.relativePath),
               audioPlayerFactory: audioPlayerFactory,
               playbackErrorMessage: '设备录音暂时无法播放。',
               progressKey: const ValueKey('device-recording-playback-progress'),
-              waveformKey: const ValueKey('device-recording-playback-waveform'),
               onPrevious: _previousRecording == null || onOpenRecording == null
                   ? null
                   : () => onOpenRecording!(_previousRecording!),

@@ -82,9 +82,11 @@ void main() {
   testWidgets('loads device files and imports a selected file', (tester) async {
     var calls = 0;
     var imported = false;
+    LocalRecording? opened;
     await tester.pumpWidget(
       MaterialApp(
         home: DeviceFileBrowserPage(
+          onOpenRecording: (recording) async => opened = recording,
           onListFiles: ({required offset, required pageSize}) async {
             calls += 1;
             return calls == 1
@@ -119,6 +121,115 @@ void main() {
 
     expect(imported, isTrue);
     expect(find.text('设备录音已保存到 App'), findsOneWidget);
+    expect(find.text('已保存到手机'), findsOneWidget);
+    expect(find.text('保存到 App'), findsNothing);
+    await tester.tap(find.text('播放'));
+    await tester.pumpAndSettle();
+    expect(opened?.id, 'recording-1');
+  });
+
+  for (final destination in ['已保存录音', '播放']) {
+    testWidgets(
+      'allows saving again after deletion while visiting $destination',
+      (tester) async {
+        var available = false;
+        var imports = 0;
+        var opened = 0;
+        final returned = Completer<void>();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: DeviceFileBrowserPage(
+              onListFiles: ({required offset, required pageSize}) async =>
+                  offset == 0
+                  ? const [
+                      DeviceFile(
+                        name: 'capture.ogg',
+                        nameSlot: [1],
+                        length: 10,
+                      ),
+                    ]
+                  : const [],
+              onImport: (file, {onProgress}) async {
+                imports++;
+                available = true;
+                return LocalRecording.saved(
+                  id: 'recording-$imports',
+                  title: file.name,
+                  relativePath: 'recording-$imports.ogg',
+                  createdAt: DateTime(2026, 1, 1),
+                  completedAt: DateTime(2026, 1, 1),
+                  duration: Duration.zero,
+                  sizeBytes: 10,
+                );
+              },
+              isSavedRecordingAvailable: (_) async => available,
+              onOpenSavedRecordings: () {
+                opened++;
+                return returned.future;
+              },
+              onOpenRecording: (_) {
+                opened++;
+                return returned.future;
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('保存到 App'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(destination));
+        await tester.pump();
+        expect(opened, 1);
+        available = false;
+        returned.complete();
+        await tester.pumpAndSettle();
+
+        expect(find.text('已保存到手机'), findsNothing);
+        expect(find.text('保存到 App'), findsOneWidget);
+        await tester.tap(find.text('保存到 App'));
+        await tester.pumpAndSettle();
+        expect(imports, 2);
+        expect(find.text('已保存到手机'), findsOneWidget);
+      },
+    );
+  }
+
+  testWidgets('does not open a saved recording whose local file is missing', (
+    tester,
+  ) async {
+    var available = true;
+    var opened = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceFileBrowserPage(
+          onListFiles: ({required offset, required pageSize}) async =>
+              offset == 0
+              ? const [
+                  DeviceFile(name: 'capture.ogg', nameSlot: [1], length: 10),
+                ]
+              : const [],
+          onImport: (file, {onProgress}) async => LocalRecording.saved(
+            id: 'recording-1',
+            title: file.name,
+            relativePath: 'recording-1.ogg',
+            createdAt: DateTime(2026, 1, 1),
+            completedAt: DateTime(2026, 1, 1),
+            duration: Duration.zero,
+            sizeBytes: 10,
+          ),
+          isSavedRecordingAvailable: (_) async => available,
+          onOpenRecording: (_) async => opened = true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('保存到 App'));
+    await tester.pumpAndSettle();
+    available = false;
+    await tester.tap(find.text('播放'));
+    await tester.pumpAndSettle();
+    expect(opened, isFalse);
+    expect(find.text('保存到 App'), findsOneWidget);
   });
 
   testWidgets('opens the saved-device-recording library from the file page', (

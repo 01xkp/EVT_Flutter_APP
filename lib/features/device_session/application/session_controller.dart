@@ -2193,6 +2193,10 @@ class SessionController extends ChangeNotifier
       return;
     }
     if (permissions.contains(DevicePermission.status)) {
+      // GET_STATUS (0x06) does not contain RecordStatus. Re-read 0x01 so
+      // refresh can recover from a lost recording indication without
+      // replaying a non-idempotent 0x07 control command.
+      await _loadDeviceInfo(repository);
       await _loadDeviceStatus(repository);
       await _loadDeviceBattery(repository);
       await _loadDeviceStorage(repository);
@@ -2215,6 +2219,26 @@ class SessionController extends ChangeNotifier
             .toList(growable: false),
       }),
     );
+  }
+
+  Future<void> _loadDeviceInfo(DeviceProtocolRepository repository) async {
+    final connectionAttempt = _connectionAttempt;
+    try {
+      final info = await readDeviceInfo();
+      if (!_isCurrentConnectionAttempt(connectionAttempt) ||
+          !identical(repository, _protocolRepository) ||
+          !_state.isObservable) {
+        return;
+      }
+      _requireDevicePermission(DevicePermission.status);
+      _state = _state.copyWith(
+        deviceInfo: info,
+        latestSnapshot: _snapshotFromDeviceInfo(info, source: '设备状态刷新'),
+      );
+      notifyListeners();
+    } catch (error) {
+      _logDeviceDetailFailure('device_info_load_failed', error);
+    }
   }
 
   Future<void> _loadDeviceStatus(DeviceProtocolRepository repository) async {
@@ -3129,9 +3153,10 @@ class SessionController extends ChangeNotifier
         }
         return DeviceSnapshot(
           state: switch (frame.content.first) {
+            0 => DeviceState.standby,
             1 => DeviceState.recording,
             2 => DeviceState.paused,
-            _ => DeviceState.standby,
+            _ => DeviceState.unknown,
           },
           observedAt: DateTime.now(),
           source: source,
@@ -3141,14 +3166,18 @@ class SessionController extends ChangeNotifier
     }
   }
 
-  DeviceSnapshot _snapshotFromDeviceInfo(DeviceInfo info) => DeviceSnapshot(
+  DeviceSnapshot _snapshotFromDeviceInfo(
+    DeviceInfo info, {
+    String source = '认证后设备信息',
+  }) => DeviceSnapshot(
     state: switch (info.recordStatus) {
+      0 => DeviceState.standby,
       1 => DeviceState.recording,
       2 => DeviceState.paused,
-      _ => DeviceState.standby,
+      _ => DeviceState.unknown,
     },
     observedAt: DateTime.now(),
-    source: '认证后设备信息',
+    source: source,
     batteryPercent: info.batteryLevel,
     isCharging: info.charging != 0,
   );

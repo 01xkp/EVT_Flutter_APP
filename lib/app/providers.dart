@@ -91,9 +91,12 @@ final recordingFileStoreProvider = Provider<RecordingFileStore>((ref) {
   return AppRecordingFileStore();
 });
 
-final deviceAudioPlayerFactoryProvider = Provider<AudioPlayerPort Function()>(
-  (ref) => JustAudioPlayer.new,
-);
+final deviceAudioPlayerFactoryProvider = Provider<AudioPlayerPort Function()>((
+  ref,
+) {
+  final logger = ref.watch(scopedAppLoggerProvider('AUDIO'));
+  return () => JustAudioPlayer(logger: logger);
+});
 
 final deviceFileDownloadCheckpointRepositoryProvider =
     Provider<DeviceFileDownloadCheckpointRepository>((ref) {

@@ -134,7 +134,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('首页'), findsWidgets);
-    expect(find.text('设备活动'), findsOneWidget);
+    expect(find.text('检查记录'), findsOneWidget);
     expect(find.text('我的设备'), findsOneWidget);
     expect(find.text('本机录音'), findsNothing);
     expect(find.text('AI 语音'), findsNothing);
@@ -558,7 +558,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(TextField), findsOneWidget);
-      expect(find.text('12 位十六进制安全码'), findsOneWidget);
+      expect(find.text('安全码（6 位文本 / 12 位十六进制）'), findsOneWidget);
 
       final mirrorsBeforeCancel = appLogStore.publicMirrorSyncCount;
       await tester.tap(find.widgetWithText(AppButton, '取消'));

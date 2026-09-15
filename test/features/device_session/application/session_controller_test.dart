@@ -21,6 +21,137 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../../support/fake_ble_transport.dart';
 
 void main() {
+  for (final scenario in [
+    (action: 1, actual: 1, expected: DeviceState.recording),
+    (action: 2, actual: 2, expected: DeviceState.paused),
+    (action: 0, actual: 0, expected: DeviceState.standby),
+  ]) {
+    test(
+      'refresh recovers lost recording response for action ${scenario.action}',
+      () async {
+        final profile = _profileWithAuthoritativeStatusEndpoints();
+        final codec = EvtProtocolCodec();
+        final transport = FakeBleTransport(
+          profile: profile,
+          services: _servicesFor(profile),
+          readValuesByCharacteristicUuid: {
+            _fb11: FakeBleTransport.validBatteryFrame,
+          },
+        );
+        final controller = SessionController(transport, profile, codec);
+        addTearDown(controller.dispose);
+        await controller.connect(FakeBleTransport.matchingCandidate);
+        await _completeAuthenticatedSession(controller, transport);
+        if (scenario.action != 1) {
+          transport.emitSubscriptionBytesForCharacteristic(
+            _fa17,
+            codec.encodeRequest(0x87, const [1, 8, 7, 0, 0, 1, 2, 0]),
+          );
+          await Future<void>.delayed(Duration.zero);
+        }
+        final staleSnapshot = controller.state.latestSnapshot;
+        // Firmware changed state, but its 0x87 response never reached the App.
+        await expectLater(
+          controller.setRecordAction(scenario.action),
+          throwsA(isA<EvtCommandTimeoutException>()),
+        );
+        expect(controller.state.latestSnapshot, same(staleSnapshot));
+        final refreshed = controller.refreshDeviceDetails(const {
+          DevicePermission.status,
+        });
+        await _waitForCommand(
+          transport,
+          codec,
+          command: 0x01,
+          minimumMatchingCommandCount: 3,
+        );
+        transport.emitSubscriptionBytesForCharacteristic(
+          _fa11,
+          _deviceInfoFrame(protocolVersion: 3, recordStatus: scenario.actual),
+        );
+        await _respondToCommand(
+          transport,
+          codec,
+          command: 0x06,
+          subCommand: 0x01,
+          response: codec.encodeRequest(0x86, const [
+            0x01,
+            0,
+            5,
+            0,
+            0,
+            0,
+            1,
+            0,
+          ]),
+        );
+        await _respondToCommand(
+          transport,
+          codec,
+          command: 0x05,
+          response: codec.encodeRequest(0x85, const [0, 1, 0, 0, 128, 0, 0, 0]),
+        );
+        await refreshed;
+        expect(controller.state.latestSnapshot?.state, scenario.expected);
+        expect(controller.state.deviceInfo?.recordStatus, scenario.actual);
+        expect(
+          _writtenCommands(
+            transport,
+            codec,
+          ).where((command) => command == 0x07),
+          hasLength(1),
+        );
+      },
+    );
+  }
+
+  test('record error indication does not display idle', () async {
+    final profile = _profileWithAuthoritativeStatusEndpoints();
+    final codec = EvtProtocolCodec();
+    final transport = FakeBleTransport(
+      profile: profile,
+      services: _servicesFor(profile),
+    );
+    final controller = SessionController(transport, profile, codec);
+    addTearDown(controller.dispose);
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    await _completeAuthenticatedSession(controller, transport);
+    transport.emitSubscriptionBytesForCharacteristic(
+      _fa17,
+      codec.encodeRequest(0x87, const [0xFF, 0xFF, 0xFF]),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.state.latestSnapshot?.state, DeviceState.unknown);
+  });
+
+  test('authenticated device info error does not display idle', () async {
+    final profile = _profileWithAuthoritativeStatusEndpoints();
+    final codec = EvtProtocolCodec();
+    final transport = FakeBleTransport(
+      profile: profile,
+      services: _servicesFor(profile),
+    );
+    final controller = SessionController(transport, profile, codec);
+    addTearDown(controller.dispose);
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    await _authenticateOnly(controller, transport);
+    final synchronized = controller.synchronizeAfterAuthentication(const {});
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x01,
+      response: _deviceInfoFrame(protocolVersion: 3, recordStatus: 0xFF),
+    );
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x02,
+      response: codec.encodeRequest(0x82, const [1]),
+    );
+    await synchronized;
+    expect(controller.state.latestSnapshot?.state, DeviceState.unknown);
+  });
+
   test(
     'authenticated controller can dispatch normal unbind through session',
     () async {
@@ -834,6 +965,13 @@ void main() {
     final synchronized = controller.synchronizeAfterAuthentication(const {
       DevicePermission.status,
     });
+    await _waitForCommand(
+      transport,
+      codec,
+      command: 0x01,
+      minimumMatchingCommandCount: 3,
+    );
+    transport.emitSubscriptionBytes(_deviceInfoFrame(protocolVersion: 3));
     await _respondToCommand(
       transport,
       codec,
@@ -1108,6 +1246,13 @@ void main() {
         command: 0x02,
         response: codec.encodeRequest(0x82, const [1]),
       );
+      await _waitForCommand(
+        transport,
+        codec,
+        command: 0x01,
+        minimumMatchingCommandCount: 3,
+      );
+      transport.emitSubscriptionBytes(_deviceInfoFrame(protocolVersion: 3));
       await _respondToCommand(
         transport,
         codec,

@@ -136,7 +136,7 @@ class MainActivity : FlutterActivity() {
 
     private fun mirrorCanonicalLogFile(sourcePath: String, filename: String): Map<String, Any?> {
         if (!BuildConfig.DEBUG) return mirrorFailure("debug_only")
-        if (!filename.matches(Regex("aipin-\\d{4}-\\d{2}-\\d{2}\\.log(?:\\.\\d+)?"))) {
+        if (!filename.matches(Regex("aipin-\\d{4}-\\d{2}-\\d{2}(?:-\\d{2}-\\d{2}-\\d{2}(?:-\\d+)?)?\\.log(?:\\.\\d+)?"))) {
             return mirrorFailure("invalid_filename")
         }
         val source = File(sourcePath)
@@ -152,13 +152,16 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun mirrorWithMediaStore(source: File, filename: String): Map<String, Any?> {
-        val relativePath = "Download/AIPIN/logs/$filename"
+        // MediaStore adds .txt for text/plain on some devices. Supply it
+        // explicitly so lookup, display name and the reported path agree.
+        val publicFilename = "$filename.txt"
+        val relativePath = "Download/AIPIN/logs/$publicFilename"
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         contentResolver.query(
             collection,
             arrayOf(MediaStore.MediaColumns._ID),
-            "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
-            arrayOf(filename, "Download/AIPIN/logs%"),
+            "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} = ?",
+            arrayOf(publicFilename, "Download/AIPIN/logs/"),
             null,
         )?.use { cursor ->
             while (cursor.moveToNext()) {
@@ -173,7 +176,7 @@ class MainActivity : FlutterActivity() {
             }
         }
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, publicFilename)
             put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
             put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/AIPIN/logs")
             put(MediaStore.MediaColumns.IS_PENDING, 1)

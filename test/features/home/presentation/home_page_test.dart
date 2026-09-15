@@ -3,6 +3,44 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('home provides files, saved recordings and logs directly', (
+    tester,
+  ) async {
+    final opened = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(
+          device: const DeviceSummary.disconnected(name: '测试设备'),
+          onConnectDevice: () {},
+          onOpenSettings: () {},
+          onOpenFiles: () => opened.add('device'),
+          onOpenSavedRecordings: () => opened.add('local'),
+          onOpenLogs: () => opened.add('logs'),
+        ),
+      ),
+    );
+    for (final label in ['设备录音文件', '已保存录音', '实时日志']) {
+      await tester.ensureVisible(find.text(label));
+      await tester.tap(find.text(label));
+    }
+    expect(opened, ['device', 'local', 'logs']);
+  });
+  testWidgets('settings is reachable by a visible Chinese action', (
+    tester,
+  ) async {
+    var opened = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(
+          device: const DeviceSummary.disconnected(name: '测试设备'),
+          onConnectDevice: () {},
+          onOpenSettings: () => opened = true,
+        ),
+      ),
+    );
+    await tester.tap(find.text('设置'));
+    expect(opened, isTrue);
+  });
   testWidgets('home exposes device status while device is disconnected', (
     tester,
   ) async {

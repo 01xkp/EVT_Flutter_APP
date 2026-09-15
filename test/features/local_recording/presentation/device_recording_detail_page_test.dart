@@ -22,9 +22,11 @@ void main() {
     final progress = find.byKey(
       const ValueKey('device-recording-playback-progress'),
     );
-    expect(waveform, findsOneWidget);
+    expect(waveform, findsNothing);
+    expect(progress, findsOneWidget);
     expect(find.descendant(of: waveform, matching: progress), findsNothing);
 
+    await tester.pump();
     await tester.tap(find.byTooltip('播放录音'));
     await tester.pump();
     player.emitPosition(const Duration(seconds: 3));
@@ -53,13 +55,14 @@ void main() {
       final progress = find.byKey(
         const ValueKey('device-recording-playback-progress'),
       );
-      expect(tester.widget<Slider>(progress).max, 1);
-
-      await tester.tap(find.byTooltip('播放录音'));
       await tester.pump();
 
       expect(tester.widget<Slider>(progress).max, 12000);
       expect(find.text('0:12'), findsOneWidget);
+      expect(player.playedPaths, isEmpty);
+
+      await tester.tap(find.byTooltip('播放录音'));
+      await tester.pump();
 
       player.emitPosition(const Duration(seconds: 3));
       await tester.pump();
@@ -85,9 +88,9 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byTooltip('上一条录音'));
+    await tester.tap(find.text('上一条'));
     expect(opened?.id, 'recording-1');
-    await tester.tap(find.byTooltip('下一条录音'));
+    await tester.tap(find.text('下一条'));
     expect(opened?.id, 'recording-3');
   });
 }

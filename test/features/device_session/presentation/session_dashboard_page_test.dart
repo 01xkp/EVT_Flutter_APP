@@ -12,6 +12,59 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 
 void main() {
+  testWidgets('authenticated recording actions are visible without scrolling', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    int? action;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceDetailPage(
+          state: const SessionState(phase: SessionPhase.observable),
+          authState: DeviceAuthState.authenticated,
+          canControlRecording: true,
+          onRecordAction: (value) => action = value,
+        ),
+      ),
+    );
+    expect(find.text('开始录音').hitTestable(), findsOneWidget);
+    await tester.tap(find.text('开始录音'));
+    expect(action, 1);
+    expect(find.text('解绑设备').hitTestable(), findsNothing);
+  });
+
+  testWidgets('recording consent off disables start and explains why', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceDetailPage(
+          state: const SessionState(
+            phase: SessionPhase.observable,
+            deviceStatus: DeviceStatus(
+              privacy: false,
+              privacyRemainingMinutes: 0,
+              recordConsent: false,
+              syncState: 0,
+            ),
+          ),
+          authState: DeviceAuthState.authenticated,
+          canControlRecording: true,
+          onRecordAction: (_) {},
+        ),
+      ),
+    );
+    expect(
+      tester
+          .widget<AppButton>(find.widgetWithText(AppButton, '开始录音'))
+          .onPressed,
+      isNull,
+    );
+    expect(find.text('请先开启“允许设备录音”。'), findsOneWidget);
+  });
   testWidgets('dashboard keeps the compatibility route consumer-facing', (
     tester,
   ) async {
@@ -91,8 +144,7 @@ void main() {
       expect(find.text('暂停录音'), findsOneWidget);
       expect(find.text('结束录音'), findsOneWidget);
       final pauseRecording = find.text('暂停录音');
-      await tester.drag(find.byType(Scrollable), const Offset(0, -160));
-      await tester.pumpAndSettle();
+      await tester.ensureVisible(pauseRecording);
       await tester.tap(pauseRecording);
       expect(action, 2);
     },
@@ -149,6 +201,11 @@ void main() {
         ),
       );
 
+      await tester.scrollUntilVisible(
+        find.text('设备状态'),
+        150,
+        scrollable: find.byType(Scrollable),
+      );
       expect(find.text('设备状态'), findsOneWidget);
       expect(find.text('80%（充电中）'), findsOneWidget);
       expect(find.text('剩余 128 / 256 MB'), findsOneWidget);
@@ -161,7 +218,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable),
       );
-      await tester.drag(find.byType(Scrollable), const Offset(0, -240));
+      await tester.ensureVisible(consentSwitch);
       await tester.pumpAndSettle();
       await tester.tap(consentSwitch);
       expect(recordConsent, isFalse);
@@ -182,15 +239,16 @@ void main() {
         ),
       );
 
-      final refreshButton = tester.widget<IconButton>(
-        find.ancestor(
-          of: find.byIcon(Icons.refresh_outlined),
-          matching: find.byType(IconButton),
-        ),
+      await tester.scrollUntilVisible(
+        find.text('刷新状态'),
+        150,
+        scrollable: find.byType(Scrollable),
+      );
+      final refreshButton = tester.widget<TextButton>(
+        find.widgetWithText(TextButton, '刷新状态'),
       );
       expect(refreshButton.onPressed, isNull);
-
-      await tester.tap(find.byIcon(Icons.refresh_outlined));
+      await tester.tap(find.text('刷新状态'));
       expect(refreshCount, 0);
     },
   );
@@ -235,7 +293,14 @@ void main() {
       );
 
       await tester.scrollUntilVisible(
-        find.text('解绑设备'),
+        find.text('设备管理'),
+        200,
+        scrollable: find.byType(Scrollable),
+      );
+      await tester.tap(find.text('设备管理'));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('解绑设备').hitTestable(),
         200,
         scrollable: find.byType(Scrollable),
       );
@@ -292,7 +357,7 @@ void main() {
         ),
       );
 
-      expect(find.text('等待设备确认'), findsNWidgets(3));
+      expect(find.text('等待设备确认'), findsOneWidget);
       expect(
         find.text('请在 60 秒内短按设备按键确认。设备确认后，App 会自动完成当前连接认证。'),
         findsOneWidget,

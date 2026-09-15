@@ -11,6 +11,7 @@ import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
 import 'package:aipin/features/device_discovery/presentation/device_candidate_row.dart';
 import 'package:aipin/features/device_discovery/presentation/discovery_scanning_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:aipin/core/design_system/widgets/app_text_action.dart';
 
 class DiscoveryPage extends StatefulWidget {
   const DiscoveryPage({
@@ -98,13 +99,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
     return Scaffold(
       appBar: AppBar(
         title: const Text('连接设备'),
-        actions: [
-          IconButton(
-            tooltip: '设置',
-            onPressed: widget.onSettings,
-            icon: const Icon(Icons.settings_outlined),
-          ),
-        ],
+        actions: [AppTextAction(label: '设置', onPressed: widget.onSettings)],
       ),
       body: SafeArea(
         top: false,
@@ -125,7 +120,9 @@ class _DiscoveryPageState extends State<DiscoveryPage>
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _state.isScanning ? '正在查找附近设备' : '靠近设备后开始查找',
+                      _state.isScanning
+                          ? '正在查找，选中设备后点击底部“连接设备”'
+                          : '靠近设备，点击“查找附近设备”开始',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 16),

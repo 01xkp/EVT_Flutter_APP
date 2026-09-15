@@ -41,6 +41,7 @@ class DeviceRecordingLibraryPage extends StatelessWidget {
                     onOpen: onOpen,
                     onRename: (recording) => _rename(context, recording),
                     onDelete: (recording) => _delete(context, recording),
+                    onRetry: controller.load,
                   ),
                 ),
               ),
@@ -55,7 +56,7 @@ class DeviceRecordingLibraryPage extends StatelessWidget {
     final approved = await AppDialog.confirmDestructive(
       context,
       title: '删除这条已保存录音？',
-      message: '删除后将无法恢复已保存的音频文件。',
+      message: '只删除手机中的这份录音，设备上的原文件保留。删除的手机文件无法恢复。',
       confirmLabel: '删除',
     );
     if (approved) {
@@ -79,6 +80,7 @@ class _DeviceRecordingLibraryBody extends StatelessWidget {
     required this.state,
     required this.onRename,
     required this.onDelete,
+    required this.onRetry,
     this.onOpen,
   });
 
@@ -86,6 +88,7 @@ class _DeviceRecordingLibraryBody extends StatelessWidget {
   final ValueChanged<LocalRecording>? onOpen;
   final ValueChanged<LocalRecording> onRename;
   final ValueChanged<LocalRecording> onDelete;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -93,13 +96,30 @@ class _DeviceRecordingLibraryBody extends StatelessWidget {
       return const Center(child: CircularProgressIndicator());
     }
     if (state.items.isEmpty) {
+      if (state.errorMessage case final message?) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(message, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                FilledButton(onPressed: onRetry, child: const Text('重试')),
+              ],
+            ),
+          ),
+        );
+      }
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.audio_file_outlined, size: 32),
-            const SizedBox(height: 12),
             Text('暂无已保存录音', style: Theme.of(context).textTheme.titleMedium),
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('连接并认证设备后，进入“设备录音文件”，将录音保存到手机。'),
+            ),
           ],
         ),
       );

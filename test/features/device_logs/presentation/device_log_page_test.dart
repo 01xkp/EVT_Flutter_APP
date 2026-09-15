@@ -7,6 +7,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('resuming shows entries received while the view was paused', (
+    tester,
+  ) async {
+    final store = _StubLogStore();
+    addTearDown(store.dispose);
+    await tester.pumpWidget(MaterialApp(home: DeviceLogPage(store: store)));
+    await tester.tap(find.byTooltip('暂停跟随'));
+    store.emit('received_while_paused');
+    await tester.pump();
+    expect(find.textContaining('received_while_paused'), findsNothing);
+    await tester.tap(find.byTooltip('继续跟随'));
+    await tester.pump();
+    expect(find.textContaining('received_while_paused'), findsOneWidget);
+  });
   testWidgets('shows live entries, path and view controls', (tester) async {
     final store = _StubLogStore();
     addTearDown(store.dispose);

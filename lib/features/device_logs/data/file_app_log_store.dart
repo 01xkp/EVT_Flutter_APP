@@ -22,6 +22,9 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   static final _mirrorSnapshotFilenamePattern = RegExp(
     r'^aipin-\d{4}-\d{2}-\d{2}\.log(?:\.\d+)?\.mirror-\d+-\d+$',
   );
+  static final _exportFilenamePattern = RegExp(
+    r'^aipin-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d+)?\.log$',
+  );
 
   FileAppLogStore({
     this._supportDirectoryProvider,
@@ -58,6 +61,7 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
       StreamController<AppLogEntry>.broadcast();
   Future<void> _writeQueue = Future<void>.value();
   Future<void> _mirrorQueue = Future<void>.value();
+  Future<void> _exportQueue = Future<void>.value();
   final StringBuffer _pendingLines = StringBuffer();
   Directory? _logDirectory;
   File? _currentFile;
@@ -171,14 +175,80 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   }
 
   @override
-  Future<String?> exportPath() async {
+  Future<String?> exportPath() {
+    final export = _exportQueue.then((_) => _exportSnapshot());
+    _exportQueue = export.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return export;
+  }
+
+  Future<String?> _exportSnapshot() async {
     await initialize();
     await flush();
-    await _flushPublicMirror(requestPermission: true);
-    // Mirroring can add one bounded STORAGE diagnostic. Persist it before the
-    // caller receives the canonical path.
+    if (_currentFile == null) {
+      return null;
+    }
+    // Serialize the copy with appends and rotation so each export is immutable.
+    final copy = _writeQueue.then((_) => _createExportSnapshot());
+    _writeQueue = copy.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    final snapshot = await copy;
+    await _flushPublicMirror(requestPermission: true, exportFile: snapshot);
+    // Keep any storage diagnostic in the canonical log for the next export.
     await flush();
-    return currentFilePath;
+    return snapshot.path;
+  }
+
+  Future<File> _createExportSnapshot() async {
+    final now = _clock();
+    final date = _dailyLogFilename(now).replaceFirst('.log', '');
+    final time = [
+      now.hour,
+      now.minute,
+      now.second,
+    ].map((part) => part.toString().padLeft(2, '0')).join('-');
+    final stem = '$date-$time';
+    final directory = Directory(
+      '${_logDirectory!.path}${Platform.pathSeparator}exports',
+    );
+    await directory.create(recursive: true);
+    final files = await directory
+        .list()
+        .where(
+          (entry) =>
+              entry is File &&
+              _exportFilenamePattern.hasMatch(entry.uri.pathSegments.last),
+        )
+        .cast<File>()
+        .toList();
+    final sameSecond = RegExp('^${RegExp.escape(stem)}(?:-([0-9]+))?\\.log\$');
+    var sequence = 0;
+    for (final file in files) {
+      final match = sameSecond.firstMatch(file.uri.pathSegments.last);
+      if (match != null) {
+        final next = (int.tryParse(match.group(1) ?? '0') ?? 0) + 1;
+        if (next > sequence) sequence = next;
+      }
+    }
+    final suffix = sequence == 0
+        ? ''
+        : '-${sequence.toString().padLeft(2, '0')}';
+    final snapshot = await _currentFile!.copy(
+      '${directory.path}${Platform.pathSeparator}$stem$suffix.log',
+    );
+    // Export copies have their own retention budget, independent of daily logs.
+    files.sort(
+      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+    );
+    for (final file in files.skip(keepFiles > 0 ? keepFiles - 1 : 0)) {
+      try {
+        await file.delete();
+      } on FileSystemException {
+        // A locked old export must not prevent delivering the new snapshot.
+      }
+    }
+    return snapshot;
   }
 
   /// Mirrors the current Debug log without opening a storage permission
@@ -394,32 +464,42 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   void _queuePendingMirror({
     required bool force,
     required bool requestPermission,
+    File? exportFile,
   }) {
     _mirrorQueue = _mirrorQueue.then(
       (_) => _mirrorPendingFile(
         force: force,
         requestPermission: requestPermission,
+        exportFile: exportFile,
       ),
     );
   }
 
-  Future<void> _flushPublicMirror({required bool requestPermission}) async {
+  Future<void> _flushPublicMirror({
+    required bool requestPermission,
+    File? exportFile,
+  }) async {
     _mirrorTimer?.cancel();
     _mirrorTimer = null;
-    _queuePendingMirror(force: true, requestPermission: requestPermission);
+    _queuePendingMirror(
+      force: true,
+      requestPermission: requestPermission,
+      exportFile: exportFile,
+    );
     await _mirrorQueue;
   }
 
   Future<void> _mirrorPendingFile({
     required bool force,
     required bool requestPermission,
+    File? exportFile,
   }) async {
     if (!_mirrorPending && !force) {
       return;
     }
     _mirrorPending = false;
     final sink = _publicDiagnosticLogSink;
-    final file = _currentFile;
+    final file = exportFile ?? _currentFile;
     if (!_enabled || sink == null || file == null) {
       return;
     }

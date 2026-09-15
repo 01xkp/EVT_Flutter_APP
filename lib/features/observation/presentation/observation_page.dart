@@ -175,6 +175,9 @@ class _ObservationPageState extends State<ObservationPage> {
     } catch (_) {
       if (mounted) {
         setState(() => _isSaving = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('保存失败，请重试。')));
       }
     }
   }
