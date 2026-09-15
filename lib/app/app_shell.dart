@@ -24,6 +24,7 @@ import 'package:aipin/features/device_session/domain/device_auth_state.dart';
 import 'package:aipin/features/device_session/domain/device_permission.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
+import 'package:aipin/features/device_session/domain/evt_unbind_preflight.dart';
 import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:aipin/features/device_session/presentation/device_detail_page.dart';
 import 'package:aipin/features/device_session/presentation/device_file_browser_page.dart';
@@ -81,6 +82,10 @@ class _AppShellState extends ConsumerState<AppShell>
   var _sessionReachedAuthenticationReady = false;
   var _sessionHistoryPersisted = false;
   var _unexpectedReconnectStarted = false;
+  // V1.6 UNBIND is resumable after a timeout/disconnect.  Keep only the
+  // device identity, never the six-byte security code, so recreating the
+  // connection-scoped auth controller cannot lose the recovery intent.
+  final Set<String> _pendingUnbindRecoveryDeviceKeys = <String>{};
   Future<void>? _sessionHistoryPersistence;
   Future<void>? _sessionTeardown;
   var _sessionConnectionOperation = 0;
@@ -93,7 +98,7 @@ class _AppShellState extends ConsumerState<AppShell>
       ref.read(bleTransportProvider),
       _evtAdvertisementFilter,
       logger: ref.read(scopedAppLoggerProvider('BLE')),
-      filterByV15Advertisement: _useStrictEvtAdvertisementFilter,
+      filterByV16Advertisement: _useStrictEvtAdvertisementFilter,
     );
     _discoveryController.addListener(_onDiscoveryChanged);
     _reconnectController = DeviceReconnectController(
@@ -105,7 +110,7 @@ class _AppShellState extends ConsumerState<AppShell>
       connect: _connectRememberedDevice,
       logger: ref.read(scopedAppLoggerProvider('RECONNECT')),
       advertisementFilter: _evtAdvertisementFilter,
-      filterByV15Advertisement: _useStrictEvtAdvertisementFilter,
+      filterByV16Advertisement: _useStrictEvtAdvertisementFilter,
     );
     _onboardingController = OnboardingController(
       ref.read(onboardingStoreProvider),
@@ -575,6 +580,7 @@ class _AppShellState extends ConsumerState<AppShell>
               onPrivacyDurationChanged: (durationCode) =>
                   unawaited(_setPrivacyDuration(session, durationCode)),
               authState: auth?.state ?? DeviceAuthState.unknown,
+              authenticatingAction: auth?.activeAction,
               onAuthenticate: auth == null
                   ? null
                   : () =>
@@ -582,10 +588,12 @@ class _AppShellState extends ConsumerState<AppShell>
               onBind: auth == null
                   ? null
                   : () => unawaited(_promptAndBindDevice(session, auth)),
-              onResetAuthentication: auth == null
+              onUnbind: auth == null
                   ? null
-                  : () =>
-                        unawaited(_promptAndResetAuthentication(session, auth)),
+                  : () => unawaited(_promptAndUnbindDevice(session, auth)),
+              onUnbindRecovery: auth == null
+                  ? null
+                  : () => unawaited(_promptAndUnbindRecovery(session, auth)),
               canOpenFiles:
                   (auth?.allows(DevicePermission.files) ?? false) &&
                   session.state.supportsEndpoint(
@@ -724,7 +732,7 @@ class _AppShellState extends ConsumerState<AppShell>
         'session_open_evt_profile_ready',
         fields: {'operation': operation},
       );
-      final profile = DeviceProfile.evtV15();
+      final profile = DeviceProfile.evtV16();
       logger.info(
         'session_open_evt_profile_verified',
         fields: {'operation': operation, 'gatt_ready': profile.isGattReady},
@@ -739,6 +747,9 @@ class _AppShellState extends ConsumerState<AppShell>
         );
         return false;
       }
+      // Capture a pending UNBIND before the old connection-scoped controller
+      // is disposed.  Automatic reconnect creates a fresh controller below.
+      _capturePendingUnbindRecovery();
       await _disposeCurrentSessionControllers();
       if (!_isCurrentSessionConnectionOperation(operation)) {
         logger.warning(
@@ -750,7 +761,20 @@ class _AppShellState extends ConsumerState<AppShell>
         );
         return false;
       }
+      final unbindRecoveryPending = _hasPendingUnbindRecovery(candidate);
+      if (unbindRecoveryPending) {
+        logger.info(
+          'session_open_unbind_recovery_marker_restored',
+          fields: {
+            'operation': operation,
+            'identity_source': candidate.physicalDeviceId == null
+                ? 'connection_id'
+                : 'physical_mac',
+          },
+        );
+      }
       final authController = EvtLegacyAuthController(
+        unbindRecoveryPending: unbindRecoveryPending,
         logger: ref.read(scopedAppLoggerProvider('AUTH')),
       );
       final controller = SessionController(
@@ -917,8 +941,11 @@ class _AppShellState extends ConsumerState<AppShell>
       }
       return;
     }
+    final unbindRecoveryPending =
+        auth?.hasUnbindRecoveryPending == true ||
+        _hasPendingUnbindRecovery(candidate);
     if (state.phase == SessionPhase.interrupted &&
-        _sessionReachedAuthenticationReady &&
+        (_sessionReachedAuthenticationReady || unbindRecoveryPending) &&
         !_unexpectedReconnectStarted) {
       _unexpectedReconnectStarted = true;
       final persistence = _sessionHistoryPersistence;
@@ -931,9 +958,87 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   void _onDeviceAuthChanged() {
+    _capturePendingUnbindRecovery();
     if (mounted) {
       setState(() {});
     }
+  }
+
+  /// Mirrors the controller's recovery marker into an AppShell-level map.
+  ///
+  /// The auth controller is intentionally connection-scoped and is recreated
+  /// for every reconnect.  Keeping this marker here preserves the V1.6
+  /// recovery path without retaining the security code itself.
+  void _capturePendingUnbindRecovery() {
+    final session = _sessionController?.state.session;
+    final auth = _deviceAuthController;
+    final candidate = session?.candidate;
+    if (candidate == null || auth == null) {
+      return;
+    }
+    if (auth.hasUnbindRecoveryPending) {
+      var changed = false;
+      for (final key in _unbindRecoveryKeys(candidate)) {
+        changed = _pendingUnbindRecoveryDeviceKeys.add(key) || changed;
+      }
+      if (changed) {
+        ref
+            .read(scopedAppLoggerProvider('AUTH'))
+            .info(
+              'unbind_recovery_marker_saved',
+              operation: 'device_unbind',
+              stage: 'challenge',
+              result: 'pending',
+              fields: {
+                'identity_source': candidate.physicalDeviceId == null
+                    ? 'connection_id'
+                    : 'physical_mac',
+                'security_code_stored': false,
+              },
+            );
+      }
+      return;
+    }
+    if (auth.state == DeviceAuthState.unbound) {
+      _clearPendingUnbindRecovery(candidate);
+    }
+  }
+
+  bool _hasPendingUnbindRecovery(DeviceCandidate candidate) {
+    return _unbindRecoveryKeys(
+      candidate,
+    ).any(_pendingUnbindRecoveryDeviceKeys.contains);
+  }
+
+  void _clearPendingUnbindRecovery(DeviceCandidate candidate) {
+    var changed = false;
+    for (final key in _unbindRecoveryKeys(candidate)) {
+      changed = _pendingUnbindRecoveryDeviceKeys.remove(key) || changed;
+    }
+    if (changed) {
+      ref
+          .read(scopedAppLoggerProvider('AUTH'))
+          .info(
+            'unbind_recovery_marker_cleared',
+            operation: 'device_unbind',
+            stage: 'challenge',
+            result: 'completed',
+            fields: {
+              'identity_source': candidate.physicalDeviceId == null
+                  ? 'connection_id'
+                  : 'physical_mac',
+              'security_code_stored': false,
+            },
+          );
+    }
+  }
+
+  Iterable<String> _unbindRecoveryKeys(DeviceCandidate candidate) sync* {
+    final physicalId = candidate.physicalDeviceId;
+    if (physicalId != null) {
+      yield 'physical:$physicalId';
+    }
+    yield 'connection:${candidate.connectionId}';
   }
 
   Future<void> _reconnectAfterHistoryPersists(Future<void> persistence) async {
@@ -1136,7 +1241,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '认证设备',
-      message: '请输入该设备当前的 6 位认证码。EVT 阶段直接使用设备的 V1 安全码，不会请求云端认证服务。',
+      message: '请输入该设备当前的 12 位十六进制安全码（每 2 位代表 1 个字节）。',
       confirmLabel: '开始认证',
     );
     if (code == null ||
@@ -1222,7 +1327,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '首次绑定设备',
-      message: '首次绑定仅在设备仍使用初始认证码时可用。请输入希望写入设备的 6 位认证码。',
+      message: '请输入待绑定的 12 位十六进制安全码。提交后请在 60 秒内短按设备按键确认。',
       confirmLabel: '确认绑定',
     );
     if (code == null ||
@@ -1293,36 +1398,72 @@ class _AppShellState extends ConsumerState<AppShell>
     }
   }
 
-  Future<void> _promptAndResetAuthentication(
+  Future<void> _promptAndUnbindDevice(
     SessionController session,
     EvtLegacyAuthController auth,
-  ) async {
+  ) => _promptAndUnbind(session, auth, recovery: false);
+
+  Future<void> _promptAndUnbindRecovery(
+    SessionController session,
+    EvtLegacyAuthController auth,
+  ) => _promptAndUnbind(session, auth, recovery: true);
+
+  Future<void> _promptAndUnbind(
+    SessionController session,
+    EvtLegacyAuthController auth, {
+    required bool recovery,
+  }) async {
     var connectionOperation = _sessionConnectionOperation;
     final logger = ref.read(scopedAppLoggerProvider('AUTH'));
     final logStore = ref.read(appLogStoreProvider);
     final checkpoints = ref.read(
       deviceFileDownloadCheckpointRepositoryProvider,
     );
+    if (!recovery) {
+      final preflightPassed = await _verifyNormalUnbindPreflight(
+        session,
+        auth,
+        connectionOperation: connectionOperation,
+        logger: logger,
+      );
+      if (!preflightPassed) {
+        await _flushSecurityDiagnostics(
+          EvtLegacySecurityAction.unbind,
+          reason: 'unbind_preflight_rejected',
+          logger: logger,
+          logStore: logStore,
+        );
+        return;
+      }
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+        return;
+      }
+    }
+    if (!mounted) {
+      return;
+    }
     _logSecurityUi(
       'security_code_sheet_opened',
-      action: 'reset',
+      action: recovery ? 'unbind_recovery' : 'unbind',
       logger: logger,
     );
     final code = await EvtSecurityCodeSheet.show(
       context,
-      title: '恢复初始认证码',
-      message: '请输入当前 6 位认证码。设备会恢复初始认证码，并格式化设备录音和配置，无法恢复。',
-      confirmLabel: '确认恢复',
+      title: recovery ? '恢复解绑' : '解绑设备',
+      message: recovery
+          ? '设备上一次解绑尚未确认完成。请输入同一设备当前的 12 位十六进制安全码，继续恢复清除流程。'
+          : '请输入当前 12 位十六进制安全码。解绑前请先完成设备文件同步；设备会清除设备数据，最长等待 120 秒。',
+      confirmLabel: recovery ? '恢复解绑' : '确认解绑',
     );
     if (code == null ||
         !_isCurrentSecurityUiOperation(session, connectionOperation)) {
       _logSecurityUi(
         'security_code_sheet_cancelled',
-        action: 'reset',
+        action: recovery ? 'unbind_recovery' : 'unbind',
         logger: logger,
       );
       await _flushSecurityDiagnostics(
-        EvtLegacySecurityAction.reset,
+        EvtLegacySecurityAction.unbind,
         reason: 'security_code_sheet_cancelled',
         logger: logger,
         logStore: logStore,
@@ -1331,28 +1472,35 @@ class _AppShellState extends ConsumerState<AppShell>
     }
     _logSecurityUi(
       'security_code_sheet_confirmed',
-      action: 'reset',
+      action: recovery ? 'unbind_recovery' : 'unbind',
       fields: {'length': code.length},
       logger: logger,
     );
     try {
-      await auth.reset(session, securityCode: code);
+      if (recovery) {
+        await auth.unbindRecovery(session, securityCode: code);
+      } else {
+        await auth.unbind(session, securityCode: code);
+      }
       if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
         return;
       }
       _requestSecurityPrivateDiagnosticsFlush(
-        EvtLegacySecurityAction.reset,
+        EvtLegacySecurityAction.unbind,
         reason: 'v1_security_exchange_completed',
         logger: logger,
         logStore: logStore,
       );
       _logSecurityUi(
         'security_ui_operation_completed',
-        action: 'reset',
+        action: recovery ? 'unbind_recovery' : 'unbind',
         result: 'success',
         logger: logger,
       );
       final candidate = session.state.session?.candidate;
+      if (candidate != null) {
+        _clearPendingUnbindRecovery(candidate);
+      }
       final deviceId = candidate?.physicalDeviceId;
       if (deviceId != null) {
         await checkpoints.removeAllForDevice(deviceId);
@@ -1374,24 +1522,98 @@ class _AppShellState extends ConsumerState<AppShell>
       await session.disconnect();
       if (mounted &&
           _isCurrentSecurityUiOperation(session, connectionOperation)) {
-        AppToast.show(context, message: '设备已恢复初始认证码');
+        AppToast.show(context, message: '设备已解绑并清除设备数据');
       }
     } catch (error) {
+      // The controller marks the intent as soon as Action=2 is dispatched.
+      // Capture it even if the connection disappears before its listener can
+      // run, so the next connection still exposes recovery.
+      _capturePendingUnbindRecovery();
       await _handleSecurityUiFailure(
         session: session,
         connectionOperation: connectionOperation,
-        action: EvtLegacySecurityAction.reset,
+        action: EvtLegacySecurityAction.unbind,
         error: error,
         logger: logger,
       );
     } finally {
       await _flushSecurityDiagnostics(
-        EvtLegacySecurityAction.reset,
+        EvtLegacySecurityAction.unbind,
         reason: 'security_operation_terminal',
         logger: logger,
         logStore: logStore,
       );
     }
+  }
+
+  Future<bool> _verifyNormalUnbindPreflight(
+    SessionController session,
+    EvtLegacyAuthController auth, {
+    required int connectionOperation,
+    required SafeAppLogger logger,
+  }) async {
+    _logSecurityUi(
+      'security_unbind_preflight_requested',
+      action: 'unbind',
+      logger: logger,
+    );
+    if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+      return false;
+    }
+    if (!auth.isAuthenticated || !session.state.isObservable) {
+      const message = '设备尚未完成认证并进入可用状态，暂时不能解绑。';
+      _logSecurityUi(
+        'security_unbind_preflight_rejected',
+        action: 'unbind',
+        result: 'failed',
+        fields: const {
+          'check': 'authenticated_observable_session',
+          'reason': '【解绑预检】设备尚未完成认证并进入可用状态，未打开安全码输入，也未发送 Action=2',
+        },
+        logger: logger,
+      );
+      if (mounted) {
+        AppToast.show(context, message: message);
+      }
+      return false;
+    }
+    try {
+      await session.verifyEvtUnbindPreflight();
+    } catch (error) {
+      if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+        return false;
+      }
+      final message = switch (error) {
+        EvtUnbindPreflightException() => error.message,
+        _ => '无法确认设备录音、同步和文件状态，请重新连接后完成文件同步再解绑。',
+      };
+      _logSecurityUi(
+        'security_unbind_preflight_rejected',
+        action: 'unbind',
+        result: 'failed',
+        fields: {
+          'check': 'device_state',
+          'reason': '【解绑预检】$message 未打开安全码输入，也未发送 Action=2',
+          'error_type': error.runtimeType.toString(),
+        },
+        logger: logger,
+      );
+      if (mounted) {
+        AppToast.show(context, message: message);
+      }
+      return false;
+    }
+    if (!_isCurrentSecurityUiOperation(session, connectionOperation)) {
+      return false;
+    }
+    _logSecurityUi(
+      'security_unbind_preflight_completed',
+      action: 'unbind',
+      result: 'success',
+      fields: const {'reason': '【解绑预检】设备空闲、同步状态为空闲且文件列表为空，允许打开安全码输入'},
+      logger: logger,
+    );
+    return true;
   }
 
   void _logSecurityUi(
@@ -1403,7 +1625,11 @@ class _AppShellState extends ConsumerState<AppShell>
   }) {
     final SafeAppLogger resolvedLogger =
         logger ?? ref.read(scopedAppLoggerProvider('AUTH'));
-    final operation = action == 'bind' ? 'device_bind' : 'device_authenticate';
+    final operation = switch (action) {
+      'bind' => 'device_bind',
+      'unbind' || 'unbind_recovery' => 'device_unbind',
+      _ => 'device_authenticate',
+    };
     resolvedLogger.info(
       event,
       operation: operation,
@@ -1677,7 +1903,7 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   Future<void> _openSettings() async {
-    final profile = _profile ?? DeviceProfile.evtV15();
+    final profile = _profile ?? DeviceProfile.evtV16();
     if (!mounted) {
       return;
     }

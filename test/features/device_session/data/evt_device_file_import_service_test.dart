@@ -64,6 +64,7 @@ void main() {
       expect(gateway.requests.single.nameSlot, _nameSlot);
       expect(gateway.requests.single.startOffset, 0);
       expect(gateway.requests.single.chunkSize, 0);
+      expect(gateway.requests.single.expectedFileLength, _file.length);
       expect(files.finalizeCalls, 1);
       expect(files.completedBytes(recording.relativePath), <int>[
         1,
@@ -153,6 +154,7 @@ void main() {
       expect(gateway.requests, hasLength(1));
       expect(gateway.requests.single.startOffset, 2);
       expect(gateway.requests.single.chunkSize, 0);
+      expect(gateway.requests.single.expectedFileLength, _file.length);
       expect(recording.relativePath, 'device-existing.ogg');
       expect(files.recoverPartialCalls, 0);
       expect(files.completedBytes(recording.relativePath), <int>[
@@ -363,11 +365,13 @@ class _DownloadRequest {
     required this.nameSlot,
     required this.startOffset,
     required this.chunkSize,
+    required this.expectedFileLength,
   });
 
   final List<int> nameSlot;
   final int startOffset;
   final int chunkSize;
+  final int? expectedFileLength;
 }
 
 EvtDeviceFileTransferEvent _data(List<int> bytes) =>
@@ -385,12 +389,14 @@ class _TransferGateway implements DeviceFileTransferGateway {
     required List<int> nameSlot,
     int startOffset = 0,
     int chunkSize = 0,
+    int? expectedFileLength,
   }) async* {
     requests.add(
       _DownloadRequest(
         nameSlot: List<int>.from(nameSlot),
         startOffset: startOffset,
         chunkSize: chunkSize,
+        expectedFileLength: expectedFileLength,
       ),
     );
     for (final event in events) {

@@ -12,6 +12,7 @@ import 'package:aipin/features/device_session/application/session_controller.dar
 import 'package:aipin/features/device_session/domain/device_permission.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
+import 'package:aipin/features/device_session/domain/evt_unbind_preflight.dart';
 import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -140,7 +141,9 @@ void main() {
         'gatt_connection_stream_requested',
         'gatt_service_discovery_requested',
         'evt_gatt_contract_checked',
-        'evt_subscription_setup_requested',
+        'evt_pre_auth_subscription_setup_requested',
+        'pre_authentication_device_info_requested',
+        'pre_authentication_device_info_received',
         'session_authentication_ready',
         'disconnect_started',
         'transport_cleanup_started',
@@ -160,7 +163,7 @@ void main() {
   });
 
   test(
-    'subscribes available EVT endpoints before V1 authentication and performs no protected reads',
+    'subscribes only the V1.6 admission endpoints before authentication',
     () async {
       final profile = _profileWithDeviceInfo();
       final transport = FakeBleTransport(
@@ -181,18 +184,7 @@ void main() {
         transport.subscribedCharacteristics.map(
           (characteristic) => characteristic.characteristicUuid,
         ),
-        <String>[
-          _fa19,
-          _fa11,
-          _fa12,
-          _fa15,
-          _fa16,
-          _fa17,
-          _fb11,
-          _ff12,
-          _ff13,
-          _ff11,
-        ],
+        <String>[_fa11, _fa19],
       );
       expect(controller.state.phase, SessionPhase.authenticationReady);
       expect(controller.state.isAuthenticationReady, isTrue);
@@ -221,6 +213,7 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await _authenticateOnly(controller, transport);
 
       expect(controller.state.phase, SessionPhase.authenticationReady);
       expect(
@@ -262,7 +255,7 @@ void main() {
       await connection;
 
       expect(controller.state.phase, SessionPhase.authenticationReady);
-      expect(transport.notificationSetupRequests, hasLength(10));
+      expect(transport.notificationSetupRequests, hasLength(2));
     },
   );
 
@@ -301,7 +294,7 @@ void main() {
   );
 
   test(
-    'does not block V1 authentication when optional FF11 CCC confirmation fails',
+    'does not block V1.6 authentication when optional FF11 CCC confirmation fails',
     () async {
       final profile = _profileWithDeviceInfo();
       final transport = FakeBleTransport(
@@ -320,8 +313,9 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await _completeAuthenticatedSession(controller, transport);
 
-      expect(controller.state.phase, SessionPhase.authenticationReady);
+      expect(controller.state.phase, SessionPhase.observable);
       expect(transport.disconnectedDeviceIds, isEmpty);
       expect(
         transport.notificationSetupRequests.map(
@@ -383,7 +377,7 @@ void main() {
         transport,
         codec,
         command: 0x09,
-        minimumWriteCount: 2,
+        minimumMatchingCommandCount: 2,
       );
       expect(bindRequest.content, <int>[1, 0x36, 0x35, 0x34, 0x33, 0x32, 0x31]);
       transport.emitSubscriptionBytes(codec.encodeRequest(0x89, const [0]));
@@ -399,7 +393,12 @@ void main() {
         ),
         throwsA(isA<FormatException>()),
       );
-      expect(transport.writes, hasLength(2));
+      expect(
+        transport.writes
+            .map((bytes) => codec.decode(bytes).value?.command)
+            .where((command) => command == 0x09),
+        hasLength(2),
+      );
     },
   );
 
@@ -450,7 +449,12 @@ void main() {
         ),
         throwsA(isA<StateError>()),
       );
-      expect(transport.writes, hasLength(1));
+      expect(
+        transport.writes
+            .map((bytes) => EvtProtocolCodec().decode(bytes).value?.command)
+            .where((command) => command == 0x09),
+        hasLength(1),
+      );
     },
   );
 
@@ -490,7 +494,12 @@ void main() {
         'clear_gatt_cache',
         'disconnect',
       ]);
-      expect(transport.writes, hasLength(1));
+      expect(
+        transport.writes
+            .map((bytes) => EvtProtocolCodec().decode(bytes).value?.command)
+            .where((command) => command == 0x09),
+        hasLength(1),
+      );
       expect(controller.state.phase, SessionPhase.interrupted);
     },
   );
@@ -554,7 +563,13 @@ void main() {
           'clear_gatt_cache',
           'disconnect',
         ], reason: scenario.name);
-        expect(transport.writes, hasLength(1), reason: scenario.name);
+        expect(
+          transport.writes
+              .map((bytes) => EvtProtocolCodec().decode(bytes).value?.command)
+              .where((command) => command == 0x09),
+          hasLength(1),
+          reason: scenario.name,
+        );
         expect(
           controller.state.phase,
           SessionPhase.interrupted,
@@ -602,7 +617,12 @@ void main() {
       await expectLater(authentication, throwsA(isA<FormatException>()));
       expect(transport.gattCacheClearDeviceIds, isEmpty);
       expect(transport.connectionOperations, <String>['disconnect']);
-      expect(transport.writes, hasLength(1));
+      expect(
+        transport.writes
+            .map((bytes) => codec.decode(bytes).value?.command)
+            .where((command) => command == 0x09),
+        hasLength(1),
+      );
       expect(controller.state.phase, SessionPhase.interrupted);
     },
   );
@@ -621,13 +641,21 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await _authenticateOnly(controller, transport);
+      final eventsBefore = List.of(controller.state.events);
+      final snapshotBefore = controller.state.latestSnapshot;
 
       var completed = false;
       final deviceInfo = controller.readDeviceInfo();
       deviceInfo.then<void>((_) {
         completed = true;
       });
-      await _waitForCommand(transport, codec, command: 0x01);
+      await _waitForCommand(
+        transport,
+        codec,
+        command: 0x01,
+        minimumMatchingCommandCount: 2,
+      );
 
       transport.emitSubscriptionBytesForCharacteristic(
         _fa19,
@@ -636,8 +664,8 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(completed, isFalse);
-      expect(controller.state.events, isEmpty);
-      expect(controller.state.latestSnapshot, isNull);
+      expect(controller.state.events, eventsBefore);
+      expect(controller.state.latestSnapshot, same(snapshotBefore));
 
       transport.emitSubscriptionBytesForCharacteristic(
         _fa11,
@@ -665,6 +693,7 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await Future<void>.delayed(Duration.zero);
 
       expect(controller.state.phase, SessionPhase.interrupted);
       expect(
@@ -675,7 +704,7 @@ void main() {
   );
 
   test(
-    'interrupts setup when the mandatory FF13 notification stream closes before V1 authentication',
+    'interrupts protected setup when the mandatory FF13 notification stream closes',
     () async {
       final profile = _profileWithDeviceInfo();
       final transport = FakeBleTransport(
@@ -692,6 +721,30 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      final authentication = controller.executeEvtLegacySecurity(
+        EvtLegacySecurityRequest(
+          action: EvtLegacySecurityAction.authenticate,
+          securityCode: '123456',
+        ),
+      );
+      await _respondToCommand(
+        transport,
+        EvtProtocolCodec(),
+        command: 0x09,
+        response: EvtProtocolCodec().encodeRequest(0x89, const [1]),
+      );
+      expect(await authentication, isTrue);
+      await expectLater(
+        controller.synchronizeAfterAuthentication(const {}),
+        throwsA(anything),
+      );
+      for (
+        var attempt = 0;
+        transport.disconnectedDeviceIds.isEmpty && attempt < 20;
+        attempt += 1
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
 
       expect(controller.state.phase, SessionPhase.interrupted);
       expect(
@@ -856,14 +909,29 @@ void main() {
 
         await controller.connect(FakeBleTransport.matchingCandidate);
 
+        if (mtu == 23) {
+          // The admission 0x01 response itself cannot fit, so the session is
+          // rejected before any protocol write is attempted.
+          expect(controller.state.phase, SessionPhase.interrupted);
+          expect(transport.writes, isEmpty, reason: 'mtu=$mtu');
+          continue;
+        }
+
+        await _authenticateOnly(controller, transport);
         await expectLater(
           controller.synchronizeAfterAuthentication(const {}),
           throwsA(isA<BleTransportException>()),
           reason: 'mtu=$mtu',
         );
-        expect(transport.requestedMtus, <int>[517], reason: 'mtu=$mtu');
+        expect(transport.requestedMtus, contains(517), reason: 'mtu=$mtu');
         expect(controller.state.phase, SessionPhase.interrupted);
-        expect(transport.writes, isEmpty, reason: 'mtu=$mtu');
+        expect(
+          transport.writes
+              .map((bytes) => EvtProtocolCodec().decode(bytes).value?.command)
+              .where((command) => command == 0x09),
+          hasLength(1),
+          reason: 'mtu=$mtu',
+        );
       }
     },
   );
@@ -887,6 +955,7 @@ void main() {
       addTearDown(transport.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await _authenticateOnly(controller, transport);
       final synchronized = controller.synchronizeAfterAuthentication(const {});
       await _respondToCommand(
         transport,
@@ -904,6 +973,44 @@ void main() {
 
       expect(transport.requestedMtus, <int>[517]);
       expect(controller.state.phase, SessionPhase.observable);
+    },
+  );
+
+  test(
+    'applies the authenticated 0x81 MTU gate to a public device-info read',
+    () async {
+      final profile = _profileWithDeviceInfo();
+      final codec = EvtProtocolCodec();
+      final transport = FakeBleTransport(
+        profile: profile,
+        deferRead: true,
+        negotiatedMtu: 99,
+        services: _servicesFor(profile),
+      );
+      final controller = SessionController(transport, profile, codec);
+      addTearDown(controller.dispose);
+      addTearDown(transport.dispose);
+
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await _authenticateOnly(controller, transport);
+      final protectedReadsBefore = transport.writes
+          .map((bytes) => codec.decode(bytes).value)
+          .where((frame) => frame?.command == 0x01)
+          .length;
+
+      await expectLater(
+        controller.readDeviceInfo(),
+        throwsA(isA<BleTransportException>()),
+      );
+
+      // The second read is rejected by the 136-byte authenticated gate before
+      // a new 0x01 frame can reach the peripheral.
+      final protectedReadsAfter = transport.writes
+          .map((bytes) => codec.decode(bytes).value)
+          .where((frame) => frame?.command == 0x01)
+          .length;
+      expect(protectedReadsAfter, protectedReadsBefore);
+      expect(transport.requestedMtus, contains(517));
     },
   );
 
@@ -926,6 +1033,7 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await _authenticateOnly(controller, transport);
 
       expect(controller.state.phase, SessionPhase.authenticationReady);
       expect(controller.state.deviceBattery, isNull);
@@ -942,7 +1050,7 @@ void main() {
         transport,
         codec,
         command: 0x01,
-        response: _deviceInfoFrame(protocolVersion: 3),
+        response: _deviceInfoFrame(protocolVersion: 3, audioStream: 7),
       );
       await _respondToCommand(
         transport,
@@ -960,9 +1068,21 @@ void main() {
       await _respondToCommand(
         transport,
         codec,
+        command: 0x05,
+        response: codec.encodeRequest(0x85, const [0, 1, 0, 0, 128, 0, 0, 0]),
+      );
+      await _respondToCommand(
+        transport,
+        codec,
         command: 0x06,
         subCommand: 0x03,
         response: codec.encodeRequest(0x86, const [0x03, 0, 1, 2]),
+      );
+      await _respondToCommand(
+        transport,
+        codec,
+        command: 0x21,
+        response: codec.encodeRequest(0xA1, const [3, 0]),
       );
       await synchronized;
 
@@ -995,6 +1115,7 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await _authenticateOnly(controller, transport);
 
       final synchronized = controller.synchronizeAfterAuthentication(const {});
       await _respondToCommand(
@@ -1017,7 +1138,7 @@ void main() {
         transport.writes
             .map((bytes) => codec.decode(bytes).value!.command)
             .toList(),
-        <int>[0x01, 0x02],
+        <int>[0x01, 0x09, 0x01, 0x02],
       );
       expect(configuration.content, hasLength(12));
       expect(configuration.content.sublist(4), <int>[
@@ -1048,13 +1169,14 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await _authenticateOnly(controller, transport);
 
       final synchronized = controller.synchronizeAfterAuthentication(const {});
       await _respondToCommand(
         transport,
         codec,
         command: 0x01,
-        response: _deviceInfoFrame(protocolVersion: 3),
+        response: _deviceInfoFrame(protocolVersion: 3, audioStream: 7),
       );
       final configuration = await _waitForCommand(
         transport,
@@ -1069,6 +1191,246 @@ void main() {
       await synchronized;
     },
   );
+
+  test('normal unbind preflight requires an observable session', () async {
+    final profile = _profileWithAuthoritativeStatusEndpoints();
+    final transport = FakeBleTransport(
+      profile: profile,
+      services: _servicesFor(profile),
+    );
+    final controller = SessionController(
+      transport,
+      profile,
+      EvtProtocolCodec(),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    final writesBeforePreflight = transport.writes.length;
+
+    await expectLater(
+      controller.verifyEvtUnbindPreflight(),
+      throwsA(
+        isA<EvtUnbindPreflightException>().having(
+          (error) => error.message,
+          'message',
+          contains('尚未完成认证'),
+        ),
+      ),
+    );
+
+    expect(transport.writes, hasLength(writesBeforePreflight));
+  });
+
+  test('normal unbind preflight rejects a live recording state', () async {
+    final profile = _profileWithAuthoritativeStatusEndpoints();
+    final codec = EvtProtocolCodec();
+    final transport = FakeBleTransport(
+      profile: profile,
+      deferRead: true,
+      services: _servicesFor(profile),
+    );
+    final logger = _CapturingLogger();
+    final controller = SessionController(
+      transport,
+      profile,
+      codec,
+      logger: logger,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    await _completeAuthenticatedSession(controller, transport);
+
+    final preflight = controller.verifyEvtUnbindPreflight();
+    final expected = expectLater(
+      preflight,
+      throwsA(
+        isA<EvtUnbindPreflightException>().having(
+          (error) => error.message,
+          'message',
+          contains('正在录音'),
+        ),
+      ),
+    );
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x01,
+      response: _deviceInfoFrame(protocolVersion: 3, recordStatus: 1),
+    );
+
+    await expected;
+    final commands = _writtenCommands(transport, codec);
+    expect(commands.where((command) => command == 0x06), isEmpty);
+    expect(commands.where((command) => command == 0x22), isEmpty);
+    expect(logger.events, contains('evt_unbind_preflight_rejected'));
+  });
+
+  test('normal unbind preflight rejects non-idle device sync state', () async {
+    final profile = _profileWithAuthoritativeStatusEndpoints();
+    final codec = EvtProtocolCodec();
+    final transport = FakeBleTransport(
+      profile: profile,
+      deferRead: true,
+      services: _servicesFor(profile),
+    );
+    final controller = SessionController(transport, profile, codec);
+    addTearDown(controller.dispose);
+
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    await _completeAuthenticatedSession(controller, transport);
+
+    final preflight = controller.verifyEvtUnbindPreflight();
+    final expected = expectLater(
+      preflight,
+      throwsA(
+        isA<EvtUnbindPreflightException>().having(
+          (error) => error.message,
+          'message',
+          contains('同步'),
+        ),
+      ),
+    );
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x01,
+      response: _deviceInfoFrame(protocolVersion: 3),
+    );
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x06,
+      subCommand: 0x01,
+      response: codec.encodeRequest(0x86, const [0x01, 0, 5, 0, 0, 0, 1, 1]),
+    );
+
+    await expected;
+    expect(
+      _writtenCommands(transport, codec).where((command) => command == 0x22),
+      isEmpty,
+    );
+  });
+
+  test(
+    'normal unbind preflight requires an empty first device file page',
+    () async {
+      final profile = _profileWithAuthoritativeStatusEndpoints();
+      final codec = EvtProtocolCodec();
+      final transport = FakeBleTransport(
+        profile: profile,
+        deferRead: true,
+        services: _servicesFor(profile),
+      );
+      final controller = SessionController(transport, profile, codec);
+      addTearDown(controller.dispose);
+
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await _completeAuthenticatedSession(controller, transport);
+
+      final preflight = controller.verifyEvtUnbindPreflight();
+      final expected = expectLater(
+        preflight,
+        throwsA(
+          isA<EvtUnbindPreflightException>().having(
+            (error) => error.message,
+            'message',
+            contains('未同步录音文件'),
+          ),
+        ),
+      );
+      await _respondToCommand(
+        transport,
+        codec,
+        command: 0x01,
+        response: _deviceInfoFrame(protocolVersion: 3),
+      );
+      await _respondToCommand(
+        transport,
+        codec,
+        command: 0x06,
+        subCommand: 0x01,
+        response: codec.encodeRequest(0x86, const [0x01, 0, 5, 0, 0, 0, 1, 0]),
+      );
+      await _respondToCommand(
+        transport,
+        codec,
+        command: 0x22,
+        response: codec.encodeRequest(0xA2, [1, ..._fileNameSlot, 16, 0, 0, 0]),
+      );
+
+      await expected;
+      final commandFrames = transport.writes
+          .map((bytes) => codec.decode(bytes).value)
+          .whereType<EvtFrame>()
+          .toList();
+      final fileListRequest = commandFrames.singleWhere(
+        (frame) => frame.command == 0x22,
+      );
+      expect(fileListRequest.content, const [0, 0, 1]);
+      expect(
+        commandFrames.where(
+          (frame) => frame.command == 0x09 && frame.content.first == 2,
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test('normal unbind preflight accepts idle device with no files', () async {
+    final profile = _profileWithAuthoritativeStatusEndpoints();
+    final codec = EvtProtocolCodec();
+    final transport = FakeBleTransport(
+      profile: profile,
+      deferRead: true,
+      services: _servicesFor(profile),
+    );
+    final logger = _CapturingLogger();
+    final controller = SessionController(
+      transport,
+      profile,
+      codec,
+      logger: logger,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    await _completeAuthenticatedSession(controller, transport);
+
+    final preflight = controller.verifyEvtUnbindPreflight();
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x01,
+      response: _deviceInfoFrame(protocolVersion: 3),
+    );
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x06,
+      subCommand: 0x01,
+      response: codec.encodeRequest(0x86, const [0x01, 0, 5, 0, 0, 0, 1, 0]),
+    );
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x22,
+      response: codec.encodeRequest(0xA2, const [0]),
+    );
+    await preflight;
+
+    expect(logger.events, contains('evt_unbind_preflight_completed'));
+    expect(
+      transport.writes
+          .map((bytes) => codec.decode(bytes).value)
+          .whereType<EvtFrame>()
+          .where((frame) => frame.command == 0x22)
+          .single
+          .content,
+      const [0, 0, 1],
+    );
+  });
 
   test('rejects GATT discovery when FA12 lacks required operations', () async {
     final profile = _profileWithDeviceInfo();
@@ -1376,6 +1738,7 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await _authenticateOnly(controller, transport);
       final synchronized = controller.synchronizeAfterAuthentication(const {});
       await _respondToCommand(
         transport,
@@ -1390,45 +1753,66 @@ void main() {
     },
   );
 
+  for (final protocolVersion in [0, 1, 2, 3, 0x33, 0xFF]) {
+    test(
+      'temporarily admits reported protocol version $protocolVersion',
+      () async {
+        final profile = _profileWithDeviceInfo();
+        final transport = FakeBleTransport(
+          profile: profile,
+          deferRead: true,
+          services: _servicesFor(profile),
+        );
+        final logger = _CapturingLogger();
+        final controller = SessionController(
+          transport,
+          profile,
+          EvtProtocolCodec(),
+          logger: logger,
+        );
+        addTearDown(controller.dispose);
+
+        await controller.connect(FakeBleTransport.matchingCandidate);
+        await _authenticateOnly(controller, transport);
+        final synchronized = controller.synchronizeAfterAuthentication(
+          const {},
+        );
+        synchronized.ignore();
+
+        expect(controller.state.phase, SessionPhase.authenticationReady);
+        await _respondToCommand(
+          transport,
+          EvtProtocolCodec(),
+          command: 0x01,
+          response: _deviceInfoFrame(protocolVersion: protocolVersion),
+        );
+        await _respondToCommand(
+          transport,
+          EvtProtocolCodec(),
+          command: 0x02,
+          response: EvtProtocolCodec().encodeRequest(0x82, const [1]),
+        );
+        await synchronized;
+
+        expect(controller.state.phase, SessionPhase.observable);
+        expect(controller.state.failure, isNull);
+        expect(
+          controller.state.deviceInfo?.capabilities.protocolVersion,
+          protocolVersion,
+        );
+        expect(transport.disconnectedDeviceIds, isEmpty);
+        final skipped = logger.calls.singleWhere(
+          (call) =>
+              call.event == 'authentication_protocol_version_check_skipped',
+        );
+        expect(skipped.fields['protocol_version'], protocolVersion);
+        expect(skipped.fields['reason'], contains('临时跳过'));
+      },
+    );
+  }
+
   test(
-    'rejects a non-V3 device before making the session observable',
-    () async {
-      final profile = _profileWithDeviceInfo();
-      final transport = FakeBleTransport(
-        profile: profile,
-        deferRead: true,
-        services: _servicesFor(profile),
-      );
-      final controller = SessionController(
-        transport,
-        profile,
-        EvtProtocolCodec(),
-      );
-      addTearDown(controller.dispose);
-
-      await controller.connect(FakeBleTransport.matchingCandidate);
-      final synchronized = controller.synchronizeAfterAuthentication(const {});
-
-      expect(controller.state.phase, SessionPhase.authenticationReady);
-      await _respondToCommand(
-        transport,
-        EvtProtocolCodec(),
-        command: 0x01,
-        response: _deviceInfoFrame(protocolVersion: 2),
-      );
-      await expectLater(synchronized, throwsA(isA<BleTransportException>()));
-
-      expect(controller.state.phase, SessionPhase.interrupted);
-      expect(controller.state.failure?.kind.name, 'protocol');
-      expect(
-        transport.disconnectedDeviceIds,
-        contains(FakeBleTransport.matchingCandidate.connectionId),
-      );
-    },
-  );
-
-  test(
-    'subscribes all EVT CCCs before authentication without duplicates afterwards',
+    'subscribes admission CCCs first and protected EVT CCCs after authentication',
     () async {
       final profile = _profileWithDeviceInfo();
       final transport = FakeBleTransport(
@@ -1446,9 +1830,16 @@ void main() {
       final beforeAuthentication = transport.subscribedCharacteristics
           .map((characteristic) => characteristic.characteristicUuid)
           .toList();
-      expect(beforeAuthentication, <String>[
-        _fa19,
+      expect(beforeAuthentication, <String>[_fa11, _fa19]);
+
+      await _completeAuthenticatedSession(controller, transport);
+
+      final subscribedUuids = transport.subscribedCharacteristics
+          .map((characteristic) => characteristic.characteristicUuid)
+          .toList();
+      expect(subscribedUuids, <String>[
         _fa11,
+        _fa19,
         _fa12,
         _fa15,
         _fa16,
@@ -1458,13 +1849,6 @@ void main() {
         _ff13,
         _ff11,
       ]);
-
-      await _completeAuthenticatedSession(controller, transport);
-
-      final subscribedUuids = transport.subscribedCharacteristics
-          .map((characteristic) => characteristic.characteristicUuid)
-          .toList();
-      expect(subscribedUuids, beforeAuthentication);
     },
   );
 
@@ -1492,7 +1876,11 @@ void main() {
 
       expect(controller.state.phase, SessionPhase.interrupted);
       expect(controller.state.failure?.message, contains('设备文件列表响应超时'));
-      expect(transport.writes, hasLength(3));
+      final commands = transport.writes
+          .map((bytes) => EvtProtocolCodec().decode(bytes).value?.command)
+          .whereType<int>()
+          .toList();
+      expect(commands.where((command) => command == 0x22), hasLength(1));
       expect(
         transport.disconnectedDeviceIds,
         contains(FakeBleTransport.matchingCandidate.connectionId),
@@ -1501,7 +1889,7 @@ void main() {
   );
 
   test(
-    'forwards 0x23 file data without retaining it as a session event',
+    'forwards 0xA3 file data without retaining it as a session event',
     () async {
       final profile = _profileWithFileDownload();
       final codec = EvtProtocolCodec();
@@ -1533,7 +1921,7 @@ void main() {
 
       transport.emitSubscriptionBytesForCharacteristic(
         _ff13,
-        codec.encodeRequest(0x23, const [0, 0, 0, 0, 2, 0, 0xAA, 0xBB]),
+        codec.encodeRequest(0xA3, const [0, 0, 0, 0, 2, 0, 0xAA, 0xBB]),
       );
       await Future<void>.delayed(Duration.zero);
 
@@ -1543,7 +1931,7 @@ void main() {
 
       transport.emitSubscriptionBytesForCharacteristic(
         _ff13,
-        codec.encodeRequest(0x23, const [2, 0, 0, 0, 0, 0]),
+        codec.encodeRequest(0xA3, const [2, 0, 0, 0, 0, 0]),
       );
       final events = await transfer;
 
@@ -1554,6 +1942,61 @@ void main() {
       expect(listenerNotifications, notificationsBeforeData);
     },
   );
+
+  test('applies the V1.6 ATT MTU pure FileData boundary', () {
+    expect(SessionController.effectiveFileChunkLimitForTesting(23), 0);
+    expect(SessionController.effectiveFileChunkLimitForTesting(32), 0);
+    expect(SessionController.effectiveFileChunkLimitForTesting(33), 1);
+    expect(SessionController.effectiveFileChunkLimitForTesting(511), 479);
+    expect(SessionController.effectiveFileChunkLimitForTesting(512), 480);
+    expect(SessionController.effectiveFileChunkLimitForTesting(517), 480);
+  });
+
+  test('rejects an A3 data chunk larger than the negotiated ATT MTU', () async {
+    final profile = _profileWithFileDownload();
+    final codec = EvtProtocolCodec();
+    final logger = _CapturingLogger();
+    final transport = FakeBleTransport(
+      profile: profile,
+      deferRead: true,
+      negotiatedMtu: 136,
+      services: _servicesFor(profile),
+    );
+    final controller = SessionController(
+      transport,
+      profile,
+      codec,
+      logger: logger,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    await _completeAuthenticatedSession(controller, transport);
+
+    final transfer = controller
+        .downloadEvtFile(nameSlot: _fileNameSlot)
+        .toList();
+    await _waitForCommand(transport, codec, command: 0x23);
+    transport.emitSubscriptionBytesForCharacteristic(
+      _ff13,
+      codec.encodeRequest(0xA3, <int>[
+        0,
+        0,
+        0,
+        0,
+        105,
+        0,
+        ...List<int>.filled(105, 0xAA),
+      ]),
+    );
+
+    await expectLater(transfer, throwsA(isA<StateError>()));
+    expect(logger.events, contains('file_transfer_chunk_exceeds_mtu'));
+    expect(
+      transport.disconnectedDeviceIds,
+      contains(FakeBleTransport.matchingCandidate.connectionId),
+    );
+  });
 
   test(
     'allows an already-started EVT file transfer to finish after V1 authorization expires',
@@ -1586,11 +2029,11 @@ void main() {
 
       transport.emitSubscriptionBytesForCharacteristic(
         _ff13,
-        codec.encodeRequest(0x23, const [0, 0, 0, 0, 2, 0, 0xAA, 0xBB]),
+        codec.encodeRequest(0xA3, const [0, 0, 0, 0, 2, 0, 0xAA, 0xBB]),
       );
       transport.emitSubscriptionBytesForCharacteristic(
         _ff13,
-        codec.encodeRequest(0x23, const [2, 0, 0, 0, 0, 0]),
+        codec.encodeRequest(0xA3, const [2, 0, 0, 0, 0, 0]),
       );
 
       final events = await transfer;
@@ -1717,9 +2160,15 @@ void main() {
       addTearDown(controller.dispose);
 
       await controller.connect(FakeBleTransport.matchingCandidate);
+      await _authenticateOnly(controller, transport);
       final first = controller.readDeviceInfo();
       final queued = controller.readDeviceInfo();
-      await _waitForCommand(transport, EvtProtocolCodec(), command: 0x01);
+      await _waitForCommand(
+        transport,
+        EvtProtocolCodec(),
+        command: 0x01,
+        minimumMatchingCommandCount: 2,
+      );
       await Future<void>.delayed(Duration.zero);
 
       permissionGate.allowed = false;
@@ -1730,7 +2179,12 @@ void main() {
 
       await first;
       await expectLater(queued, throwsA(isA<StateError>()));
-      expect(transport.writes, hasLength(1));
+      final commands = transport.writes
+          .map((bytes) => EvtProtocolCodec().decode(bytes).value?.command)
+          .whereType<int>()
+          .toList();
+      expect(commands.where((command) => command == 0x01), hasLength(2));
+      expect(commands.where((command) => command == 0x09), hasLength(1));
     },
   );
 
@@ -1819,6 +2273,49 @@ void main() {
       expect(controller.state.phase, SessionPhase.interrupted);
       expect(controller.state.failure?.kind.name, 'access');
       expect(controller.state.failure?.detail, contains('fa10Fa19.notify'));
+      expect(transport.subscribedCharacteristics, isEmpty);
+      expect(
+        transport.disconnectedDeviceIds,
+        contains(FakeBleTransport.matchingCandidate.connectionId),
+      );
+    },
+  );
+
+  test(
+    'on iOS rejects optional FF11 when it advertises both CCC modes',
+    () async {
+      final previousPlatform = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = previousPlatform;
+      });
+      final profile = _profileWithDeviceInfo();
+      final transport = FakeBleTransport(
+        profile: profile,
+        deferRead: true,
+        services: _servicesFor(
+          profile,
+          operationOverrides: const {
+            BleLogicalEndpoint.ff10Ff11: {
+              BleOperation.write,
+              BleOperation.indicate,
+              BleOperation.notify,
+            },
+          },
+        ),
+      );
+      final controller = SessionController(
+        transport,
+        profile,
+        EvtProtocolCodec(),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.connect(FakeBleTransport.matchingCandidate);
+
+      expect(controller.state.phase, SessionPhase.interrupted);
+      expect(controller.state.failure?.kind.name, 'access');
+      expect(controller.state.failure?.detail, contains('ff10Ff11.notify'));
       expect(transport.subscribedCharacteristics, isEmpty);
       expect(
         transport.disconnectedDeviceIds,
@@ -1941,7 +2438,7 @@ DeviceProfile _profileWithDeviceInfo() {
       BleLogicalEndpoint.fa10Fa15: BleEndpoint(
         serviceUuid: fa10,
         characteristicUuid: _fa15,
-        operations: {BleOperation.read, BleOperation.indicate},
+        operations: {BleOperation.write, BleOperation.indicate},
       ),
       BleLogicalEndpoint.fa10Fa16: BleEndpoint(
         serviceUuid: fa10,
@@ -1966,7 +2463,7 @@ DeviceProfile _profileWithDeviceInfo() {
       BleLogicalEndpoint.ff10Ff11: BleEndpoint(
         serviceUuid: _ff10,
         characteristicUuid: _ff11,
-        operations: {BleOperation.read, BleOperation.indicate},
+        operations: {BleOperation.write, BleOperation.indicate},
       ),
       BleLogicalEndpoint.ff10Ff12: BleEndpoint(
         serviceUuid: _ff10,
@@ -2066,7 +2563,7 @@ List<BleService> _servicesFor(
           BleDiscoveredCharacteristic(
             uuid: _fa15,
             operations: operationsFor(BleLogicalEndpoint.fa10Fa15, const {
-              BleOperation.read,
+              BleOperation.write,
               BleOperation.indicate,
             }),
           ),
@@ -2116,7 +2613,7 @@ List<BleService> _servicesFor(
             BleDiscoveredCharacteristic(
               uuid: _ff11,
               operations: operationsFor(BleLogicalEndpoint.ff10Ff11, const {
-                BleOperation.read,
+                BleOperation.write,
                 BleOperation.indicate,
               }),
             ),
@@ -2199,8 +2696,11 @@ List<int> _deviceInfoFrame({
   required int protocolVersion,
   int powerOff = 0,
   int chargingMode = 0,
+  int audioStream = 0,
+  int recordStatus = 0,
 }) {
-  final content = List<int>.filled(90, 0);
+  final hasActiveRecord = recordStatus == 1 || recordStatus == 2;
+  final content = List<int>.filled(hasActiveRecord ? 97 : 90, 0);
   content[0] = protocolVersion;
   content.setRange(1, 14, 'SN202608130001'.codeUnits);
   content.setRange(21, 26, '1.0.0'.codeUnits);
@@ -2208,20 +2708,35 @@ List<int> _deviceInfoFrame({
   content.setRange(45, 55, 'AIPIN_8423'.codeUnits);
   content.setRange(74, 78, [0, 1, 0, 0]);
   content.setRange(78, 82, [128, 0, 0, 0]);
-  content[83] = 0;
-  content[84] = 80;
-  content[85] = 1;
-  content[87] = powerOff;
-  content[88] = chargingMode;
+  content[83] = recordStatus;
+  if (hasActiveRecord) {
+    content.setRange(84, 91, [0x08, 0x07, 0, 0, 1, 2, 0]);
+  }
+  final batteryOffset = hasActiveRecord ? 91 : 84;
+  content[batteryOffset] = 80;
+  content[batteryOffset + 1] = 1;
+  content[batteryOffset + 3] = powerOff;
+  content[batteryOffset + 4] = chargingMode;
+  content[batteryOffset + 5] = audioStream;
   return EvtProtocolCodec().encodeRequest(0x81, content);
 }
+
+List<int> _writtenCommands(
+  FakeBleTransport transport,
+  EvtProtocolCodec codec,
+) => transport.writes
+    .map((bytes) => codec.decode(bytes).value?.command)
+    .whereType<int>()
+    .toList();
 
 Future<void> _completeAuthenticatedSession(
   SessionController controller,
   FakeBleTransport transport,
 ) async {
-  final synchronized = controller.synchronizeAfterAuthentication(const {});
+  await _authenticateOnly(controller, transport);
+
   final codec = EvtProtocolCodec();
+  final synchronized = controller.synchronizeAfterAuthentication(const {});
   await _respondToCommand(
     transport,
     codec,
@@ -2237,23 +2752,62 @@ Future<void> _completeAuthenticatedSession(
   await synchronized;
 }
 
+/// Completes only the V1.6 Action=00 exchange. Protected endpoint setup and
+/// authenticated reads are deliberately left to the caller so tests can
+/// inject their own responses and failure paths.
+Future<void> _authenticateOnly(
+  SessionController controller,
+  FakeBleTransport transport,
+) async {
+  final authentication = controller.executeEvtLegacySecurity(
+    EvtLegacySecurityRequest(
+      action: EvtLegacySecurityAction.authenticate,
+      securityCode: '123456',
+    ),
+  );
+  final codec = EvtProtocolCodec();
+  await _respondToCommand(
+    transport,
+    codec,
+    command: 0x09,
+    response: codec.encodeRequest(0x89, const [1]),
+  );
+  expect(await authentication, isTrue);
+}
+
 Future<EvtFrame> _waitForCommand(
   FakeBleTransport transport,
   EvtProtocolCodec codec, {
   required int command,
   int? subCommand,
   int minimumWriteCount = 1,
+  int minimumMatchingCommandCount = 1,
 }) async {
   for (var attempt = 0; attempt < 100; attempt += 1) {
     if (transport.writes.length >= minimumWriteCount) {
-      final decoded = codec.decode(transport.writes.last);
-      final request = decoded.value;
-      if (request != null &&
-          request.command == command &&
+      final matching = <EvtFrame>[];
+      for (final bytes in transport.writes) {
+        final request = codec.decode(bytes).value;
+        if (request != null &&
+            request.command == command &&
+            (subCommand == null ||
+                (request.content.isNotEmpty &&
+                    request.content.first == subCommand))) {
+          matching.add(request);
+        }
+      }
+      final latest = transport.writes.isEmpty
+          ? null
+          : codec.decode(transport.writes.last).value;
+      final latestMatches =
+          latest != null &&
+          latest.command == command &&
           (subCommand == null ||
-              (request.content.isNotEmpty &&
-                  request.content.first == subCommand))) {
-        return request;
+              (latest.content.isNotEmpty &&
+                  latest.content.first == subCommand));
+      if (matching.length >= minimumMatchingCommandCount &&
+          (minimumMatchingCommandCount > 1 || latestMatches)) {
+        return matching.last;
       }
     }
     await Future<void>.delayed(const Duration(milliseconds: 10));

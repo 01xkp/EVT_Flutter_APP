@@ -22,9 +22,17 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
             UUID.fromString("0000ff13-1212-efde-1523-785feabcd123")
         private const val fileTransferLogSampleInterval = 100
         private const val fileTransferInitialPacketLogCount = 3
+        // A GATT read response can arrive before Flutter finishes attaching
+        // the characteristic-value EventChannel listener. Keep only a small
+        // bounded queue for control/read frames; never buffer the unbounded
+        // FF13 audio/file stream while no consumer is attached.
+        private const val pendingMessageLimit = 64
         private const val hexByteFormat = "%02X"
 
+        @Volatile
         private var charNotificationSink: EventChannel.EventSink? = null
+        private val pendingMessageLock = Any()
+        private val pendingMessages = ArrayDeque<ByteArray>()
 
         private val subscriptionMap = mutableMapOf<pb.CharacteristicAddress, CompositeDisposable>()
         private val notificationSetupResults =
@@ -36,13 +44,24 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         objectSink: Any?,
         eventSink: EventChannel.EventSink?,
     ) {
-        eventSink?.let {
-            charNotificationSink = eventSink
-            NativeBleLog.debug(
-                event = "characteristic_stream_listening",
-                message = "【AIPIN原生BLE】【通知通道】Flutter 特征回包通道已建立监听",
-            )
+        if (eventSink == null) {
+            return
         }
+        val queuedMessages = synchronized(pendingMessageLock) {
+            charNotificationSink = eventSink
+            val messages = pendingMessages.toList()
+            pendingMessages.clear()
+            messages
+        }
+        NativeBleLog.debug(
+            event = "characteristic_stream_listening",
+            message = "【AIPIN原生BLE】【通知通道】Flutter 特征回包通道已建立监听",
+            fields = mapOf("queued_message_count" to queuedMessages.size),
+        )
+        // Flush read/control responses that arrived during the short
+        // platform-channel handoff. FF13 is deliberately excluded from this
+        // queue, so this cannot replay a large audio/file payload.
+        queuedMessages.forEach { eventSink.success(it) }
     }
 
     override fun onCancel(objectSink: Any?) {
@@ -257,7 +276,11 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         error: String,
     ) {
         val convertedMsg = protobufConverter.convertCharacteristicError(subscriptionRequest, error)
-        charNotificationSink?.success(convertedMsg.toByteArray())
+        emitOrQueue(
+            subscriptionRequest = subscriptionRequest,
+            value = convertedMsg.toByteArray(),
+            isFileTransfer = false,
+        )
     }
 
     private fun unsubscribeFromAllNotifications() {
@@ -266,7 +289,13 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
             message = "【AIPIN原生BLE】【通知订阅】取消全部特征订阅",
             fields = mapOf("subscription_count" to subscriptionMap.size),
         )
-        charNotificationSink = null
+        synchronized(pendingMessageLock) {
+            // Clear the sink and queue atomically with emitOrQueue().  This
+            // prevents a native callback from being appended after the queue
+            // has just been cleared during listener cancellation.
+            charNotificationSink = null
+            pendingMessages.clear()
+        }
         subscriptionMap.forEach { it.value.dispose() }
         subscriptionMap.clear()
         fileTransferPacketCounts.clear()
@@ -348,21 +377,104 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         value: ByteArray,
     ) {
         val convertedMsg = protobufConverter.convertCharacteristicInfo(subscriptionRequest, value)
-        val sink = charNotificationSink
-        if (sink == null) {
-            logReceivedPacket(
-                subscriptionRequest = subscriptionRequest,
-                value = value,
-                droppedByFlutter = true,
-            )
+        emitOrQueue(
+            subscriptionRequest = subscriptionRequest,
+            value = convertedMsg.toByteArray(),
+            sourceValue = value,
+            isFileTransfer = isFileTransferCharacteristic(subscriptionRequest),
+        )
+    }
+
+    private fun emitOrQueue(
+        subscriptionRequest: pb.CharacteristicAddress,
+        value: ByteArray,
+        sourceValue: ByteArray? = null,
+        isFileTransfer: Boolean,
+    ) {
+        // Read the sink and append to the pending queue under one lock.  A
+        // callback can otherwise observe a null sink just before onListen()
+        // drains the queue, append after the drain, and leave an immediate
+        // control response stranded until a later listener is attached.
+        var sink: EventChannel.EventSink? = null
+        var queued = false
+        var queueSize = 0
+        synchronized(pendingMessageLock) {
+            sink = charNotificationSink
+            if (sink == null && !isFileTransfer) {
+                if (pendingMessages.size >= pendingMessageLimit) {
+                    pendingMessages.removeFirst()
+                }
+                pendingMessages.addLast(value)
+                queueSize = pendingMessages.size
+                queued = true
+            }
+        }
+        val activeSink = sink
+        if (activeSink != null) {
+            sourceValue?.let {
+                logReceivedPacket(
+                    subscriptionRequest = subscriptionRequest,
+                    value = it,
+                    droppedByFlutter = false,
+                )
+            }
+            activeSink.success(value)
             return
         }
-        logReceivedPacket(
-            subscriptionRequest = subscriptionRequest,
-            value = value,
-            droppedByFlutter = false,
+
+        // Do not retain a potentially unbounded file/audio stream when the
+        // Flutter listener is absent. Control/read frames are bounded and are
+        // flushed as soon as the listener is attached.
+        if (isFileTransfer) {
+            sourceValue?.let {
+                logReceivedPacket(
+                    subscriptionRequest = subscriptionRequest,
+                    value = it,
+                    droppedByFlutter = true,
+                )
+            }
+            return
+        }
+        if (!queued) {
+            return
+        }
+        sourceValue?.let {
+            logQueuedPacket(
+                subscriptionRequest = subscriptionRequest,
+                value = it,
+                queueSize = queueSize,
+            )
+        } ?: NativeBleLog.warn(
+            event = "characteristic_error_queued",
+            message = "【AIPIN原生BLE】【回包暂存】Flutter 监听尚未建立，已暂存特征错误",
+            fields = mapOf(
+                "device_id" to subscriptionRequest.deviceId,
+                "characteristic_uuid" to uuidConverter.uuidFromByteArray(
+                    subscriptionRequest.characteristicUuid.data.toByteArray(),
+                ).toString(),
+                "queue_size" to queueSize,
+            ),
         )
-        sink.success(convertedMsg.toByteArray())
+    }
+
+    private fun logQueuedPacket(
+        subscriptionRequest: pb.CharacteristicAddress,
+        value: ByteArray,
+        queueSize: Int,
+    ) {
+        NativeBleLog.warn(
+            event = "characteristic_packet_queued",
+            message = "【AIPIN原生BLE】【回包暂存】已收到设备回包，等待 Flutter 监听建立后补发",
+            fields = mapOf(
+                "device_id" to subscriptionRequest.deviceId,
+                "characteristic_uuid" to uuidConverter.uuidFromByteArray(
+                    subscriptionRequest.characteristicUuid.data.toByteArray(),
+                ).toString(),
+                "bytes" to value.size,
+                "queue_size" to queueSize,
+            ),
+            rawPacketHex = value.toHexString(),
+        )
     }
 
     private fun handleNotificationError(
@@ -380,7 +492,11 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         )
         val convertedMsg =
             protobufConverter.convertCharacteristicError(subscriptionRequest, error.message ?: "")
-        charNotificationSink?.success(convertedMsg.toByteArray())
+        emitOrQueue(
+            subscriptionRequest = subscriptionRequest,
+            value = convertedMsg.toByteArray(),
+            isFileTransfer = false,
+        )
     }
 
     private fun logReceivedPacket(

@@ -8,14 +8,19 @@ Source: `reactive_ble_mobile` 5.5.0 from pub.dev.
 the upstream `false` value on Android 8.0 (API 26) and newer. Android 7.x
 keeps its platform default because the method is not available before API 26.
 
-The EVT V1.5 firmware publishes its `AIPIN_XXXX` name, `AF30` service UUID,
+The EVT V1.6 firmware publishes its `AIPIN_XXXX` name, `AF30` service UUID,
 and `A3 89 + BtAddressRaw` manufacturer data through a legacy primary
 advertisement and scan response. Android's extended-only scan misses those
-packets. The change is Android-only; the iOS CoreBluetooth implementation is
-kept unmodified.
+packets. The scan setting is Android-only; the iOS CoreBluetooth implementation
+is kept unfiltered as described below.
 
 When upgrading the plugin, reapply this behavioral patch and verify device
 discovery on Android 7.x and Android 8+ before replacing this vendor copy.
+
+The app manifest intentionally leaves `BLUETOOTH_SCAN` without
+`neverForLocation`. That flag can make Android apply system-level beacon
+filtering before results reach the app; EVT discovery is already unfiltered at
+the app layer and must observe the platform's complete GATT-device result set.
 
 ## iOS unfiltered foreground scan
 
@@ -44,6 +49,20 @@ registered immediately before or after the stream subscription and reject
 replacement, cancellation, disconnect, invalid arguments, and unsupported
 platforms with explicit errors. The application must still apply its own
 timeout when no stream subscription is ever requested.
+
+## EVT V1.6 CCC mode validation on iOS
+
+CoreBluetooth exposes one `setNotifyValue` API for both notifications and
+indications. The EVT protocol nevertheless assigns a fixed mode: FA11, FA12,
+FA15, FA16, FA17, FA19, FB11, FF11 and FF12 are Indicate; FF13 is Notify.
+The Darwin implementation rejects an EVT characteristic when the expected
+property is missing or when both Notify and Indicate are advertised, because
+iOS cannot select the required CCC value in that ambiguous case. Encryption-
+required variants of either property are reported to Dart as the corresponding
+capability. Android selects the protocol mode explicitly through RxAndroidBle.
+
+When upgrading the plugin, retain this validation and verify that a malformed
+dual-mode EVT characteristic fails before any command is sent.
 
 ## Persistent Android receive subscription and diagnostics
 

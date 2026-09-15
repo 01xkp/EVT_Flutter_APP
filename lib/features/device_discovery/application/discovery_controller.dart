@@ -13,10 +13,17 @@ class DiscoveryController extends ChangeNotifier {
     this._transport,
     this._filter, {
     SafeAppLogger? logger,
-    this.filterByV15Advertisement = true,
+    // EVT bench builds intentionally accept any named advertisement. The
+    // protocol/GATT contract remains the authoritative gate after connect;
+    // callers can opt into the stricter identity filter for qualification.
+    bool? filterByV16Advertisement,
+    // Kept for source compatibility with pre-V1.6 callers.
+    @Deprecated('Use filterByV16Advertisement') bool? filterByV15Advertisement,
     this.staleDeviceTimeout = _defaultStaleDeviceTimeout,
     this.expiryCheckInterval = _defaultExpiryCheckInterval,
-  }) : _logger = logger ?? const DebugSafeAppLogger(scope: 'BLE');
+  }) : _logger = logger ?? const DebugSafeAppLogger(scope: 'BLE'),
+       filterByV16Advertisement =
+           filterByV16Advertisement ?? filterByV15Advertisement ?? false;
 
   static const _defaultStaleDeviceTimeout = Duration(seconds: 5);
   static const _defaultExpiryCheckInterval = Duration(seconds: 1);
@@ -25,7 +32,11 @@ class DiscoveryController extends ChangeNotifier {
   final BleTransport _transport;
   final AdvertisementFilter _filter;
   final SafeAppLogger _logger;
-  final bool filterByV15Advertisement;
+  final bool filterByV16Advertisement;
+
+  /// @deprecated Use [filterByV16Advertisement].
+  @Deprecated('Use filterByV16Advertisement')
+  bool get filterByV15Advertisement => filterByV16Advertisement;
   final Duration staleDeviceTimeout;
   final Duration expiryCheckInterval;
   StreamSubscription<DeviceCandidate>? _scanSubscription;
@@ -269,7 +280,7 @@ class DiscoveryController extends ChangeNotifier {
       );
       return;
     }
-    if (filterByV15Advertisement && !_filter.matches(freshCandidate)) {
+    if (filterByV16Advertisement && !_filter.matches(freshCandidate)) {
       _logCandidateDiagnostic(
         freshCandidate,
         category: 'filtered',
@@ -598,7 +609,7 @@ class DiscoveryController extends ChangeNotifier {
 
 enum _DiscoveryLogLevel { info, warning }
 
-/// Android can expose the V1.5 primary advertisement and scan response as
+/// Android can expose the V1.6 primary advertisement and scan response as
 /// separate scan callbacks. The protocol distributes manufacturer data in the
 /// former and service UUID plus local name in the latter, so preserve recent
 /// fields for the same advertiser before applying the strict EVT filter.

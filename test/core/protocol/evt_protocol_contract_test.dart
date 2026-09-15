@@ -3,7 +3,7 @@ import 'package:aipin/core/protocol/evt_protocol_contract.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('locks the V1.5 EVT command and endpoint allowlists', () {
+  test('locks the V1.6 EVT command and endpoint allowlists', () {
     const expectedCommands = <int>{
       0x01,
       0x02,

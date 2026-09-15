@@ -2,6 +2,7 @@ abstract interface class PublicDiagnosticLogSink {
   Future<PublicDiagnosticLogMirrorStatus> mirrorCanonicalFile({
     required String sourcePath,
     required String filename,
+
     /// Only a user-initiated export may request legacy external-storage
     /// permission. Background diagnostic persistence must remain silent.
     bool requestPermission = false,

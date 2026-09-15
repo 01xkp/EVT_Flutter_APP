@@ -17,6 +17,20 @@ void main() {
     expect(codec.decode(bytes).isSuccess, isTrue);
   });
 
+  test('retains the exact wire bytes on decoded frames', () {
+    final codec = EvtProtocolCodec();
+    final wire = codec.encodeRequest(0x85, const [0x01, 0x02, 0x03]);
+
+    final result = codec.decode(wire);
+
+    expect(result.isSuccess, isTrue);
+    expect(result.value!.rawBytes, orderedEquals(wire));
+    // The decoder owns its copy so a caller mutating the source buffer cannot
+    // alter the diagnostic snapshot.
+    wire[0] = 0;
+    expect(result.value!.rawBytes!.first, 0xED);
+  });
+
   test('uses the documented CRC-16/CCITT-FALSE test vector', () {
     expect(
       Crc16CcittFalse.calculate(const [

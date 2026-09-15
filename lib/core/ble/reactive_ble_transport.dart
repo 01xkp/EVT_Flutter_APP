@@ -510,10 +510,10 @@ class ReactiveBleTransport implements BleTransport {
                 'manufacturer_prefix': _manufacturerPrefix(
                   device.manufacturerData,
                 ),
-                'service_uuid_present': _hasV15AdvertisementService(
+                'service_uuid_present': _hasEvtAdvertisementService(
                   device.serviceUuids,
                 ),
-                'name_format_valid': _hasV15AdvertisementName(device.name),
+                'name_format_valid': _hasEvtAdvertisementName(device.name),
                 'subscription_count': namedDiscoveryCount,
               },
             );
@@ -555,6 +555,11 @@ class ReactiveBleTransport implements BleTransport {
             );
           }
         }
+        // Do not drop an anonymous primary advertisement here. Android can
+        // deliver the manufacturer payload (A3 89 + address) first and the
+        // named scan response later. DiscoveryController owns the UI rule
+        // that unnamed devices are hidden and can therefore merge both
+        // fragments before deciding whether to display a row.
         yield DeviceCandidate(
           connectionId: device.id,
           name: device.name,
@@ -675,6 +680,15 @@ class ReactiveBleTransport implements BleTransport {
     subscription = _ble
         .connectToDevice(
           id: deviceId,
+          // The App performs one explicit full discovery immediately after
+          // the connected event.  Passing an empty (but non-null) map keeps
+          // the iOS native plugin from starting its optional implicit
+          // discovery at the same time; two in-flight discovery tasks for
+          // one peripheral are not safely multiplexed by CoreBluetooth's
+          // task registry. Android ignores this optimization because it
+          // cannot perform partial discovery.
+          servicesWithCharacteristicsToDiscover:
+              const <reactive.Uuid, List<reactive.Uuid>>{},
           connectionTimeout: const Duration(seconds: 12),
         )
         .listen(
@@ -1579,7 +1593,7 @@ class ReactiveBleTransport implements BleTransport {
         .join();
   }
 
-  static bool _hasV15AdvertisementService(List<reactive.Uuid> serviceUuids) =>
+  static bool _hasEvtAdvertisementService(List<reactive.Uuid> serviceUuids) =>
       serviceUuids.any((uuid) {
         final value = uuid.toString().toUpperCase();
         return value == '0000AF30-0000-1000-8000-00805F9B34FB' ||
@@ -1587,7 +1601,7 @@ class ReactiveBleTransport implements BleTransport {
             value == '0XAF30';
       });
 
-  static bool _hasV15AdvertisementName(String name) =>
+  static bool _hasEvtAdvertisementName(String name) =>
       RegExp(r'^AIPIN_[0-9A-F]{4}$').hasMatch(name.trim().toUpperCase());
 
   /// Android reports ATT MTU directly. On iOS the plugin reports CoreBluetooth's
@@ -1599,7 +1613,7 @@ class ReactiveBleTransport implements BleTransport {
   }) => reportedAsWritePayload ? reportedMtu + 3 : reportedMtu;
 
   /// CoreBluetooth can briefly expose the pre-exchange 20-byte write payload
-  /// immediately after connecting. A bounded retry avoids rejecting a V1.5
+  /// immediately after connecting. A bounded retry avoids rejecting a V1.6
   /// device before iOS has published its negotiated ATT capacity.
   @visibleForTesting
   static bool shouldRetryIosMtuReport(

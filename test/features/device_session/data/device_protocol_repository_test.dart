@@ -62,6 +62,30 @@ void main() {
     expect(info.chargingMode, 1);
   });
 
+  test(
+    'decodes the V1.6 pre-authenticated fixed 90-byte redacted response',
+    () {
+      final content = _deviceInfoContent()
+        ..fillRange(74, 90, 0)
+        ..[0] = 3;
+
+      final info = DeviceProtocolRepository.decodeDeviceInfo(
+        EvtFrame(command: 0x81, content: Uint8List.fromList(content)),
+      );
+
+      expect(info.capabilities.protocolVersion, 3);
+      expect(info.deviceCode, 'SN202608130001');
+      expect(info.deviceName, 'AIPIN_8423');
+      expect(info.totalDiskSpaceMb, 0);
+      expect(info.remainDiskSpaceMb, 0);
+      expect(info.recordStatus, 0);
+      expect(info.batteryLevel, 0);
+      expect(info.charging, 0);
+      expect(info.powerOff, 0);
+      expect(info.chargingMode, 0);
+    },
+  );
+
   test('decodes the UTF-8 device name slot from the V1.5 device response', () {
     final frame = EvtFrame(
       command: 0x81,
@@ -144,11 +168,12 @@ void main() {
     expect(battery.percent, 80);
     expect(battery.isCharging, isTrue);
 
-    final fullyChargedBattery = DeviceProtocolRepository.decodeBattery(
-      EvtFrame(command: 0x91, content: Uint8List.fromList([100, 2, 0])),
+    expect(
+      () => DeviceProtocolRepository.decodeBattery(
+        EvtFrame(command: 0x91, content: Uint8List.fromList([100, 2, 0])),
+      ),
+      throwsFormatException,
     );
-    expect(fullyChargedBattery.percent, 100);
-    expect(fullyChargedBattery.isCharging, isTrue);
     expect(
       DeviceProtocolRepository.decodeFileCount(
         EvtFrame(command: 0xA1, content: Uint8List.fromList([2, 0])),
@@ -207,12 +232,15 @@ void main() {
       2,
     );
 
-    final fullyCharged = _deviceInfoContent()..[85] = 2;
+    final invalidChargingState = _deviceInfoContent()..[85] = 2;
     expect(
-      DeviceProtocolRepository.decodeDeviceInfo(
-        EvtFrame(command: 0x81, content: Uint8List.fromList(fullyCharged)),
-      ).charging,
-      2,
+      () => DeviceProtocolRepository.decodeDeviceInfo(
+        EvtFrame(
+          command: 0x81,
+          content: Uint8List.fromList(invalidChargingState),
+        ),
+      ),
+      throwsFormatException,
     );
 
     final extraByte = _deviceInfoContent(recordStatus: 1)..add(0);
@@ -253,6 +281,20 @@ void main() {
     }
   });
 
+  test('does not read the battery tail as an error code for 0x81 ERROR', () {
+    final info = DeviceProtocolRepository.decodeDeviceInfo(
+      EvtFrame(
+        command: 0x81,
+        content: Uint8List.fromList(_deviceInfoContent(recordStatus: 0xFF)),
+      ),
+    );
+
+    expect(info.recordStatus, 0xFF);
+    expect(info.errorCode, isNull);
+    expect(info.batteryLevel, 80);
+    expect(info.charging, 1);
+  });
+
   test('rejects inconsistent storage capacity values in EVT responses', () {
     final impossibleDeviceInfo = _deviceInfoContent()
       ..[74] = 1
@@ -282,6 +324,38 @@ void main() {
       ),
       throwsFormatException,
     );
+  });
+
+  test('preserves the exact 0x85 storage response bytes', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    final repository = DeviceProtocolRepository(
+      deviceId: 'device-1',
+      profile: _profile,
+      transport: transport,
+      commands: client,
+      codec: codec,
+    );
+    final operation = repository.readStorageFrame();
+    await Future<void>.delayed(Duration.zero);
+    final response = codec.encodeRequest(0x85, const [
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+      0x80,
+      0x00,
+      0x00,
+      0x00,
+    ]);
+    transport.emitSubscriptionBytes(response);
+
+    expect(await operation, orderedEquals(response));
+    await client.close();
   });
 
   test('rejects invalid device-information fixed-slot padding', () {
@@ -371,6 +445,8 @@ void main() {
       <int>[4],
       <int>[0, 0],
       <int>[1],
+      // V1.6 fixes RecordMode to the existing value 1.
+      <int>[1, 8, 7, 0, 0, 2, 2, 0],
       <int>[1, 8, 7, 0, 0, 1, 0, 0],
       <int>[1, 8, 7, 0, 0, 1, 2, 2],
     ]) {
@@ -382,6 +458,50 @@ void main() {
       );
     }
   });
+
+  test(
+    'surfaces a valid V1.6 0x87 error response instead of timing out',
+    () async {
+      final transport = FakeBleTransport();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: codec,
+        responses: transport.subscriptionStream,
+      );
+      final repository = DeviceProtocolRepository(
+        deviceId: 'device-1',
+        profile: _profile,
+        transport: transport,
+        commands: client,
+        codec: codec,
+      );
+
+      final operation = repository.setRecordAction(1);
+      await Future<void>.delayed(Duration.zero);
+      final errorFrame = codec.encodeRequest(0x87, const [0xFF, 0xFF, 0xFF]);
+      transport.emitSubscriptionBytes(errorFrame);
+
+      await expectLater(
+        operation,
+        throwsA(
+          isA<EvtRecordActionException>()
+              .having((error) => error.action, 'action', 1)
+              .having((error) => error.errorCode, 'errorCode', -1)
+              .having((error) => error.frame.command, 'frame command', 0x87),
+        ),
+      );
+      expect(
+        DeviceProtocolRepository.recordStateErrorCode(
+          EvtFrame(
+            command: 0x87,
+            content: Uint8List.fromList(const [0xFF, 0x00, 0x80]),
+          ),
+        ),
+        -32768,
+      );
+      await client.close();
+    },
+  );
 
   test('rejects a file-list page whose Count exceeds the EVT limit', () {
     expect(
@@ -395,7 +515,7 @@ void main() {
     );
   });
 
-  test('writes the complete 12-byte configuration payload', () async {
+  test('writes the complete 12-byte EVT configuration payload', () async {
     final transport = FakeBleTransport();
     final client = EvtCommandClient(
       transport: transport,
@@ -421,6 +541,7 @@ void main() {
         denoise: false,
         powerOff: 0,
         chargingMode: 0,
+        audioStream: 0,
       ),
     );
     await Future<void>.delayed(Duration.zero);
@@ -428,8 +549,118 @@ void main() {
     final written = codec.decode(transport.writes.single).value!;
     expect(written.command, 0x02);
     expect(written.content, hasLength(12));
+    expect(written.content.last, 0);
     transport.emitSubscriptionBytes(codec.encodeRequest(0x82, const [1]));
     await operation;
+    await client.close();
+  });
+
+  test('rejects a nonzero AudioStream value before writing in EVT', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    final repository = DeviceProtocolRepository(
+      deviceId: 'device-1',
+      profile: _profile,
+      transport: transport,
+      commands: client,
+      codec: codec,
+    );
+
+    await expectLater(
+      repository.writeConfiguration(
+        DeviceConfiguration(
+          systemTime: DateTime.fromMillisecondsSinceEpoch(
+            1_726_000_000_000,
+            isUtc: true,
+          ),
+          recordDurationSeconds: 1800,
+          recordMode: 1,
+          recordType: 2,
+          denoise: false,
+          powerOff: 0,
+          chargingMode: 0,
+          audioStream: 1,
+        ),
+      ),
+      throwsFormatException,
+    );
+    expect(transport.writes, isEmpty);
+    await client.close();
+  });
+
+  test('rejects an invalid V1.6 configuration enum before writing', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    final repository = DeviceProtocolRepository(
+      deviceId: 'device-1',
+      profile: _profile,
+      transport: transport,
+      commands: client,
+      codec: codec,
+    );
+
+    await expectLater(
+      repository.writeConfiguration(
+        DeviceConfiguration(
+          systemTime: DateTime.fromMillisecondsSinceEpoch(
+            1_726_000_000_000,
+            isUtc: true,
+          ),
+          recordDurationSeconds: 1800,
+          recordMode: 1,
+          recordType: 3,
+          denoise: false,
+          powerOff: 0,
+          chargingMode: 0,
+        ),
+      ),
+      throwsA(isA<FormatException>()),
+    );
+    expect(transport.writes, isEmpty);
+    await client.close();
+  });
+
+  test('rejects a non-fixed V1.6 record mode before writing', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    final repository = DeviceProtocolRepository(
+      deviceId: 'device-1',
+      profile: _profile,
+      transport: transport,
+      commands: client,
+      codec: codec,
+    );
+
+    await expectLater(
+      repository.writeConfiguration(
+        DeviceConfiguration(
+          systemTime: DateTime.fromMillisecondsSinceEpoch(
+            1_726_000_000_000,
+            isUtc: true,
+          ),
+          recordDurationSeconds: 1800,
+          recordMode: 2,
+          recordType: 2,
+          denoise: false,
+          powerOff: 0,
+          chargingMode: 0,
+        ),
+      ),
+      throwsA(isA<FormatException>()),
+    );
+    expect(transport.writes, isEmpty);
     await client.close();
   });
 
@@ -746,13 +977,13 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(transport.writes, hasLength(1));
       transport.emitSubscriptionBytes(
-        codec.encodeRequest(0x23, const [0, 0, 0, 0, 2, 0, 1, 2]),
+        codec.encodeRequest(0xA3, const [0, 0, 0, 0, 2, 0, 1, 2]),
       );
       transport.emitSubscriptionBytes(
-        codec.encodeRequest(0x23, const [2, 0, 0, 0, 1, 0, 3]),
+        codec.encodeRequest(0xA3, const [2, 0, 0, 0, 1, 0, 3]),
       );
       transport.emitSubscriptionBytes(
-        codec.encodeRequest(0x23, const [3, 0, 0, 0, 0, 0]),
+        codec.encodeRequest(0xA3, const [3, 0, 0, 0, 0, 0]),
       );
 
       await completed;
@@ -765,52 +996,113 @@ void main() {
     },
   );
 
+  test('rejects a file name slot that is not exactly 17 bytes', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    final repository = DeviceProtocolRepository(
+      deviceId: 'device-1',
+      profile: _profile,
+      transport: transport,
+      commands: client,
+      codec: codec,
+    );
+
+    await expectLater(
+      repository
+          .downloadEvtFile(nameSlot: <int>[...'capture.ogg'.codeUnits, 0])
+          .toList(),
+      throwsA(isA<FormatException>()),
+    );
+    expect(transport.writes, isEmpty);
+    await client.close();
+  });
+
+  test('decodes the V1.6 cloud hex security code into six BLE bytes', () async {
+    final transport = FakeBleTransport();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    final repository = DeviceProtocolRepository(
+      deviceId: 'device-1',
+      profile: _profile,
+      transport: transport,
+      commands: client,
+      codec: codec,
+    );
+
+    final operation = repository.executeEvtLegacySecurity(
+      EvtLegacySecurityRequest(
+        action: EvtLegacySecurityAction.authenticate,
+        securityCode: '313233343536',
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(transport.writes.single, <int>[
+      0xED,
+      0x0A,
+      0x00,
+      0x09,
+      0x00,
+      0x31,
+      0x32,
+      0x33,
+      0x34,
+      0x35,
+      0x36,
+      0xD3,
+      0x48,
+    ]);
+    transport.emitSubscriptionBytes(codec.encodeRequest(0x89, const [0x01]));
+
+    expect(await operation, isTrue);
+    await client.close();
+  });
+
   test(
-    'uses the EVT V1 security frame with six raw security-code bytes',
-    () async {
-      final transport = FakeBleTransport();
-      final client = EvtCommandClient(
-        transport: transport,
-        codec: codec,
-        responses: transport.subscriptionStream,
-      );
-      final repository = DeviceProtocolRepository(
-        deviceId: 'device-1',
-        profile: _profile,
-        transport: transport,
-        commands: client,
-        codec: codec,
-      );
+    'encodes every V1.6 security action as one action byte plus six raw bytes',
+    () {
+      for (final action in EvtLegacySecurityAction.values) {
+        final request = EvtLegacySecurityRequest(
+          action: action,
+          securityCode: '7A31C85E92B4',
+        );
 
-      final operation = repository.executeEvtLegacySecurity(
-        EvtLegacySecurityRequest(
-          action: EvtLegacySecurityAction.authenticate,
-          securityCode: '123456',
-        ),
-      );
-      await Future<void>.delayed(Duration.zero);
-
-      expect(transport.writes.single, <int>[
-        0xED,
-        0x0A,
-        0x00,
-        0x09,
-        0x00,
-        0x31,
-        0x32,
-        0x33,
-        0x34,
-        0x35,
-        0x36,
-        0xD3,
-        0x48,
-      ]);
-      transport.emitSubscriptionBytes(codec.encodeRequest(0x89, const [0x01]));
-
-      expect(await operation, isTrue);
-      await client.close();
+        expect(request.content, <int>[
+          action.wireValue,
+          0x7A,
+          0x31,
+          0xC8,
+          0x5E,
+          0x92,
+          0xB4,
+        ]);
+      }
     },
   );
+
+  test('rejects malformed V1.6 cloud security-code hex values', () {
+    expect(
+      () => EvtLegacySecurityRequest(
+        action: EvtLegacySecurityAction.authenticate,
+        securityCode: '7A31C85E92B',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => EvtLegacySecurityRequest(
+        action: EvtLegacySecurityAction.authenticate,
+        securityCode: 'GGGGGGGGGGGG',
+      ),
+      throwsFormatException,
+    );
+  });
 
   test('ignores a malformed matching 0x87 record-state event', () async {
     final transport = FakeBleTransport();
@@ -893,6 +1185,9 @@ final _profile = DeviceProfile(
       BleOperation.read,
       BleOperation.write,
     }),
+    BleLogicalEndpoint.fa10Fa15: _endpoint('FA10', 'FA15', {
+      BleOperation.write,
+    }),
     BleLogicalEndpoint.fa10Fa16: _endpoint('FA10', 'FA16', {
       BleOperation.write,
     }),
@@ -953,7 +1248,7 @@ List<int> _deviceInfoContent({
     content.addAll(List<int>.filled(30, 0));
   }
   content.add(recordStatus);
-  if (recordStatus != 0) {
+  if (recordStatus == 1 || recordStatus == 2) {
     content.addAll([8, 7, 0, 0, 1, recordType, denoise]);
   }
   content.addAll([80, 1, 0, 0, 0, audioStream]);

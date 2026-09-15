@@ -12,7 +12,7 @@ String evtLegacySecurityFailureMessage({
     return switch (action) {
       EvtLegacySecurityAction.authenticate => '设备未返回认证结果，请重新连接后重试。',
       EvtLegacySecurityAction.bind => '设备未返回绑定结果，请重新连接后重试。',
-      EvtLegacySecurityAction.reset => '设备未返回恢复结果，请重新连接后重试。',
+      EvtLegacySecurityAction.unbind => '设备未返回解绑结果，请重新连接后重试。',
     };
   }
   if (error is EvtLegacyAuthenticationException) {
@@ -24,6 +24,6 @@ String evtLegacySecurityFailureMessage({
   return switch (action) {
     EvtLegacySecurityAction.authenticate => '设备认证失败，请重新连接后重试。',
     EvtLegacySecurityAction.bind => '设备绑定失败，请重新连接后重试。',
-    EvtLegacySecurityAction.reset => '恢复初始认证码失败，请重新连接后重试。',
+    EvtLegacySecurityAction.unbind => '设备解绑失败，请重新连接后重试。',
   };
 }

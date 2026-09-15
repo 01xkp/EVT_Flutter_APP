@@ -235,13 +235,13 @@
             <tr><td>1</td><td><code>FA10 / FA19</code><br><span class="small">0000FA19-1212-EFDE-1523-785FEABCD123</span></td><td>Write + Indicate</td><td><span class="chip required">Indicate / 0x0002</span></td><td><code>0x89</code></td><td>V1 认证、首次绑定、恢复初始认证码的结果。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
             <tr><td>2</td><td><code>FA10 / FA11</code><br><span class="small">0000FA11-1212-EFDE-1523-785FEABCD123</span></td><td>Write + Indicate</td><td><span class="chip required">Indicate / 0x0002</span></td><td><code>0x81</code></td><td>认证后读取设备协议版本、设备码、版本号、名称、录音状态等基础信息。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
             <tr><td>3</td><td><code>FA10 / FA12</code><br><span class="small">0000FA12-1212-EFDE-1523-785FEABCD123</span></td><td>Read + Write + Indicate</td><td><span class="chip required">Indicate / 0x0002</span></td><td><code>0x82</code></td><td>认证后的基线配置写入结果；也用于 GATT Read 读取设备 UTC。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
-            <tr><td>4</td><td><code>FA10 / FA15</code><br><span class="small">0000FA15-1212-EFDE-1523-785FEABCD123</span></td><td>Read + Indicate</td><td><span class="chip required">Indicate / 0x0002</span></td><td><code>0x85</code></td><td>存储空间主动变化。普通“读取存储”走 GATT Read，本订阅是为了接收设备主动上报。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
+            <tr><td>4</td><td><code>FA10 / FA15</code><br><span class="small">0000FA15-1212-EFDE-1523-785FEABCD123</span></td><td>Write + Indicate</td><td><span class="chip required">Indicate / 0x0002</span></td><td><code>0x85</code></td><td>存储空间请求和主动变化。App 发送空 Content 的 <code>0x05</code> 业务 Write，设备从 FA15 Indicate 回 <code>0x85</code>；不使用 GATT Read。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
             <tr><td>5</td><td><code>FA10 / FA16</code><br><span class="small">0000FA16-1212-EFDE-1523-785FEABCD123</span></td><td>Write + Indicate</td><td><span class="chip required">Indicate / 0x0002</span></td><td><code>0x86</code></td><td>设备状态、录音授权、隐私时长的请求响应，以及设备主动状态事件。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
             <tr><td>6</td><td><code>FA10 / FA17</code><br><span class="small">0000FA17-1212-EFDE-1523-785FEABCD123</span></td><td>Write + Indicate</td><td><span class="chip required">Indicate / 0x0002</span></td><td><code>0x87</code></td><td>设备录音开始、停止、暂停、恢复的真实状态。页面不以 Write 成功直接改状态。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
             <tr><td>7</td><td><code>FB10 / FB11</code><br><span class="small">0000FB11-1212-EFDE-1523-785FEABCD123</span></td><td>Read + Indicate</td><td><span class="chip required">Indicate / 0x0002</span></td><td><code>0x91</code></td><td>电池、充电和充电模式主动变化。普通“读取电量”走 GATT Read。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
             <tr><td>8</td><td><code>FF10 / FF12</code><br><span class="small">0000FF12-1212-EFDE-1523-785FEABCD123</span></td><td>Write + Indicate</td><td><span class="chip required">Indicate / 0x0002</span></td><td><code>0xA2</code></td><td>分页获取设备录音文件列表。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
             <tr><td>9</td><td><code>FF10 / FF13</code><br><span class="small">0000FF13-1212-EFDE-1523-785FEABCD123</span></td><td>Write + Notify</td><td><span class="chip required">Notify / 0x0001</span></td><td><code>0x23</code> 连续数据帧</td><td>设备文件下载流。App 写一次请求，设备连续 Notify，零长度数据帧结束。</td><td>必需 CCC；失败后中断会话并断开。</td></tr>
-            <tr><td>可选</td><td><code>FF10 / FF11</code><br><span class="small">0000FF11-1212-EFDE-1523-785FEABCD123</span></td><td>Read + Indicate</td><td><span class="chip optional">Indicate / 0x0002</span></td><td><code>0xA1</code></td><td>文件数兼容摘要。实际文件同步以 <code>FF12 / 0x22</code> 为准。</td><td>只记日志并跳过；不阻断认证或文件列表。</td></tr>
+            <tr><td>可选</td><td><code>FF10 / FF11</code><br><span class="small">0000FF11-1212-EFDE-1523-785FEABCD123</span></td><td>Write + Indicate</td><td><span class="chip optional">Indicate / 0x0002</span></td><td><code>0xA1</code></td><td>文件数兼容摘要。App 发送空 Content 的 <code>0x21</code> 业务 Write，设备从 FF11 Indicate 回 <code>0xA1</code>；实际文件同步以 <code>FF12 / 0x22</code> 为准。</td><td>只记日志并跳过；不阻断认证或文件列表。</td></tr>
           </tbody>
         </table>
       </div>
@@ -263,7 +263,7 @@
       <div class="flow" style="margin-top:10px" aria-label="认证后的同步时序">
         <div class="flow-step"><span class="number">06</span><strong>V1 认证</strong><span>用户输入安全码，FA19 写 <code>0x09</code>，等待 <code>0x89</code>。</span></div>
         <div class="flow-step"><span class="number">07</span><strong>MTU</strong><span>认证成功后请求 517，必须得到 ATT MTU ≥ 136。</span></div>
-        <div class="flow-step"><span class="number">08</span><strong>基础信息</strong><span>FA11 写 <code>0x01</code>，收到 <code>0x81</code>，必须是 ProtocolVersion=3。</span></div>
+        <div class="flow-step"><span class="number">08</span><strong>基础信息</strong><span>FA11 写 <code>0x01</code>，收到 <code>0x81</code> 后记录 ProtocolVersion；联调阶段不因版本值阻断。</span></div>
         <div class="flow-step"><span class="number">09</span><strong>基线配置</strong><span>FA12 写 <code>0x02</code>，收到 <code>0x82=1</code>。</span></div>
         <div class="flow-step"><span class="number">10</span><strong>详情刷新</strong><span>读取状态、电量、存储、设备时间、隐私时长和可选文件数，进入可操作状态。</span></div>
       </div>
@@ -277,7 +277,7 @@
             <tr><td>GATT 准入</td><td>发现服务并检查 UUID、Read/Write/Indicate/Notify 属性。</td><td>提供下文列出的全部必需特征。</td><td>9 个必需端点都存在且属性齐全。</td><td>任何一个缺失，App 不发送认证包，直接断开。</td></tr>
             <tr><td>CCC</td><td>串行订阅并等待原生确认。</td><td>正确处理 CCCD 开启，并在开启后允许立即发送 Indicate/Notify。</td><td>9 个必需 CCC 全部 ready。</td><td>任何必需订阅错误、关闭或超时，App 中断并断开。</td></tr>
             <tr><td>认证</td><td>显示认证卡片，用户选择认证或首次绑定。</td><td>从 FA19 接收 V1 <code>0x09</code>，从 FA19 Indicate <code>0x89</code>。</td><td>内容恰好 1 字节且为 <code>01</code>。</td><td>2 秒超时或格式错误后断开重连，防止旧回包被误用。</td></tr>
-            <tr><td>自动同步</td><td>协商 MTU，读 <code>0x01</code>，写基线 <code>0x02</code>，再刷新详情。</td><td>返回完整 <code>0x81</code>，支持 MTU ≥ 136，并只在配置已生效时回 <code>0x82=01</code>。</td><td>版本为 3，配置成功。</td><td>基础信息/基线配置失败，App 不进入可操作状态并断开。</td></tr>
+            <tr><td>自动同步</td><td>协商 MTU，读 <code>0x01</code>，记录版本，写基线 <code>0x02</code>，再刷新详情。</td><td>返回完整 <code>0x81</code>，支持 MTU ≥ 136，并只在配置已生效时回 <code>0x82=01</code>。</td><td>设备信息格式和配置成功；版本值仅记录。</td><td>基础信息/基线配置失败，App 不进入可操作状态并断开。</td></tr>
           </tbody>
         </table>
       </div>
@@ -301,14 +301,14 @@ CRC 覆盖范围 = CMD + Content；线上 CRC 低字节在前。</pre>
         <table>
           <thead><tr><th>接口</th><th>App 发起方式</th><th>固件回包位置</th><th>用途和关键字段</th></tr></thead>
           <tbody>
-            <tr><td><code>0x01 → 0x81</code></td><td><code>FA11 Write</code>，Content 为空。</td><td><code>FA11 Indicate</code></td><td>设备信息。App 要求 <code>ProtocolVersion=3</code>；解析设备码、软硬件版本、名称、总/剩余存储、录音状态、电量和充电字段。</td></tr>
+            <tr><td><code>0x01 → 0x81</code></td><td><code>FA11 Write</code>，Content 为空。</td><td><code>FA11 Indicate</code></td><td>设备信息。App 记录 <code>ProtocolVersion</code>（联调阶段不按版本值拦截）；解析设备码、软硬件版本、名称、总/剩余存储、录音状态、电量和充电字段。</td></tr>
             <tr><td><code>0x02 → 0x82</code></td><td><code>FA12 Write</code>，Content 固定 12 字节。</td><td><code>FA12 Indicate</code></td><td>认证后的基础配置。<code>0x82</code> Content 仅 1 字节，只有 <code>01</code> 才成功。设备 UTC 使用 FA12 的 <strong>GATT Read</strong> 读取 <code>0x82 + u32 UTC</code>，不是空 Content 的 <code>0x02</code> 写入。</td></tr>
-            <tr><td><code>0x05 → 0x85</code></td><td><code>FA15 GATT Read</code>，不发送业务 Write。</td><td>Read 返回业务帧；也接收 <code>FA15 Indicate</code></td><td>存储空间：<code>TotalMB:u32LE + FreeMB:u32LE</code>。</td></tr>
+            <tr><td><code>0x05 → 0x85</code></td><td><code>FA15 Write</code>，发送空 Content 的完整业务帧。</td><td><code>FA15 Indicate</code></td><td>存储空间：<code>TotalMB:u32LE + FreeMB:u32LE</code>。</td></tr>
             <tr><td><code>0x06 → 0x86</code></td><td><code>FA16 Write</code></td><td><code>FA16 Indicate</code></td><td>状态、录音授权、默认隐私时长。见下一小节的 SubCmd。</td></tr>
             <tr><td><code>0x07 → 0x87</code></td><td><code>FA17 Write</code>，Content 为 Action。</td><td><code>FA17 Indicate</code></td><td>录音控制。<code>0</code>停止、<code>1</code>开始、<code>2</code>暂停、<code>3</code>恢复。</td></tr>
             <tr><td><code>0x09 → 0x89</code></td><td><code>FA19 Write</code>，Content 为 <code>Action + SecurityCode[6]</code>。</td><td><code>FA19 Indicate</code></td><td>只实现 V1 六字节认证码。Action <code>0</code>认证、<code>1</code>首次绑定、<code>2</code>恢复初始认证码；<code>0x89</code> 的 <code>01</code> 成功、<code>00</code>失败。</td></tr>
             <tr><td><code>0x11 → 0x91</code></td><td><code>FB11 GATT Read</code>，不发送业务 Write。</td><td>Read 返回业务帧；也接收 <code>FB11 Indicate</code></td><td><code>Battery:u8(0..100) + Charging:u8 + ChargingMode:u8</code>。</td></tr>
-            <tr><td><code>0x21 → 0xA1</code></td><td><code>FF11 GATT Read</code>，可选。</td><td>Read 返回业务帧；也接收 <code>FF11 Indicate</code></td><td>文件数摘要：<code>FileCount:u16LE</code>。不是文件同步的必要条件。</td></tr>
+            <tr><td><code>0x21 → 0xA1</code></td><td><code>FF11 Write</code>，发送空 Content 的完整业务帧，可选。</td><td><code>FF11 Indicate</code></td><td>文件数摘要：<code>FileCount:u16LE</code>。不是文件同步的必要条件。</td></tr>
             <tr><td><code>0x22 → 0xA2</code></td><td><code>FF12 Write</code>，<code>Offset:u16LE + PageSize:u8</code>。</td><td><code>FF12 Indicate</code></td><td>文件分页列表。每条固定 <code>FileName[17] + FileLength:u32LE</code>；没有回显请求 Offset。</td></tr>
             <tr><td><code>0x23 → 0x23</code></td><td><code>FF13 Write</code>，文件名槽位，断点时附 Offset 和 ChunkSize。</td><td><code>FF13 Notify</code> 连续数据帧</td><td>下载。每帧是 <code>FileOffset:u32LE + DataLength:u16LE + FileData</code>；<code>DataLength=0</code> 代表结束。</td></tr>
           </tbody>
@@ -382,9 +382,9 @@ CRC 覆盖范围 = CMD + Content；线上 CRC 低字节在前。</pre>
         <div class="feature-head"><h3>认证后的自动同步和手动刷新</h3><span class="feature-id">H-EVT-04</span></div>
         <div class="feature-grid">
           <div class="feature-block"><strong>怎么使用</strong><p>认证成功后，App 自动加载设备详情。页面中的“刷新设备状态”可再次读取当前状态；用户不需要手动下发初始配置。</p></div>
-          <div class="feature-block"><strong>App 接口处理</strong><p>依次请求 ATT MTU（目标 517，准入最低 136）、FA11 <code>0x01</code>、FA12 <code>0x02</code>，再读取 FA16 状态、FB11 电量、FA15 存储、FA12 UTC、FA16 隐私时长和可选 FF11 文件数。</p></div>
-          <div class="feature-block"><strong>固件必须做到</strong><p><code>0x81</code> 的字段长度须符合协议且 <code>ProtocolVersion=3</code>；设备应支持足够 MTU 承载最大信息帧。<code>0x82</code> 的 <code>01</code> 只能在 12 字节配置和 RTC 都已实际生效后返回。</p></div>
-          <div class="feature-block"><strong>成功和失败</strong><p><span class="ok">成功：</span>App 才切到可操作设备详情。<br><span class="bad">失败：</span><code>0x01</code>、协议版本或基线 <code>0x02</code> 出错会断开；详情中的补充读取失败只显示“暂未读取”并记日志，不伪造数据。</p></div>
+          <div class="feature-block"><strong>App 接口处理</strong><p>依次请求 ATT MTU（目标 517，准入最低 136）、FA11 <code>0x01</code>、FA12 <code>0x02</code>，再读取 FA16 状态、FB11 电量和 FA12 UTC；存储通过 FA15 Write 发送空 Content 的 <code>0x05</code>，可选文件数通过 FF11 Write 发送空 Content 的 <code>0x21</code>，两者都等待对应 Indicate 回包。</p></div>
+          <div class="feature-block"><strong>固件必须做到</strong><p><code>0x81</code> 的字段长度须符合协议；当前协议建议返回 <code>ProtocolVersion=3</code>，但 App 联调阶段只记录、不按版本值拦截。设备应支持足够 MTU 承载最大信息帧。<code>0x82</code> 的 <code>01</code> 只能在 12 字节配置和 RTC 都已实际生效后返回。</p></div>
+          <div class="feature-block"><strong>成功和失败</strong><p><span class="ok">成功：</span>App 才切到可操作设备详情。<br><span class="bad">失败：</span><code>0x01</code> 字段或基线 <code>0x02</code> 出错会断开；协议版本只写入联调日志，不作为失败条件。详情中的补充读取失败只显示“暂未读取”并记日志，不伪造数据。</p></div>
         </div>
       </article>
 
@@ -412,9 +412,9 @@ CRC 覆盖范围 = CMD + Content；线上 CRC 低字节在前。</pre>
         <div class="feature-head"><h3>电量、存储空间和文件数量</h3><span class="feature-id">H-EVT-07</span></div>
         <div class="feature-grid">
           <div class="feature-block"><strong>怎么使用</strong><p>在设备详情点击刷新即可更新电量、充电、存储和文件数。文件数仅用于摘要，实际以“设备录音文件”列表为准。</p></div>
-          <div class="feature-block"><strong>App 接口处理</strong><p>存储使用 FA15 GATT Read 得 <code>0x85</code>；电量使用 FB11 GATT Read 得 <code>0x91</code>；文件数使用可选 FF11 GATT Read 得 <code>0xA1</code>。三项都已提前订阅，用于接收设备主动变化。</p></div>
-          <div class="feature-block"><strong>固件必须做到</strong><p>GATT Read 的返回数据仍是完整 <code>0xED</code> 业务帧。存储字段是总量和剩余量的 <code>u32LE</code>，剩余不能大于总量；电池是 0..100；文件数是 <code>u16LE</code>。</p></div>
-          <div class="feature-block"><strong>成功和失败</strong><p><span class="ok">成功：</span>读取或主动 Indicate 都能刷新页面。<br><span class="bad">失败：</span>Read 2 秒超时可重读一次；第二次仍失败或数据非法时保留旧值，显示未读取/失败，不影响已认证会话。</p></div>
+          <div class="feature-block"><strong>App 接口处理</strong><p>存储向 FA15 Write 发送空 Content 的 <code>0x05</code>，等待 <code>0x85</code> Indicate；电量使用 FB11 GATT Read 得 <code>0x91</code>，同时监听其 Indicate；文件数使用可选 FF11 Write 发送空 Content 的 <code>0x21</code>，等待 <code>0xA1</code> Indicate。三项都已提前订阅，用于接收设备主动变化。</p></div>
+          <div class="feature-block"><strong>固件必须做到</strong><p>FA15、FF11 的 Write 请求必须从对应特征 Indicate 完整 <code>0xED</code> 业务帧；FB11 的 GATT Read 和 Indicate 也返回完整业务帧。存储字段是总量和剩余量的 <code>u32LE</code>，剩余不能大于总量；电池是 0..100；文件数是 <code>u16LE</code>。</p></div>
+          <div class="feature-block"><strong>成功和失败</strong><p><span class="ok">成功：</span>Read 返回或主动/请求 Indicate 都能刷新页面。<br><span class="bad">失败：</span>FB11 Read、FA15/FF11 请求响应 2 秒超时可再试一次；第二次仍失败或数据非法时保留旧值，显示未读取/失败，不影响已认证会话。</p></div>
         </div>
       </article>
 
@@ -464,7 +464,7 @@ CRC 覆盖范围 = CMD + Content；线上 CRC 低字节在前。</pre>
             <tr><td><code>0x01</code>、<code>0x02</code>、<code>0x06</code> 无响应</td><td>业务命令响应等待 2 秒，最多重发 1 次。</td><td>这些操作是可安全重复的读/配置类操作。</td><td>检查首次/重试帧是否都收到，回包是否在正确特征和 2 秒窗口内。</td></tr>
             <tr><td><code>0x09</code> 无响应</td><td>等待 2 秒，不重发，断开当前会话。</td><td>V1 回包没有事务 ID；绑定/恢复可能已改变设备状态，重放危险。</td><td>检查 FA19 是否在 CCC ready 后回 <code>0x89</code>，以及 Result 是否为单字节。</td></tr>
             <tr><td><code>0x07</code> 无响应</td><td>不重发；页面提示失败，用户刷新或重新连接确认实际状态。</td><td>录音动作非幂等，重复发送可能造成状态反转。</td><td>检查 FA17 的 <code>0x87</code> 状态、长度和真正执行时机。</td></tr>
-            <tr><td>GATT Read 超时</td><td>FA12、FA15、FB11、FF11 的 Read 每次 2 秒，允许再读一次。</td><td>读取是幂等的，允许一次恢复性重试。</td><td>检查 Read Response 是否携带完整业务帧而不是裸数据。</td></tr>
+            <tr><td>读取/请求响应超时</td><td>FA12、FB11 的 GATT Read，以及 FA15、可选 FF11 的 Write + Indicate 请求，每次等待 2 秒，允许再试一次。</td><td>这些读取类操作是幂等的，允许一次恢复性重试。</td><td>检查 Read Response 或 Indicate 是否携带完整业务帧而不是裸数据，并核对回包特征。</td></tr>
             <tr><td><code>0x22</code> 文件列表异常</td><td>不重发；断开当前会话后要求重连。</td><td><code>0xA2</code> 不包含请求 Offset，迟到包无法与下一页安全关联。</td><td>检查每页 <code>0xA2</code> 是否及时发送且 Count/长度准确。</td></tr>
             <tr><td><code>0x23</code> 下载停顿/取消</td><td>连续 15 秒没有文件帧，或用户取消/帧不连续时，保留 checkpoint 并断开。</td><td>防止旧 Notify 在下一次下载时混入。</td><td>检查 Notify 连续性、Offset、Length、结束帧和停止传输的时机。</td></tr>
             <tr><td>CRC、长度、CMD 或端点不匹配</td><td>丢弃无效数据，保留旧状态，写入诊断日志。</td><td>任何格式错误都不能变成 UI 成功。</td><td>抓 HCI 日志核对原始字节、Length、CRC 和特征 UUID。</td></tr>
@@ -499,10 +499,10 @@ CRC 覆盖范围 = CMD + Content；线上 CRC 低字节在前。</pre>
           <h3>固件先自检</h3>
           <ul class="checklist">
             <li>广播同时具备正确名称、8 字节厂商数据和 AF30 服务 UUID。</li>
-            <li>9 个必需特征 UUID 与属性完整；FF11 可选但若存在应为 Read + Indicate。</li>
+            <li>9 个必需特征 UUID 与属性完整；FF11 可选但若存在应为 Write + Indicate。</li>
             <li>Indicate 特征不同时声明 Notify；FF13 只声明 Write + Notify。</li>
             <li>每个 Read/Indicate/Notify 返回完整 <code>0xED</code> 帧，CRC、Length、小端序正确。</li>
-            <li>认证成功才允许受保护命令；协议版本固定返回 3。</li>
+            <li>认证成功才允许受保护命令；固件建议返回协议版本 3，App 联调暂不拦截版本值。</li>
             <li>文件列表页、文件数据 Offset、结束帧和声明文件长度一致。</li>
           </ul>
         </article>
@@ -512,7 +512,7 @@ CRC 覆盖范围 = CMD + Content；线上 CRC 低字节在前。</pre>
             <li>Android 和 iOS 各扫描 10 次，广播字段完整时稳定显示，关机后 5 秒内消失。</li>
             <li>连接后核对 9 个必需 CCC 的顺序、类型和原生 ready 日志。</li>
             <li>用正确/错误 V1 安全码验证认证、首次绑定和恢复初始码的 <code>0x09 → 0x89</code>。</li>
-            <li>验证 MTU、<code>0x01 → 0x81</code>、<code>0x02 → 0x82</code> 和 ProtocolVersion=3。</li>
+            <li>验证 MTU、<code>0x01 → 0x81</code>、<code>0x02 → 0x82</code>，并记录 ProtocolVersion（暂不拦截）。</li>
             <li>验证状态、授权、隐私时长、电量、存储、录音控制、文件列表和下载。</li>
             <li>验证主动断开、意外断开自动回连、蓝牙关闭、权限拒绝、文件传输中断与日志导出。</li>
           </ul>

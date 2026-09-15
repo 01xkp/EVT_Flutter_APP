@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 /// EVT carries device names, file names, security codes, and audio bytes on
 /// the same response stream as ordinary control messages. This helper is the
 /// only place where a command-level logger may turn wire bytes into text. It
-/// exposes complete bytes only for fixed-shape control frames whose V1.5
+/// exposes complete bytes only for fixed-shape control frames whose V1.6
 /// payloads are numeric configuration or state values.
 class EvtPacketLogSummary {
   const EvtPacketLogSummary._({
@@ -85,7 +85,7 @@ class EvtPacketLogSummary {
 
   /// Returns whether [value] is a summary created by this class and can enter
   /// a persistent diagnostic. Callers cannot use this as a general hex dump:
-  /// both the command and the fixed V1.5 payload shape are checked.
+  /// both the command and the fixed V1.6 payload shape are checked.
   static bool isPersistableSummary({
     required String key,
     required String value,
@@ -234,7 +234,7 @@ class EvtPacketLogSummary {
   );
 
   /// Only the request contains the six-byte security code. Its safe summary
-  /// preserves the V1.5 header, action and CRC while masking all six code
+  /// preserves the V1.6 header, action and CRC while masking all six code
   /// bytes. The fixed one-byte `0x89` result remains fully visible and is the
   /// decisive field when debugging an FA19 indication that did or did not
   /// reach Flutter.
@@ -245,14 +245,16 @@ class EvtPacketLogSummary {
         // 0x81 includes the device code and user-visible device name.
         0x01 ||
         0x81 ||
-        // 0x22/0xA2 carry file slots; 0x23 carries file names and audio chunks.
+        // 0x22/0xA2 carry file slots; 0x23 carries file names and 0xA3 carries
+        // file/audio chunks.
         0x22 ||
         0xA2 ||
-        0x23 => true,
+        0x23 ||
+        0xA3 => true,
         _ => false,
       };
 
-  /// V1.5's fixed-shape numeric control frames. Unknown subcommands or a
+  /// V1.6's fixed-shape numeric control frames. Unknown subcommands or a
   /// changed length intentionally fail closed and do not render their bytes.
   static bool _isSafeControlFrame(int command, int contentLength) =>
       switch (command) {
@@ -264,10 +266,11 @@ class EvtPacketLogSummary {
         0x86 => contentLength == 3 || contentLength == 8,
         0x07 => contentLength == 1,
         0x87 => contentLength == 1 || contentLength == 8,
-        // V1 0x09 response: Result:u8, where 0 means rejected and 1 means
+        // V1.6 0x09 response: Result:u8, where 0 means rejected and 1 means
         // accepted. It contains no security code or device identifier.
         0x89 => contentLength == 1,
         // Battery, storage and compatibility file-count values are numeric.
+        0x05 => contentLength == 0,
         0x11 => contentLength == 0,
         0x91 => contentLength == 3,
         0x85 => contentLength == 8,

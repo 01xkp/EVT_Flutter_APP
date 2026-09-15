@@ -19,7 +19,9 @@ class DeviceReconnectController extends ChangeNotifier {
     required Future<bool> Function(DeviceCandidate candidate) connect,
     required SafeAppLogger logger,
     AdvertisementFilter advertisementFilter = const AdvertisementFilter(),
-    bool filterByV15Advertisement = true,
+    bool? filterByV16Advertisement,
+    // Kept for source compatibility with pre-V1.6 callers.
+    @Deprecated('Use filterByV16Advertisement') bool? filterByV15Advertisement,
     Future<void> Function(Duration duration)? waitForRetry,
     DateTime Function()? now,
   }) {
@@ -30,7 +32,10 @@ class DeviceReconnectController extends ChangeNotifier {
       connect,
       logger,
       advertisementFilter,
-      filterByV15Advertisement,
+      // EVT discovery intentionally does not require a strict advertisement
+      // signature. The UI still hides unnamed devices and matches the
+      // remembered connection identity before attempting GATT.
+      filterByV16Advertisement ?? filterByV15Advertisement ?? false,
       waitForRetry ?? Future<void>.delayed,
       now ?? DateTime.now,
     );
@@ -43,7 +48,7 @@ class DeviceReconnectController extends ChangeNotifier {
     this._connect,
     this._logger,
     this._advertisementFilter,
-    this._filterByV15Advertisement,
+    this._filterByV16Advertisement,
     this._waitForRetry,
     this._now,
   );
@@ -58,7 +63,7 @@ class DeviceReconnectController extends ChangeNotifier {
   final Future<bool> Function(DeviceCandidate candidate) _connect;
   final SafeAppLogger _logger;
   final AdvertisementFilter _advertisementFilter;
-  final bool _filterByV15Advertisement;
+  final bool _filterByV16Advertisement;
   final Future<void> Function(Duration duration) _waitForRetry;
   final DateTime Function() _now;
 
@@ -129,7 +134,7 @@ class DeviceReconnectController extends ChangeNotifier {
       );
       return;
     }
-    if (_filterByV15Advertisement && !_advertisementFilter.matches(candidate)) {
+    if (_filterByV16Advertisement && !_advertisementFilter.matches(candidate)) {
       _logInfo(
         'reconnect_candidate_ignored',
         reason: '扫描结果不符合 EVT 广播约定，不能用于自动回连。',

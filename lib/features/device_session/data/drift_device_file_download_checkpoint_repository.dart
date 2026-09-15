@@ -13,8 +13,9 @@ class DriftDeviceFileDownloadCheckpointRepository
 
   @override
   Future<List<DeviceFileDownloadCheckpoint>> allDownloading() async {
-    // `phase` was written by the retired DVT archive flow. EVT has only an
-    // interruptible download, so legacy values are treated as resumable.
+    // `phase` is a historical database column from an earlier archive
+    // prototype. The V1.6 EVT path has only an interruptible download, so any
+    // stored value is treated as resumable.
     final rows = await _database
         .select(_database.deviceFileDownloadCheckpoints)
         .get();
@@ -81,7 +82,8 @@ class DriftDeviceFileDownloadCheckpointRepository
       expectedLength: checkpoint.expectedLength.toString(),
       expectedCrc32: checkpoint.expectedCrc32.toString(),
       receivedBytes: checkpoint.receivedBytes,
-      // Normalize any legacy DVT phase when this checkpoint is next saved.
+      // Normalize the historical phase column when this checkpoint is next
+      // saved; V1.6 EVT always resumes through the download path.
       phase: const Value('downloading'),
       updatedAt: checkpoint.updatedAt,
     );

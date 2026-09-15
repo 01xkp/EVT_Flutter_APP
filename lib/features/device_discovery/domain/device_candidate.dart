@@ -18,7 +18,7 @@ class DeviceCandidate {
   final int rssi;
   final DateTime discoveredAt;
 
-  /// Stable hardware identity encoded by V1.5 in `A3 89 + BtAddressRaw[6]`.
+  /// Stable hardware identity encoded by V1.6 in `A3 89 + BtAddressRaw[6]`.
   ///
   /// [connectionId] must only be used by the BLE transport. iOS supplies a
   /// CoreBluetooth UUID rather than a MAC.

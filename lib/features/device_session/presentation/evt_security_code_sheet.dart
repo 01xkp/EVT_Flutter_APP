@@ -1,5 +1,6 @@
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class EvtSecurityCodeSheet extends StatefulWidget {
   const EvtSecurityCodeSheet({
@@ -39,8 +40,8 @@ class _EvtSecurityCodeSheetState extends State<EvtSecurityCodeSheet> {
   var _obscureCode = true;
 
   bool get _isComplete {
-    final bytes = _controller.text.codeUnits;
-    return bytes.length == 6 && bytes.every((byte) => byte <= 0xFF);
+    final value = _controller.text.trim();
+    return value.length == 12 && RegExp(r'^[0-9A-Fa-f]{12}$').hasMatch(value);
   }
 
   @override
@@ -70,18 +71,23 @@ class _EvtSecurityCodeSheetState extends State<EvtSecurityCodeSheet> {
               obscureText: _obscureCode,
               enableSuggestions: false,
               autocorrect: false,
+              textCapitalization: TextCapitalization.characters,
               keyboardType: TextInputType.visiblePassword,
               textInputAction: TextInputAction.done,
-              maxLength: 6,
+              maxLength: 12,
+              inputFormatters: <TextInputFormatter>[
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9A-Fa-f]')),
+                LengthLimitingTextInputFormatter(12),
+              ],
               onChanged: (_) => setState(() {}),
               onSubmitted: (_) => _submit(),
               decoration: InputDecoration(
-                labelText: '6 字节认证码',
-                hintText: '请输入 6 个字符',
+                labelText: '12 位十六进制安全码',
+                hintText: '例如 7A31C85E92B4',
                 counterText: '',
                 errorText: _controller.text.isEmpty || _isComplete
                     ? null
-                    : '认证码必须恰好是 6 个原始字节',
+                    : '请输入恰好 12 位十六进制字符',
                 suffixIcon: IconButton(
                   tooltip: _obscureCode ? '显示认证码' : '隐藏认证码',
                   icon: Icon(
@@ -121,6 +127,8 @@ class _EvtSecurityCodeSheetState extends State<EvtSecurityCodeSheet> {
     if (!_isComplete) {
       return;
     }
-    Navigator.of(context).pop(_controller.text);
+    // Normalize the cloud/bench representation before handing it to the
+    // protocol gateway. The gateway converts every pair into one raw byte.
+    Navigator.of(context).pop(_controller.text.trim().toUpperCase());
   }
 }

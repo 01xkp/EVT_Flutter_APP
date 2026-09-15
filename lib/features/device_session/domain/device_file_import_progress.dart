@@ -1,8 +1,8 @@
 /// Immutable progress for a device-file import.
 ///
 /// This belongs to the shared file-transfer domain rather than a particular
-/// EVT or DVT import implementation so presentation code does not need to
-/// depend on a later-stage archive flow.
+/// EVT import implementation, so presentation code does not depend on a
+/// retired archive flow.
 class DeviceFileImportProgress {
   const DeviceFileImportProgress({required this.received, required this.total});
 

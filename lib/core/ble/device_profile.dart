@@ -2,24 +2,25 @@ import 'package:aipin/core/diagnostics/evt_failure.dart';
 import 'package:aipin/core/ble/ble_models.dart';
 
 class DeviceProfile {
-  static const _evtV15NamePrefix = 'AIPIN';
-  static const _evtV15ManufacturerPrefix = <int>[0xA3, 0x89];
-  static const _evtV15AdvertisementServiceUuid =
+  // V1.6 keeps the EVT service UUIDs and broadcast identity from the earlier
+  // EVT baseline. The declarations below are the V1.6 contract.
+  static const _evtV16NamePrefix = 'AIPIN';
+  static const _evtV16ManufacturerPrefix = <int>[0xA3, 0x89];
+  static const _evtV16AdvertisementServiceUuid =
       '0000AF30-0000-1000-8000-00805F9B34FB';
-  static const _evtV15Fa10ServiceUuid = '0000FA10-1212-EFDE-1523-785FEABCD123';
-  static const _evtV15Fb10ServiceUuid = '0000FB10-1212-EFDE-1523-785FEABCD123';
-  static const _evtV15Ff10ServiceUuid = '0000FF10-1212-EFDE-1523-785FEABCD123';
+  static const _evtV16Fa10ServiceUuid = '0000FA10-1212-EFDE-1523-785FEABCD123';
+  static const _evtV16Fb10ServiceUuid = '0000FB10-1212-EFDE-1523-785FEABCD123';
+  static const _evtV16Ff10ServiceUuid = '0000FF10-1212-EFDE-1523-785FEABCD123';
 
-  /// The endpoints that every EVT V1.5 peripheral must expose.
+  /// The endpoints that every V1.6 EVT peripheral must expose.
   ///
   /// This intentionally lives in the BLE profile layer instead of importing
   /// the protocol contract, so the configuration is validated before a
   /// session or protocol client exists.
   ///
-  /// `FF11 / 0x21` is intentionally absent here. The V1.5 protocol calls it a
-  /// compatibility-only file-count summary; file listing through `FF12 / 0x22`
-  /// remains the required sync path.
-  static const evtV15RequiredEndpointOperations =
+  /// `FF11 / 0x21` is intentionally optional: it is a compatibility-only
+  /// file-count summary and the required sync path remains `FF12 / 0x22`.
+  static const evtV16RequiredEndpointOperations =
       <BleLogicalEndpoint, Set<BleOperation>>{
         BleLogicalEndpoint.fa10Fa11: <BleOperation>{
           BleOperation.write,
@@ -31,7 +32,7 @@ class DeviceProfile {
           BleOperation.indicate,
         },
         BleLogicalEndpoint.fa10Fa15: <BleOperation>{
-          BleOperation.read,
+          BleOperation.write,
           BleOperation.indicate,
         },
         BleLogicalEndpoint.fa10Fa16: <BleOperation>{
@@ -60,11 +61,11 @@ class DeviceProfile {
         },
       };
 
-  /// Optional backwards-compatible capabilities declared by EVT V1.5.
-  static const evtV15OptionalEndpointOperations =
+  /// Optional compatibility capability supported by the V1.6 EVT profile.
+  static const evtV16OptionalEndpointOperations =
       <BleLogicalEndpoint, Set<BleOperation>>{
         BleLogicalEndpoint.ff10Ff11: <BleOperation>{
-          BleOperation.read,
+          BleOperation.write,
           BleOperation.indicate,
         },
       };
@@ -73,57 +74,57 @@ class DeviceProfile {
   ///
   /// This map validates the bundled profile and rejects later-stage UUIDs. It
   /// is not the real-device admission gate; use
-  /// [evtV15RequiredEndpointOperations] for that purpose.
-  static const evtV15EndpointOperations =
+  /// [evtV16RequiredEndpointOperations] for that purpose.
+  static const evtV16EndpointOperations =
       <BleLogicalEndpoint, Set<BleOperation>>{
-        ...evtV15RequiredEndpointOperations,
-        ...evtV15OptionalEndpointOperations,
+        ...evtV16RequiredEndpointOperations,
+        ...evtV16OptionalEndpointOperations,
       };
 
-  /// Exact service/characteristic identities defined by the V1.5 EVT table.
+  /// Exact service/characteristic identities defined by the V1.6 EVT table.
   ///
   /// The profile is bundled with this build rather than supplied by a user at
   /// runtime, so accepting a merely well-formed but different UUID would hide
   /// a packaging or protocol-drift error until a command is sent to hardware.
-  static const evtV15EndpointIdentities = <BleLogicalEndpoint, BleEndpoint>{
+  static const evtV16EndpointIdentities = <BleLogicalEndpoint, BleEndpoint>{
     BleLogicalEndpoint.fa10Fa11: BleEndpoint(
-      serviceUuid: _evtV15Fa10ServiceUuid,
+      serviceUuid: _evtV16Fa10ServiceUuid,
       characteristicUuid: '0000FA11-1212-EFDE-1523-785FEABCD123',
     ),
     BleLogicalEndpoint.fa10Fa12: BleEndpoint(
-      serviceUuid: _evtV15Fa10ServiceUuid,
+      serviceUuid: _evtV16Fa10ServiceUuid,
       characteristicUuid: '0000FA12-1212-EFDE-1523-785FEABCD123',
     ),
     BleLogicalEndpoint.fa10Fa15: BleEndpoint(
-      serviceUuid: _evtV15Fa10ServiceUuid,
+      serviceUuid: _evtV16Fa10ServiceUuid,
       characteristicUuid: '0000FA15-1212-EFDE-1523-785FEABCD123',
     ),
     BleLogicalEndpoint.fa10Fa16: BleEndpoint(
-      serviceUuid: _evtV15Fa10ServiceUuid,
+      serviceUuid: _evtV16Fa10ServiceUuid,
       characteristicUuid: '0000FA16-1212-EFDE-1523-785FEABCD123',
     ),
     BleLogicalEndpoint.fa10Fa17: BleEndpoint(
-      serviceUuid: _evtV15Fa10ServiceUuid,
+      serviceUuid: _evtV16Fa10ServiceUuid,
       characteristicUuid: '0000FA17-1212-EFDE-1523-785FEABCD123',
     ),
     BleLogicalEndpoint.fa10Fa19: BleEndpoint(
-      serviceUuid: _evtV15Fa10ServiceUuid,
+      serviceUuid: _evtV16Fa10ServiceUuid,
       characteristicUuid: '0000FA19-1212-EFDE-1523-785FEABCD123',
     ),
     BleLogicalEndpoint.fb10Fb11: BleEndpoint(
-      serviceUuid: _evtV15Fb10ServiceUuid,
+      serviceUuid: _evtV16Fb10ServiceUuid,
       characteristicUuid: '0000FB11-1212-EFDE-1523-785FEABCD123',
     ),
     BleLogicalEndpoint.ff10Ff11: BleEndpoint(
-      serviceUuid: _evtV15Ff10ServiceUuid,
+      serviceUuid: _evtV16Ff10ServiceUuid,
       characteristicUuid: '0000FF11-1212-EFDE-1523-785FEABCD123',
     ),
     BleLogicalEndpoint.ff10Ff12: BleEndpoint(
-      serviceUuid: _evtV15Ff10ServiceUuid,
+      serviceUuid: _evtV16Ff10ServiceUuid,
       characteristicUuid: '0000FF12-1212-EFDE-1523-785FEABCD123',
     ),
     BleLogicalEndpoint.ff10Ff13: BleEndpoint(
-      serviceUuid: _evtV15Ff10ServiceUuid,
+      serviceUuid: _evtV16Ff10ServiceUuid,
       characteristicUuid: '0000FF13-1212-EFDE-1523-785FEABCD123',
     ),
   };
@@ -137,12 +138,35 @@ class DeviceProfile {
     this.hasUnsupportedEndpointDeclaration = false,
   });
 
-  /// The fixed profile shipped by the EVT build.
+  /// The fixed V1.6 profile shipped by the EVT build.
   ///
   /// EVT joint testing must not wait for an asynchronously loaded asset before
   /// it can connect to a peripheral. The protocol table is intentionally
   /// compiled into this build, so this factory is synchronous and immutable.
-  factory DeviceProfile.evtV15() => _evtV15Profile;
+  factory DeviceProfile.evtV16() => _evtV16Profile;
+
+  /// @deprecated Use [evtV16]. Kept as a source-compatible alias for older
+  /// callers while all declarations now follow the V1.6 wire contract.
+  @Deprecated('Use DeviceProfile.evtV16()')
+  factory DeviceProfile.evtV15() => _evtV16Profile;
+
+  /// @deprecated Use [evtV16RequiredEndpointOperations].
+  @Deprecated('Use DeviceProfile.evtV16RequiredEndpointOperations')
+  static const evtV15RequiredEndpointOperations =
+      evtV16RequiredEndpointOperations;
+
+  /// @deprecated Use [evtV16OptionalEndpointOperations].
+  @Deprecated('Use DeviceProfile.evtV16OptionalEndpointOperations')
+  static const evtV15OptionalEndpointOperations =
+      evtV16OptionalEndpointOperations;
+
+  /// @deprecated Use [evtV16EndpointOperations].
+  @Deprecated('Use DeviceProfile.evtV16EndpointOperations')
+  static const evtV15EndpointOperations = evtV16EndpointOperations;
+
+  /// @deprecated Use [evtV16EndpointIdentities].
+  @Deprecated('Use DeviceProfile.evtV16EndpointIdentities')
+  static const evtV15EndpointIdentities = evtV16EndpointIdentities;
 
   factory DeviceProfile.empty() => const DeviceProfile(
     namePrefix: 'AIPIN',
@@ -167,7 +191,7 @@ class DeviceProfile {
         for (final characteristicEntry in (serviceEntry.value as Map).entries) {
           final key = _logicalEndpoint('$service${characteristicEntry.key}');
           if (key == null ||
-              !evtV15EndpointOperations.containsKey(key) ||
+              !evtV16EndpointOperations.containsKey(key) ||
               characteristicEntry.value is! Map) {
             hasUnsupportedEndpointDeclaration = true;
             continue;
@@ -229,19 +253,24 @@ class DeviceProfile {
   }
 
   bool get isGattReady {
-    if (!_matchesEvtV15DiscoveryContract || !_matchesEvtV15LegacyAnchors) {
+    if (!_matchesEvtV16DiscoveryContract || !_matchesEvtV16GattAnchors) {
       return false;
     }
     if (!_isUuid(gattServiceUuid)) {
       return false;
     }
+    // Compatibility endpoints are deliberately optional.  A V1.6 EVT
+    // peripheral may omit FF11/0x21 while still exposing the complete
+    // required profile; only unknown declarations or a missing required
+    // endpoint make the profile unusable.
     if (hasUnsupportedEndpointDeclaration ||
-        endpoints.length != evtV15EndpointOperations.length) {
+        endpoints.length < evtV16RequiredEndpointOperations.length ||
+        endpoints.length > evtV16EndpointOperations.length) {
       return false;
     }
-    for (final entry in evtV15EndpointOperations.entries) {
+    for (final entry in evtV16RequiredEndpointOperations.entries) {
       final endpoint = endpoints[entry.key];
-      final identity = evtV15EndpointIdentities[entry.key]!;
+      final identity = evtV16EndpointIdentities[entry.key]!;
       if (endpoint == null ||
           !_isUuid(endpoint.serviceUuid) ||
           !_isUuid(endpoint.characteristicUuid) ||
@@ -254,28 +283,47 @@ class DeviceProfile {
         return false;
       }
     }
-    return endpoints.keys.every(evtV15EndpointOperations.containsKey);
+    // Validate optional capabilities when present, but do not make them a
+    // prerequisite for the EVT connection contract.
+    for (final entry in evtV16OptionalEndpointOperations.entries) {
+      final endpoint = endpoints[entry.key];
+      if (endpoint == null) {
+        continue;
+      }
+      final identity = evtV16EndpointIdentities[entry.key]!;
+      if (!_isUuid(endpoint.serviceUuid) ||
+          !_isUuid(endpoint.characteristicUuid) ||
+          !_sameUuid(endpoint.serviceUuid, identity.serviceUuid) ||
+          !_sameUuid(
+            endpoint.characteristicUuid,
+            identity.characteristicUuid,
+          ) ||
+          !endpoint.operations.containsAll(entry.value)) {
+        return false;
+      }
+    }
+    return endpoints.keys.every(evtV16EndpointOperations.containsKey);
   }
 
   EvtFailure? get validationFailure => isGattReady
       ? null
       : EvtFailure.access(
           message: 'GATT 配置未完成',
-          detail: '当前 EVT V1.5 内置协议配置不完整，请重新安装匹配的 App 构建。',
+          detail: '当前 EVT V1.6 内置协议配置不完整，请重新安装匹配的 App 构建。',
         );
 
-  bool get _matchesEvtV15DiscoveryContract {
+  bool get _matchesEvtV16DiscoveryContract {
     final prefix = manufacturerPrefixBytes;
-    return namePrefix.trim().toUpperCase() == _evtV15NamePrefix &&
-        _sameUuid(serviceUuid, _evtV15AdvertisementServiceUuid) &&
-        prefix.length == _evtV15ManufacturerPrefix.length &&
+    return namePrefix.trim().toUpperCase() == _evtV16NamePrefix &&
+        _sameUuid(serviceUuid, _evtV16AdvertisementServiceUuid) &&
+        prefix.length == _evtV16ManufacturerPrefix.length &&
         Iterable<int>.generate(
           prefix.length,
-        ).every((index) => prefix[index] == _evtV15ManufacturerPrefix[index]);
+        ).every((index) => prefix[index] == _evtV16ManufacturerPrefix[index]);
   }
 
-  bool get _matchesEvtV15LegacyAnchors =>
-      _sameUuid(gattServiceUuid, _evtV15Fa10ServiceUuid);
+  bool get _matchesEvtV16GattAnchors =>
+      _sameUuid(gattServiceUuid, _evtV16Fa10ServiceUuid);
 
   static bool _isUuid(String value) {
     return RegExp(
@@ -300,7 +348,7 @@ class DeviceProfile {
             ? gattServiceUuid
             : normalizeBleUuid(service);
       case 'fb10':
-        return _evtV15Fb10ServiceUuid;
+        return _evtV16Fb10ServiceUuid;
       case 'ff10':
         return '0000FF10-1212-EFDE-1523-785FEABCD123';
       default:
@@ -309,18 +357,18 @@ class DeviceProfile {
   }
 }
 
-final DeviceProfile _evtV15Profile = DeviceProfile(
-  namePrefix: DeviceProfile._evtV15NamePrefix,
+final DeviceProfile _evtV16Profile = DeviceProfile(
+  namePrefix: DeviceProfile._evtV16NamePrefix,
   manufacturerPrefixHex: 'A389',
-  serviceUuid: DeviceProfile._evtV15AdvertisementServiceUuid,
-  gattServiceUuid: DeviceProfile._evtV15Fa10ServiceUuid,
+  serviceUuid: DeviceProfile._evtV16AdvertisementServiceUuid,
+  gattServiceUuid: DeviceProfile._evtV16Fa10ServiceUuid,
   endpoints: Map<BleLogicalEndpoint, BleEndpoint>.unmodifiable({
-    for (final entry in DeviceProfile.evtV15EndpointIdentities.entries)
+    for (final entry in DeviceProfile.evtV16EndpointIdentities.entries)
       entry.key: BleEndpoint(
         serviceUuid: entry.value.serviceUuid,
         characteristicUuid: entry.value.characteristicUuid,
         operations: Set<BleOperation>.unmodifiable(
-          DeviceProfile.evtV15EndpointOperations[entry.key]!,
+          DeviceProfile.evtV16EndpointOperations[entry.key]!,
         ),
       ),
   }),

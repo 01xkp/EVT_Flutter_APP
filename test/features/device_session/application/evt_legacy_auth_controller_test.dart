@@ -13,22 +13,14 @@ void main() {
     test(
       'ignores old authentication result after reauthentication: $lateSuccess',
       () async {
-        final timers = <Timer>[];
-        final expirations = <void Function()>[];
+        var timerCount = 0;
         final controller = EvtLegacyAuthController(
           authenticationExpiryTimer: (_, callback) {
-            expirations.add(callback);
-            final timer = Timer(const Duration(days: 1), callback);
-            timers.add(timer);
-            return timer;
+            timerCount++;
+            return Timer(const Duration(days: 1), callback);
           },
         );
-        addTearDown(() {
-          controller.dispose();
-          for (final timer in timers) {
-            timer.cancel();
-          }
-        });
+        addTearDown(controller.dispose);
         final oldGateway = _DeferredSecurityGateway();
         final oldRequest = controller.authenticate(
           oldGateway,
@@ -54,10 +46,7 @@ void main() {
         expect(controller.error, isNull);
         expect(controller.allows(DevicePermission.files), isTrue);
         expect(notifications, 0);
-        expect(timers, hasLength(1));
-        expect(timers.single.isActive, isTrue);
-        expirations.single();
-        expect(controller.state, DeviceAuthState.unbound);
+        expect(timerCount, 0);
       },
     );
 
@@ -65,20 +54,14 @@ void main() {
       'does not update disposed controller after result: $lateSuccess',
       () async {
         var timerCount = 0;
-        final timers = <Timer>[];
-        addTearDown(() {
-          for (final timer in timers) {
-            timer.cancel();
-          }
-        });
         final controller = EvtLegacyAuthController(
           authenticationExpiryTimer: (_, callback) {
             timerCount++;
             final timer = Timer(const Duration(days: 1), callback);
-            timers.add(timer);
             return timer;
           },
         );
+        addTearDown(controller.dispose);
         final gateway = _DeferredSecurityGateway();
         final request = controller.authenticate(
           gateway,
@@ -115,30 +98,30 @@ void main() {
     },
   );
 
-  test('ignores a queued expiry from the previous authentication', () async {
-    final expirations = <void Function()>[];
+  test('keeps authentication until the BLE connection is revoked', () async {
+    var timerCount = 0;
     final controller = EvtLegacyAuthController(
       authenticationExpiryTimer: (_, callback) {
-        expirations.add(callback);
+        timerCount++;
         return Timer(const Duration(days: 1), callback);
       },
     );
     addTearDown(controller.dispose);
     await controller.authenticate(_SecurityGateway(), securityCode: '123456');
-    controller.revokeForConnectionLoss();
-    await controller.authenticate(_SecurityGateway(), securityCode: '654321');
-
-    expirations.first();
     expect(controller.state, DeviceAuthState.authenticated);
-    expirations.last();
+    expect(timerCount, 0);
+
+    // There is no local post-AUTH timer in V1.6. The connection lifecycle is
+    // the sole revocation boundary.
+    controller.revokeForConnectionLoss();
     expect(controller.state, DeviceAuthState.unbound);
   });
 
-  test('revokes V1 permissions when the 60-second session expires', () async {
-    void Function()? expire;
+  test('does not expire authenticated permissions after 60 seconds', () async {
+    var timerCount = 0;
     final controller = EvtLegacyAuthController(
       authenticationExpiryTimer: (_, callback) {
-        expire = callback;
+        timerCount++;
         return Timer(const Duration(days: 1), () {});
       },
     );
@@ -153,18 +136,16 @@ void main() {
       gateway.requests.single.action,
       EvtLegacySecurityAction.authenticate,
     );
-
-    expire!.call();
-
-    expect(controller.state, DeviceAuthState.unbound);
-    expect(controller.allows(DevicePermission.configuration), isFalse);
+    expect(timerCount, 0);
+    expect(controller.state, DeviceAuthState.authenticated);
+    expect(controller.allows(DevicePermission.configuration), isTrue);
   });
 
-  test('reset cancels the active V1 authentication window', () async {
-    void Function()? expire;
+  test('unbind revokes permissions without relying on an auth timer', () async {
+    var timerCount = 0;
     final controller = EvtLegacyAuthController(
       authenticationExpiryTimer: (_, callback) {
-        expire = callback;
+        timerCount++;
         return Timer(const Duration(days: 1), () {});
       },
     );
@@ -172,36 +153,69 @@ void main() {
     final gateway = _SecurityGateway();
 
     await controller.bind(gateway, securityCode: '123456');
-    await controller.reset(gateway, securityCode: '123456');
-    expire!.call();
+    await controller.unbind(gateway, securityCode: '123456');
 
     expect(controller.state, DeviceAuthState.unbound);
     expect(controller.allows(DevicePermission.files), isFalse);
+    expect(timerCount, 0);
     expect(
       gateway.requests.map((request) => request.action),
       <EvtLegacySecurityAction>[
         EvtLegacySecurityAction.bind,
-        EvtLegacySecurityAction.reset,
+        EvtLegacySecurityAction.authenticate,
+        EvtLegacySecurityAction.unbind,
       ],
     );
   });
 
   test(
+    'bind switches its transient action to AUTH after device confirmation',
+    () async {
+      final controller = EvtLegacyAuthController();
+      addTearDown(controller.dispose);
+      final gateway = _BindThenAuthenticateGateway();
+
+      final binding = controller.bind(gateway, securityCode: '7A31C85E92B4');
+
+      await gateway.bindStarted.future;
+      expect(controller.state, DeviceAuthState.authenticating);
+      expect(controller.activeAction, EvtLegacySecurityAction.bind);
+
+      gateway.bindResult.complete(true);
+      await gateway.authenticationStarted.future;
+      expect(controller.state, DeviceAuthState.authenticating);
+      expect(controller.activeAction, EvtLegacySecurityAction.authenticate);
+      expect(
+        gateway.requests.map((request) => request.action),
+        <EvtLegacySecurityAction>[
+          EvtLegacySecurityAction.bind,
+          EvtLegacySecurityAction.authenticate,
+        ],
+      );
+
+      gateway.authenticationResult.complete(true);
+      await binding;
+
+      expect(controller.state, DeviceAuthState.authenticated);
+      expect(controller.activeAction, isNull);
+    },
+  );
+
+  test(
     'records authentication steps without retaining the security code',
     () async {
-      void Function()? expire;
       final logger = _CapturingLogger();
+      var timerCount = 0;
       final controller = EvtLegacyAuthController(
         logger: logger,
         authenticationExpiryTimer: (_, callback) {
-          expire = callback;
+          timerCount++;
           return Timer(const Duration(days: 1), () {});
         },
       );
       addTearDown(controller.dispose);
 
       await controller.authenticate(_SecurityGateway(), securityCode: '123456');
-      expire!.call();
 
       expect(
         logger.events,
@@ -209,11 +223,11 @@ void main() {
           'legacy_authentication_requested',
           'legacy_authentication_started',
           'legacy_authentication_protocol_dispatch',
-          'legacy_authentication_window_started',
+          'legacy_authentication_connection_scope_started',
           'legacy_authentication_completed',
-          'legacy_authentication_expired',
         ]),
       );
+      expect(timerCount, 0);
       expect(
         logger.calls
             .firstWhere(
@@ -228,6 +242,90 @@ void main() {
       );
     },
   );
+
+  test(
+    'keeps an explicit unbind recovery marker after a rejected request',
+    () async {
+      final controller = EvtLegacyAuthController();
+      addTearDown(controller.dispose);
+      final rejecting = _RejectingSecurityGateway();
+
+      await expectLater(
+        controller.unbind(rejecting, securityCode: '123456'),
+        throwsA(isA<EvtLegacyAuthenticationException>()),
+      );
+
+      expect(controller.state, DeviceAuthState.unbindPending);
+      expect(controller.hasUnbindRecoveryPending, isTrue);
+      expect(controller.allows(DevicePermission.files), isFalse);
+      expect(rejecting.requests.single.recovery, isFalse);
+
+      await controller.unbindRecovery(
+        _SecurityGateway(),
+        securityCode: '123456',
+      );
+      expect(controller.state, DeviceAuthState.unbound);
+      expect(controller.hasUnbindRecoveryPending, isFalse);
+      expect(controller.grantedPermissions, isEmpty);
+    },
+  );
+
+  test(
+    'preserves unbind recovery intent when the connection is lost in flight',
+    () async {
+      final controller = EvtLegacyAuthController();
+      addTearDown(controller.dispose);
+      final gateway = _DeferredUnbindGateway();
+      final request = controller.unbind(gateway, securityCode: '123456');
+
+      // Wait until _execute has marked the Action=2 as dispatched before
+      // simulating the BLE disconnect.
+      await gateway.started.future;
+      controller.revokeForConnectionLoss();
+      expect(controller.state, DeviceAuthState.unbindPending);
+      expect(controller.hasUnbindRecoveryPending, isTrue);
+
+      gateway.result.completeError(StateError('connection closed'));
+      await expectLater(request, throwsA(isA<StateError>()));
+      expect(controller.state, DeviceAuthState.unbindPending);
+      expect(controller.allows(DevicePermission.status), isFalse);
+    },
+  );
+
+  test(
+    'does not allow auth or bind while unbind recovery is pending',
+    () async {
+      final controller = EvtLegacyAuthController();
+      addTearDown(controller.dispose);
+      controller.markUnbindRecoveryPending();
+      final gateway = _SecurityGateway();
+
+      await expectLater(
+        controller.authenticate(gateway, securityCode: '123456'),
+        throwsA(isA<EvtLegacyAuthenticationException>()),
+      );
+      await expectLater(
+        controller.bind(gateway, securityCode: '123456'),
+        throwsA(isA<EvtLegacyAuthenticationException>()),
+      );
+      expect(gateway.requests, isEmpty);
+      expect(controller.allows(DevicePermission.files), isFalse);
+    },
+  );
+
+  test('recovery request is explicit and never grants permissions', () async {
+    final controller = EvtLegacyAuthController(unbindRecoveryPending: true);
+    addTearDown(controller.dispose);
+    final gateway = _SecurityGateway();
+
+    await controller.recoverUnbind(gateway, securityCode: '123456');
+
+    expect(gateway.requests.single.recovery, isTrue);
+    expect(gateway.requests.single.action, EvtLegacySecurityAction.unbind);
+    expect(controller.state, DeviceAuthState.unbound);
+    expect(controller.grantedPermissions, isEmpty);
+    expect(controller.isAuthenticated, isFalse);
+  });
 }
 
 class _SecurityGateway implements EvtLegacySecurityGateway {
@@ -248,6 +346,50 @@ class _DeferredSecurityGateway implements EvtLegacySecurityGateway {
   @override
   Future<bool> executeEvtLegacySecurity(EvtLegacySecurityRequest request) =>
       result.future;
+}
+
+class _DeferredUnbindGateway implements EvtLegacySecurityGateway {
+  final started = Completer<void>();
+  final result = Completer<bool>();
+
+  @override
+  Future<bool> executeEvtLegacySecurity(EvtLegacySecurityRequest request) {
+    if (!started.isCompleted) {
+      started.complete();
+    }
+    return result.future;
+  }
+}
+
+class _RejectingSecurityGateway implements EvtLegacySecurityGateway {
+  final requests = <EvtLegacySecurityRequest>[];
+
+  @override
+  Future<bool> executeEvtLegacySecurity(
+    EvtLegacySecurityRequest request,
+  ) async {
+    requests.add(request);
+    return false;
+  }
+}
+
+class _BindThenAuthenticateGateway implements EvtLegacySecurityGateway {
+  final requests = <EvtLegacySecurityRequest>[];
+  final bindStarted = Completer<void>();
+  final bindResult = Completer<bool>();
+  final authenticationStarted = Completer<void>();
+  final authenticationResult = Completer<bool>();
+
+  @override
+  Future<bool> executeEvtLegacySecurity(EvtLegacySecurityRequest request) {
+    requests.add(request);
+    if (request.action == EvtLegacySecurityAction.bind) {
+      bindStarted.complete();
+      return bindResult.future;
+    }
+    authenticationStarted.complete();
+    return authenticationResult.future;
+  }
 }
 
 class _CapturingLogger implements SafeAppLogger {

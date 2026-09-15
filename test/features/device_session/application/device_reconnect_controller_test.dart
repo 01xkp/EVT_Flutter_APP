@@ -165,6 +165,10 @@ void main() {
         },
         logger: _CapturingLogger(),
         waitForRetry: (_) async {},
+        // This case verifies the opt-in strict advertisement policy. The
+        // product default intentionally keeps filtering disabled so unnamed
+        // candidates are hidden only at the discovery presentation layer.
+        filterByV16Advertisement: true,
       );
       addTearDown(controller.dispose);
 

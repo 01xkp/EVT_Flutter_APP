@@ -9,6 +9,11 @@ abstract interface class DeviceFileTransferGateway {
     required List<int> nameSlot,
     int startOffset,
     int chunkSize,
+
+    /// Total file length from the authoritative 0x22 entry, when available.
+    /// The transfer layer uses it to reject a premature zero-length terminal
+    /// frame and to prevent bytes beyond the declared file from being saved.
+    int? expectedFileLength,
   });
 }
 

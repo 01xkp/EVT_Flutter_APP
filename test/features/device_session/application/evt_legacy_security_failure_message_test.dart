@@ -26,10 +26,10 @@ void main() {
     );
     expect(
       evtLegacySecurityFailureMessage(
-        action: EvtLegacySecurityAction.reset,
+        action: EvtLegacySecurityAction.unbind,
         error: error,
       ),
-      '设备未返回恢复结果，请重新连接后重试。',
+      '设备未返回解绑结果，请重新连接后重试。',
     );
   });
 

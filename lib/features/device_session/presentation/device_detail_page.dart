@@ -7,6 +7,7 @@ import 'package:aipin/features/device_session/application/session_state.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/device_auth_state.dart';
 import 'package:aipin/features/device_session/domain/device_configuration.dart';
+import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
 import 'package:aipin/features/device_session/presentation/device_status_view_model.dart';
 import 'package:aipin/features/device_session/presentation/session_failure_panel.dart';
 import 'package:flutter/material.dart';
@@ -25,9 +26,11 @@ class DeviceDetailPage extends StatelessWidget {
     this.onRecordConsentChanged,
     this.onPrivacyDurationChanged,
     this.authState = DeviceAuthState.unknown,
+    this.authenticatingAction,
     this.onAuthenticate,
     this.onBind,
-    this.onResetAuthentication,
+    this.onUnbind,
+    this.onUnbindRecovery,
     this.canOpenFiles = false,
     this.canControlRecording = false,
     this.canConfigureDevice = false,
@@ -45,9 +48,11 @@ class DeviceDetailPage extends StatelessWidget {
   final ValueChanged<bool>? onRecordConsentChanged;
   final ValueChanged<int>? onPrivacyDurationChanged;
   final DeviceAuthState authState;
+  final EvtLegacySecurityAction? authenticatingAction;
   final VoidCallback? onAuthenticate;
   final VoidCallback? onBind;
-  final VoidCallback? onResetAuthentication;
+  final VoidCallback? onUnbind;
+  final VoidCallback? onUnbindRecovery;
   final bool canOpenFiles;
   final bool canControlRecording;
   final bool canConfigureDevice;
@@ -147,9 +152,11 @@ class DeviceDetailPage extends StatelessWidget {
                     const SizedBox(height: 16),
                     _AuthenticationPanel(
                       state: authState,
+                      authenticatingAction: authenticatingAction,
                       onAuthenticate: onAuthenticate,
                       onBind: onBind,
-                      onResetAuthentication: onResetAuthentication,
+                      onUnbind: onUnbind,
+                      onUnbindRecovery: onUnbindRecovery,
                     ),
                   ],
                   if (state.isObservable) ...[
@@ -437,23 +444,34 @@ class _RecordingControls extends StatelessWidget {
 class _AuthenticationPanel extends StatelessWidget {
   const _AuthenticationPanel({
     required this.state,
+    this.authenticatingAction,
     this.onAuthenticate,
     this.onBind,
-    this.onResetAuthentication,
+    this.onUnbind,
+    this.onUnbindRecovery,
   });
 
   final DeviceAuthState state;
+  final EvtLegacySecurityAction? authenticatingAction;
   final VoidCallback? onAuthenticate;
   final VoidCallback? onBind;
-  final VoidCallback? onResetAuthentication;
+  final VoidCallback? onUnbind;
+  final VoidCallback? onUnbindRecovery;
 
   @override
   Widget build(BuildContext context) {
     final authenticated = state == DeviceAuthState.authenticated;
     final inFlight = state == DeviceAuthState.authenticating;
+    final recoveryPending = state == DeviceAuthState.unbindPending;
+    final inFlightLabel = switch (authenticatingAction) {
+      EvtLegacySecurityAction.bind => '等待设备确认',
+      EvtLegacySecurityAction.unbind => '正在解绑',
+      _ => '正在认证',
+    };
     final label = switch (state) {
       DeviceAuthState.authenticated => '已认证',
-      DeviceAuthState.authenticating => '正在认证',
+      DeviceAuthState.authenticating => inFlightLabel,
+      DeviceAuthState.unbindPending => '等待解绑恢复',
       _ => '未认证',
     };
     return AppSurfaceCard(
@@ -463,16 +481,36 @@ class _AuthenticationPanel extends StatelessWidget {
           Text('设备认证（EVT）', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(label, style: Theme.of(context).textTheme.bodyMedium),
-          if (!authenticated) ...[
+          if (inFlight &&
+              authenticatingAction == EvtLegacySecurityAction.bind) ...[
+            const SizedBox(height: 8),
+            Text(
+              '请在 60 秒内短按设备按键确认。设备确认后，App 会自动完成当前连接认证。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          if (recoveryPending) ...[
+            const SizedBox(height: 12),
+            Text(
+              '上一次解绑尚未确认完成。请重新连接后使用同一设备安全码恢复。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 12),
             AppButton.secondary(
-              label: inFlight ? '正在认证' : '认证设备',
+              label: '恢复解绑',
+              icon: Icons.restore_outlined,
+              onPressed: onUnbindRecovery,
+            ),
+          ] else if (!authenticated) ...[
+            const SizedBox(height: 12),
+            AppButton.secondary(
+              label: inFlight ? inFlightLabel : '认证设备',
               icon: Icons.verified_user_outlined,
               onPressed: inFlight ? null : onAuthenticate,
             ),
             const SizedBox(height: 8),
             AppButton.secondary(
-              label: inFlight ? '正在认证' : '首次绑定设备',
+              label: inFlight ? inFlightLabel : '首次绑定设备',
               icon: Icons.link_outlined,
               onPressed: inFlight ? null : onBind,
             ),
@@ -480,11 +518,11 @@ class _AuthenticationPanel extends StatelessWidget {
           if (authenticated) ...[
             const SizedBox(height: 12),
             AppButton.destructive(
-              label: '恢复初始认证码',
+              label: '解绑设备',
               icon: Icons.link_off_outlined,
-              onPressed: onResetAuthentication == null
+              onPressed: onUnbind == null
                   ? null
-                  : () => unawaited(_confirmReset(context)),
+                  : () => unawaited(_confirmUnbind(context)),
             ),
           ],
         ],
@@ -492,16 +530,16 @@ class _AuthenticationPanel extends StatelessWidget {
     );
   }
 
-  Future<void> _confirmReset(BuildContext context) async {
+  Future<void> _confirmUnbind(BuildContext context) async {
     final confirmed = await AppConfirmationSheet.show(
       context,
-      title: '恢复初始认证码？',
-      message: 'EVT 固件会恢复初始认证码并格式化设备录音和配置，无法恢复。',
-      confirmLabel: '继续恢复',
+      title: '解绑设备？',
+      message: '解绑会清除设备上的录音、绑定凭证和用户配置，且无法恢复。请确认已完成文件同步。',
+      confirmLabel: '继续解绑',
       variant: AppConfirmationVariant.destructive,
     );
     if (confirmed) {
-      onResetAuthentication?.call();
+      onUnbind?.call();
     }
   }
 }

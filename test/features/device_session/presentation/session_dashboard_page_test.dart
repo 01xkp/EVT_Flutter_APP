@@ -3,10 +3,13 @@ import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/device_auth_state.dart';
 import 'package:aipin/features/device_session/domain/device_configuration.dart';
+import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
 import 'package:aipin/features/device_session/presentation/device_detail_page.dart';
 import 'package:aipin/features/device_session/presentation/session_dashboard_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'package:aipin/core/design_system/widgets/app_button.dart';
 
 void main() {
   testWidgets('dashboard keeps the compatibility route consumer-facing', (
@@ -218,7 +221,7 @@ void main() {
   );
 
   testWidgets(
-    'EVT reset confirmation explains that recordings and configuration are irrecoverable',
+    'EVT unbind confirmation explains that device data is irrecoverable',
     (tester) async {
       var resetRequested = false;
       await tester.pumpWidget(
@@ -226,23 +229,75 @@ void main() {
           home: DeviceDetailPage(
             state: const SessionState(phase: SessionPhase.observable),
             authState: DeviceAuthState.authenticated,
-            onResetAuthentication: () => resetRequested = true,
+            onUnbind: () => resetRequested = true,
           ),
         ),
       );
 
       await tester.scrollUntilVisible(
-        find.text('恢复初始认证码'),
+        find.text('解绑设备'),
         200,
         scrollable: find.byType(Scrollable),
       );
-      await tester.tap(find.text('恢复初始认证码'));
+      await tester.tap(find.text('解绑设备'));
       await tester.pumpAndSettle();
 
-      expect(find.text('EVT 固件会恢复初始认证码并格式化设备录音和配置，无法恢复。'), findsOneWidget);
+      expect(
+        find.text('解绑会清除设备上的录音、绑定凭证和用户配置，且无法恢复。请确认已完成文件同步。'),
+        findsOneWidget,
+      );
 
-      await tester.tap(find.text('继续恢复'));
+      await tester.tap(find.text('继续解绑'));
       expect(resetRequested, isTrue);
+    },
+  );
+
+  testWidgets('EVT pending unbind exposes only the recovery action', (
+    tester,
+  ) async {
+    var recoveryRequested = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceDetailPage(
+          state: const SessionState(phase: SessionPhase.authenticationReady),
+          authState: DeviceAuthState.unbindPending,
+          onUnbindRecovery: () => recoveryRequested = true,
+          onAuthenticate: () {},
+          onBind: () {},
+          onUnbind: () {},
+        ),
+      ),
+    );
+
+    expect(find.text('等待解绑恢复'), findsOneWidget);
+    expect(find.widgetWithText(AppButton, '恢复解绑'), findsOneWidget);
+    expect(find.widgetWithText(AppButton, '认证设备'), findsNothing);
+    expect(find.widgetWithText(AppButton, '首次绑定设备'), findsNothing);
+    expect(find.widgetWithText(AppButton, '解绑设备'), findsNothing);
+
+    await tester.tap(find.widgetWithText(AppButton, '恢复解绑'));
+    expect(recoveryRequested, isTrue);
+  });
+
+  testWidgets(
+    'EVT binding tells the user to confirm on the device before automatic AUTH',
+    (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: DeviceDetailPage(
+            state: SessionState(phase: SessionPhase.authenticationReady),
+            authState: DeviceAuthState.authenticating,
+            authenticatingAction: EvtLegacySecurityAction.bind,
+          ),
+        ),
+      );
+
+      expect(find.text('等待设备确认'), findsNWidgets(3));
+      expect(
+        find.text('请在 60 秒内短按设备按键确认。设备确认后，App 会自动完成当前连接认证。'),
+        findsOneWidget,
+      );
+      expect(find.text('正在认证'), findsNothing);
     },
   );
 }

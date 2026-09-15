@@ -10,9 +10,9 @@ enum DevicePermission {
 
 /// Supplies the currently valid device permissions for one BLE session.
 ///
-/// The EVT V1 authentication window is time-limited. Keeping this boundary at
-/// the session layer prevents an already-open page from issuing a BLE command
-/// after that window has expired.
+/// In EVT V1.6 the 60-second limit is the firmware deadline for completing
+/// AUTH after a connection is established. Once AUTH succeeds, permissions
+/// remain valid for that BLE connection and are revoked on disconnect/restart.
 abstract interface class DevicePermissionGate {
   bool allows(DevicePermission permission);
 }

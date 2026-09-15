@@ -5,10 +5,33 @@ import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/diagnostics/diagnostic_trace.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/protocol/evt_command_client.dart';
+import 'package:aipin/core/protocol/evt_protocol_contract.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/fake_ble_transport.dart';
+
+const _getStatusRequest = <int>[0x01];
+const _authenticateRequest = <int>[0x00, 0, 0, 0, 0, 0, 0];
+const _fileRequest = <int>[
+  0x61,
+  0x2E,
+  0x6D,
+  0x34,
+  0x61,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+];
 
 void main() {
   const characteristic = BleCharacteristic(
@@ -120,6 +143,7 @@ void main() {
           .executeStreaming(
             const EvtCommandRequest(
               command: 0x23,
+              content: _fileRequest,
               writeCharacteristic: characteristic,
               maxRetries: 0,
             ),
@@ -200,7 +224,6 @@ void main() {
     final future = client.execute(
       const EvtCommandRequest(
         command: 0x01,
-        content: [0x10],
         writeCharacteristic: characteristic,
         timeout: Duration(milliseconds: 100),
       ),
@@ -297,6 +320,7 @@ void main() {
         final failure = StateError('Native indication subscription ended');
         const request = EvtCommandRequest(
           command: 0x09,
+          content: _authenticateRequest,
           writeCharacteristic: characteristic,
           maxRetries: 0,
         );
@@ -314,6 +338,206 @@ void main() {
     );
   }
 
+  test(
+    'rejects queued and future commands after the response stream fails',
+    () async {
+      final transport = FakeBleTransport();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: EvtProtocolCodec(),
+        responses: transport.subscriptionStream,
+      );
+      addTearDown(client.close);
+      const firstRequest = EvtCommandRequest(
+        command: 0x01,
+        writeCharacteristic: characteristic,
+        timeout: Duration(seconds: 1),
+        maxRetries: 0,
+      );
+      const queuedRequest = EvtCommandRequest(
+        command: 0x06,
+        content: _getStatusRequest,
+        writeCharacteristic: characteristic,
+        timeout: Duration(seconds: 1),
+        maxRetries: 0,
+      );
+
+      final first = client.execute(firstRequest);
+      final queued = client.execute(queuedRequest);
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes, hasLength(1));
+
+      final failure = StateError('indication stream failed');
+      transport.emitSubscriptionError(failure);
+
+      await expectLater(first, throwsA(same(failure)));
+      await expectLater(queued, throwsA(same(failure)));
+      expect(transport.writes, hasLength(1));
+
+      final afterFailure = client.execute(firstRequest);
+      await expectLater(afterFailure, throwsA(same(failure)));
+      expect(transport.writes, hasLength(1));
+    },
+  );
+
+  test(
+    'ignores response-stream events that arrive after close begins',
+    () async {
+      final transport = FakeBleTransport();
+      final logger = _CapturingLogger();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: EvtProtocolCodec(),
+        responses: transport.subscriptionStream,
+        logger: logger,
+      );
+
+      final closing = client.close();
+      transport.emitSubscriptionError(StateError('late stream error'));
+      transport.emitSubscriptionBytes(
+        EvtProtocolCodec().encodeRequest(0x86, const [0x01]),
+      );
+      await closing;
+
+      expect(
+        logger.events.map((event) => event.name),
+        isNot(contains('evt_command_transport_error')),
+      );
+      expect(
+        logger.events.map((event) => event.name),
+        isNot(contains('evt_command_frame_decoded')),
+      );
+    },
+  );
+
+  test(
+    'rejects commands outside the V1.6 EVT allowlist at both client entrances',
+    () async {
+      final transport = FakeBleTransport();
+      final logger = _CapturingLogger();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: EvtProtocolCodec(),
+        responses: transport.subscriptionStream,
+        logger: logger,
+      );
+      addTearDown(client.close);
+      const unsupported = EvtCommandRequest(
+        command: 0x26,
+        writeCharacteristic: characteristic,
+        content: <int>[0x00],
+        maxRetries: 0,
+      );
+
+      await expectLater(
+        client.execute(unsupported),
+        throwsA(isA<EvtProtocolUnavailableException>()),
+      );
+      await expectLater(
+        client.executeStreaming(unsupported, isTerminal: (_) => true).toList(),
+        throwsA(isA<EvtProtocolUnavailableException>()),
+      );
+
+      expect(transport.writes, isEmpty);
+      final rejections = logger.events
+          .where((event) => event.name.endsWith('command_rejected'))
+          .toList();
+      expect(rejections, hasLength(2));
+      expect(
+        rejections.every(
+          (event) => event.fields['reason'] == 'command_not_enabled_for_evt',
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'rejects the read-only 0x11 command at both framed-write entrances',
+    () async {
+      final transport = FakeBleTransport();
+      final logger = _CapturingLogger();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: EvtProtocolCodec(),
+        responses: transport.subscriptionStream,
+        logger: logger,
+      );
+      addTearDown(client.close);
+      const readOnly = EvtCommandRequest(
+        command: 0x11,
+        writeCharacteristic: characteristic,
+        content: <int>[],
+        maxRetries: 0,
+      );
+
+      await expectLater(
+        client.execute(readOnly),
+        throwsA(isA<EvtProtocolUnavailableException>()),
+      );
+      await expectLater(
+        client.executeStreaming(readOnly, isTerminal: (_) => true).toList(),
+        throwsA(isA<EvtProtocolUnavailableException>()),
+      );
+
+      expect(transport.writes, isEmpty);
+      final rejections = logger.events
+          .where((event) => event.name.endsWith('command_rejected'))
+          .toList();
+      expect(rejections, hasLength(2));
+      expect(
+        rejections.every(
+          (event) => event.fields['reason'] == 'command_not_enabled_for_evt',
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'rejects a nonzero V1.6 AudioStream before either client entrance writes',
+    () async {
+      final transport = FakeBleTransport();
+      final logger = _CapturingLogger();
+      final client = EvtCommandClient(
+        transport: transport,
+        codec: EvtProtocolCodec(),
+        responses: transport.subscriptionStream,
+        logger: logger,
+      );
+      addTearDown(client.close);
+      const invalidConfiguration = EvtCommandRequest(
+        command: 0x02,
+        writeCharacteristic: characteristic,
+        content: <int>[0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1],
+        maxRetries: 0,
+      );
+
+      await expectLater(
+        client.execute(invalidConfiguration),
+        throwsA(isA<StateError>()),
+      );
+      await expectLater(
+        client
+            .executeStreaming(invalidConfiguration, isTerminal: (_) => true)
+            .toList(),
+        throwsA(isA<StateError>()),
+      );
+
+      expect(transport.writes, isEmpty);
+      final rejections = logger.events
+          .where((event) => event.name.endsWith('command_rejected'))
+          .toList();
+      expect(rejections, hasLength(2));
+      expect(
+        rejections.every(
+          (event) => event.fields['reason'] == 'request_payload_invalid',
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('retries once after timeout and then fails', () async {
     final transport = FakeBleTransport();
     final client = EvtCommandClient(
@@ -326,6 +550,7 @@ void main() {
       client.execute(
         const EvtCommandRequest(
           command: 0x06,
+          content: _getStatusRequest,
           writeCharacteristic: characteristic,
           timeout: Duration(milliseconds: 10),
         ),
@@ -348,6 +573,7 @@ void main() {
       client.execute(
         const EvtCommandRequest(
           command: 0x09,
+          content: _authenticateRequest,
           writeCharacteristic: characteristic,
           timeout: Duration(milliseconds: 10),
           maxRetries: 0,
@@ -373,6 +599,7 @@ void main() {
       final first = client.execute(
         const EvtCommandRequest(
           command: 0x06,
+          content: _getStatusRequest,
           writeCharacteristic: characteristic,
           timeout: Duration(milliseconds: 100),
         ),
@@ -380,6 +607,7 @@ void main() {
       final second = client.execute(
         const EvtCommandRequest(
           command: 0x07,
+          content: [0x01],
           writeCharacteristic: characteristic,
           timeout: Duration(milliseconds: 100),
         ),
@@ -423,6 +651,7 @@ void main() {
       final queued = client.execute(
         const EvtCommandRequest(
           command: 0x06,
+          content: _getStatusRequest,
           writeCharacteristic: characteristic,
           timeout: Duration(milliseconds: 100),
         ),
@@ -458,6 +687,7 @@ void main() {
       final operation = client.execute(
         EvtCommandRequest(
           command: 0x09,
+          content: _authenticateRequest,
           writeCharacteristic: characteristic,
           responseMatcher: (frame) =>
               frame.content.length >= 6 && frame.content[2] == 7,
@@ -495,7 +725,7 @@ void main() {
       final frames = client.executeStreaming(
         const EvtCommandRequest(
           command: 0x23,
-          content: [1, 0],
+          content: _fileRequest,
           writeCharacteristic: characteristic,
           expectedResponseCommand: 0x23,
         ),
@@ -543,6 +773,7 @@ void main() {
         .executeStreaming(
           const EvtCommandRequest(
             command: 0x23,
+            content: _fileRequest,
             writeCharacteristic: characteristic,
             expectedResponseCommand: 0x23,
           ),
@@ -578,6 +809,7 @@ void main() {
           .executeStreaming(
             const EvtCommandRequest(
               command: 0x23,
+              content: _fileRequest,
               writeCharacteristic: characteristic,
               expectedResponseCommand: 0x23,
             ),
@@ -638,6 +870,7 @@ void main() {
           .executeStreaming(
             const EvtCommandRequest(
               command: 0x23,
+              content: _fileRequest,
               writeCharacteristic: characteristic,
               expectedResponseCommand: 0x23,
             ),

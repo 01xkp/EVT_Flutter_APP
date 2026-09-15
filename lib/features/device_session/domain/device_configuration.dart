@@ -7,6 +7,7 @@ class DeviceConfiguration {
     required this.denoise,
     required this.powerOff,
     required this.chargingMode,
+    this.audioStream = 0,
   });
 
   final DateTime systemTime;
@@ -17,6 +18,11 @@ class DeviceConfiguration {
   final int powerOff;
   final int chargingMode;
 
+  /// The V1.6 0x02.AudioStream byte. It remains in the model because the
+  /// configuration payload is fixed-width; the EVT data layer accepts only
+  /// zero because real-time audio is outside the EVT scope.
+  final int audioStream;
+
   DeviceConfiguration copyWith({
     DateTime? systemTime,
     int? recordDurationSeconds,
@@ -25,6 +31,7 @@ class DeviceConfiguration {
     bool? denoise,
     int? powerOff,
     int? chargingMode,
+    int? audioStream,
   }) => DeviceConfiguration(
     systemTime: systemTime ?? this.systemTime,
     recordDurationSeconds: recordDurationSeconds ?? this.recordDurationSeconds,
@@ -33,6 +40,7 @@ class DeviceConfiguration {
     denoise: denoise ?? this.denoise,
     powerOff: powerOff ?? this.powerOff,
     chargingMode: chargingMode ?? this.chargingMode,
+    audioStream: audioStream ?? this.audioStream,
   );
 }
 

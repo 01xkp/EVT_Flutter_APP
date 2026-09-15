@@ -8,12 +8,13 @@ import '../../../support/fake_ble_transport.dart';
 
 void main() {
   test(
-    'lists only advertisements that satisfy the V1.5 EVT contract',
+    'lists only advertisements that satisfy the EVT contract when strict filtering is enabled',
     () async {
       final transport = FakeBleTransport();
       final controller = DiscoveryController(
         transport,
         const AdvertisementFilter(),
+        filterByV15Advertisement: true,
       );
       addTearDown(controller.dispose);
 
@@ -324,6 +325,7 @@ void main() {
       transport,
       const AdvertisementFilter(),
       logger: logger,
+      filterByV15Advertisement: true,
     );
     addTearDown(controller.dispose);
 

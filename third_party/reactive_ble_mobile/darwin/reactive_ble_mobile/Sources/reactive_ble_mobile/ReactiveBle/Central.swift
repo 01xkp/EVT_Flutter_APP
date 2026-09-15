@@ -11,6 +11,78 @@ typealias CharacteristicInstanceID = String
 typealias ServiceData = [ServiceID: Data]
 typealias AdvertisementData = [String: Any]
 
+/// The EVT V1.6 protocol assigns one CCC mode to each response
+/// characteristic. CoreBluetooth exposes a single `setNotifyValue` API for
+/// both notifications and indications, so a characteristic that advertises
+/// both modes is ambiguous and must be rejected before enabling its CCC.
+private enum EvtV16NotificationMode: String {
+    case indicate
+    case notify
+}
+
+private struct EvtV16NotificationModeError: Error, CustomStringConvertible {
+    let instance: CharacteristicInstance
+    let expected: String
+    let actual: String
+
+    var description: String {
+        "EVT V1.6 characteristic \(instance.id) must expose \(expected) only, " +
+            "but advertises \(actual); CoreBluetooth cannot select the required CCC mode"
+    }
+}
+
+private func evtV16NotificationMode(for characteristic: CBCharacteristic) -> EvtV16NotificationMode? {
+    // Match the complete custom UUID rather than a short UUID. This keeps the
+    // guard scoped to the EVT profile and avoids changing generic plugin use.
+    switch characteristic.uuid.uuidString.uppercased() {
+    case "0000FA11-1212-EFDE-1523-785FEABCD123",
+         "0000FA12-1212-EFDE-1523-785FEABCD123",
+         "0000FA15-1212-EFDE-1523-785FEABCD123",
+         "0000FA16-1212-EFDE-1523-785FEABCD123",
+         "0000FA17-1212-EFDE-1523-785FEABCD123",
+         "0000FA19-1212-EFDE-1523-785FEABCD123",
+         "0000FB11-1212-EFDE-1523-785FEABCD123",
+         "0000FF11-1212-EFDE-1523-785FEABCD123",
+         "0000FF12-1212-EFDE-1523-785FEABCD123":
+        return .indicate
+    case "0000FF13-1212-EFDE-1523-785FEABCD123":
+        return .notify
+    default:
+        return nil
+    }
+}
+
+private func validateEvtV16NotificationMode(
+    characteristic: CBCharacteristic,
+    instance: CharacteristicInstance,
+    expectedMode: EvtV16NotificationMode
+) throws {
+    let properties = characteristic.properties
+    let hasNotify = properties.contains(.notify) || properties.contains(.notifyEncryptionRequired)
+    let hasIndicate = properties.contains(.indicate) || properties.contains(.indicateEncryptionRequired)
+    let hasExpectedMode = expectedMode == .notify ? hasNotify : hasIndicate
+    let hasOppositeMode = expectedMode == .notify ? hasIndicate : hasNotify
+
+    guard hasExpectedMode, !hasOppositeMode else {
+        let actualMode: String
+        switch (hasNotify, hasIndicate) {
+        case (true, true):
+            actualMode = "notify+indicate"
+        case (true, false):
+            actualMode = "notify"
+        case (false, true):
+            actualMode = "indicate"
+        default:
+            actualMode = "none"
+        }
+        throw EvtV16NotificationModeError(
+            instance: instance,
+            expected: expectedMode.rawValue,
+            actual: actualMode
+        )
+    }
+}
+
 final class Central {
 
     typealias StateChangeHandler = (Central, CBManagerState) -> Void
@@ -273,6 +345,22 @@ final class Central {
     func turnNotifications(_ state: OnOff, for characteristicInstance: CharacteristicInstance, completion: @escaping CharacteristicNotifyCompletionHandler) throws {
         let characteristic = try resolve(characteristic: characteristicInstance)
 
+        if let expectedMode = evtV16NotificationMode(for: characteristic) {
+            do {
+                try validateEvtV16NotificationMode(
+                    characteristic: characteristic,
+                    instance: characteristicInstance,
+                    expectedMode: expectedMode
+                )
+            } catch {
+                // Keep the rejection visible in an Xcode device log. The
+                // thrown error is also returned through the Flutter method
+                // channel, where the Dart session reports the affected UUID.
+                print("【AIPIN原生BLE】【EVT CCC拒绝】\(error)")
+                throw error
+            }
+        }
+
         guard [CBCharacteristicProperties.notify, .notifyEncryptionRequired, .indicate, .indicateEncryptionRequired]
                 .contains(where: characteristic.properties.contains)
         else { throw Failure.notificationsNotSupported(characteristicInstance) }
@@ -341,10 +429,13 @@ final class Central {
         guard characteristic.properties.contains(.writeWithoutResponse)
         else { throw Failure.notWritable(characteristicInstance) }
 
-        guard let response = characteristic.service?.peripheral?.writeValue(value, for: characteristic, type: .withoutResponse)
+        // CoreBluetooth's writeValue API returns Void.  The previous optional
+        // binding treated it as an optional result, which is not valid with
+        // the current iOS SDK and could prevent the plugin from compiling.
+        guard let peripheral = characteristic.service?.peripheral
         else { throw Failure.characteristicNotFound(characteristicInstance) }
 
-        return response
+        peripheral.writeValue(value, for: characteristic, type: .withoutResponse)
     }
 
     func maximumWriteValueLength(for peripheral: PeripheralID, type: CBCharacteristicWriteType) throws -> Int {

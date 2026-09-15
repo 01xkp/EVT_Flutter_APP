@@ -6,10 +6,7 @@ import 'package:aipin/features/local_recording/domain/local_recording.dart';
 /// contract. The device can transfer Ogg/Opus to either platform, but iOS
 /// AVFoundation cannot decode it for local playback.
 abstract final class DeviceRecordingPlaybackSupport {
-  static bool canPlay(
-    LocalRecording recording, {
-    bool? isIOS,
-  }) {
+  static bool canPlay(LocalRecording recording, {bool? isIOS}) {
     if (!recording.isPlayable) {
       return false;
     }
@@ -17,10 +14,7 @@ abstract final class DeviceRecordingPlaybackSupport {
     return !onIOS || !_isOgg(recording.relativePath);
   }
 
-  static String unavailableMessage(
-    LocalRecording recording, {
-    bool? isIOS,
-  }) {
+  static String unavailableMessage(LocalRecording recording, {bool? isIOS}) {
     final onIOS = isIOS ?? Platform.isIOS;
     if (onIOS && _isOgg(recording.relativePath)) {
       return '该设备录音已保存，但当前 iOS 不支持直接播放 Ogg/Opus 文件。';

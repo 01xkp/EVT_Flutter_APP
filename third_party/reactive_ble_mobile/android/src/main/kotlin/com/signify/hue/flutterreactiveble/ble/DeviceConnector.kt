@@ -33,10 +33,29 @@ internal class DeviceConnector(
     @VisibleForTesting
     internal var connectionDisposable: Disposable? = null
 
+    /**
+     * A connector owns one RxAndroidBle establishConnection subscription.  A
+     * terminal connection failure cannot be restarted through that same
+     * BehaviorSubject, so the client must discard this connector before the
+     * next reconnect attempt.
+     */
+    @Volatile
+    internal var isTerminal: Boolean = false
+        private set
+
     // The Dart connection stream can be cancelled more than once while its
     // owner is tearing down. All callers must observe one physical disconnect
     // and one terminal update rather than scheduling duplicate delayed work.
     private var disconnectCompletion: Completable? = null
+
+    // A terminal connector may be replaced by ReactiveBleClient before a
+    // caller explicitly requests disconnect. Keep that replacement silent:
+    // the old connector must release its GATT subscription without emitting a
+    // late disconnected event for the newly-created connector.
+    @Volatile
+    private var silentlyDisposed = false
+
+    private var subscriptionsDisposed = false
 
     private val lazyConnection =
         lazy {
@@ -49,21 +68,7 @@ internal class DeviceConnector(
 
     internal val connection by lazyConnection
 
-    private val connectionStatusUpdates by lazy {
-        device.observeConnectionStateChanges()
-            .startWith(device.connectionState)
-            .map<ConnectionUpdate> { ConnectionUpdateSuccess(device.macAddress, it.toConnectionState().code) }
-            .onErrorReturn {
-                ConnectionUpdateError(
-                    device.macAddress,
-                    it.message
-                        ?: "Unknown error",
-                )
-            }
-            .subscribe {
-                updateListeners.invoke(it)
-            }
-    }
+    private var connectionStatusUpdates: Disposable? = null
 
     internal fun disconnectDevice(deviceId: String): Completable = synchronized(this) {
         disconnectCompletion ?: createDisconnectCompletion(deviceId)
@@ -83,7 +88,9 @@ internal class DeviceConnector(
                 .coerceAtLeast(0L)
         return Completable.timer(delay, TimeUnit.MILLISECONDS)
             .doOnComplete {
-                sendDisconnectedUpdate(deviceId)
+                if (!silentlyDisposed) {
+                    sendDisconnectedUpdate(deviceId)
+                }
                 disposeSubscriptions()
             }
     }
@@ -92,10 +99,49 @@ internal class DeviceConnector(
         updateListeners(ConnectionUpdateSuccess(deviceId, ConnectionState.DISCONNECTED.code))
     }
 
+    /**
+     * Releases all native subscriptions without publishing a disconnect
+     * update. Used only when a terminal connector is replaced by a fresh
+     * reconnect attempt.
+     */
+    internal fun disposeSilently() = synchronized(this) {
+        silentlyDisposed = true
+        disposeSubscriptions()
+    }
+
     private fun disposeSubscriptions() {
-        connectionDisposable?.dispose()
-        connectDeviceSubject.onComplete()
-        connectionStatusUpdates.dispose()
+        synchronized(this) {
+            if (subscriptionsDisposed) {
+                return@synchronized
+            }
+            subscriptionsDisposed = true
+            connectionDisposable?.dispose()
+            connectDeviceSubject.onComplete()
+            connectionStatusUpdates?.dispose()
+            connectionStatusUpdates = null
+        }
+    }
+
+    private fun ensureConnectionStatusUpdates() {
+        synchronized(this) {
+            if (subscriptionsDisposed || connectionStatusUpdates != null) {
+                return@synchronized
+            }
+            connectionStatusUpdates =
+                device.observeConnectionStateChanges()
+                    .startWith(device.connectionState)
+                    .map<ConnectionUpdate> { ConnectionUpdateSuccess(device.macAddress, it.toConnectionState().code) }
+                    .onErrorReturn {
+                        ConnectionUpdateError(
+                            device.macAddress,
+                            it.message
+                                ?: "Unknown error",
+                        )
+                    }
+                    .subscribe {
+                        updateListeners.invoke(it)
+                    }
+        }
     }
 
     private fun establishConnection(rxBleDevice: RxBleDevice): Disposable {
@@ -128,14 +174,20 @@ internal class DeviceConnector(
             .doOnNext {
                 // Trigger side effect by calling the lazy initialization of this property so
                 // listening to changes starts.
-                connectionStatusUpdates
+                ensureConnectionStatusUpdates()
                 timestampEstablishConnection = System.currentTimeMillis()
                 connectionQueue.removeFromQueue(deviceId)
                 if (it is EstablishConnectionFailure) {
+                    // `onErrorReturn` turns a transport disconnect into a
+                    // terminal failure value.  Keep the connector marked so
+                    // ReactiveBleClient can create a fresh GATT session
+                    // instead of replaying this stale value on reconnect.
+                    isTerminal = true
                     updateListeners.invoke(ConnectionUpdateError(deviceId, it.errorMessage))
                 }
             }
             .doOnError {
+                isTerminal = true
                 connectionQueue.removeFromQueue(deviceId)
                 updateListeners.invoke(
                     ConnectionUpdateError(

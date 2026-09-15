@@ -68,21 +68,28 @@ void main() {
       await tester.tap(find.widgetWithText(AppButton, '认证设备'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      await tester.enterText(find.byType(TextField), '123456');
+      await tester.enterText(find.byType(TextField), '313233343536');
       await tester.pump();
       await tester.tap(find.widgetWithText(AppButton, '开始认证'));
       await tester.pump();
       await tester.runAsync(() async {
         final deadline = DateTime.now().add(const Duration(seconds: 3));
-        while (transport.writes.isEmpty && DateTime.now().isBefore(deadline)) {
+        // V1.6 performs the admission read first (FA11/0x01), so waiting for
+        // a non-empty list can return before the user authentication write.
+        while (transport.writes.length < 2 &&
+            DateTime.now().isBefore(deadline)) {
           await Future<void>.delayed(const Duration(milliseconds: 20));
         }
       });
       await tester.pump(const Duration(milliseconds: 300));
-      expect(transport.writes, hasLength(1));
+      expect(transport.writes, hasLength(2));
 
       final disconnect = find.widgetWithText(AppButton, '断开设备');
-      await tester.ensureVisible(disconnect);
+      await tester.scrollUntilVisible(
+        disconnect,
+        500,
+        scrollable: find.byType(Scrollable).last,
+      );
       await tester.tap(disconnect);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
@@ -102,7 +109,7 @@ void main() {
       expect(transport.disconnectedDeviceIds, hasLength(1));
       expect(find.text('设备认证失败，请重新连接后重试。'), findsNothing);
       expect(find.textContaining('命令客户端已关闭'), findsNothing);
-      expect(transport.writes, hasLength(1));
+      expect(transport.writes, hasLength(2));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
@@ -491,7 +498,7 @@ void main() {
   });
 
   testWidgets(
-    'manual EVT authentication opens the code sheet and writes V1 0x09 to FA19',
+    'manual EVT authentication opens the code sheet and writes V1.6 0x09 to FA19',
     (tester) async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final transport = FakeBleTransport.withGattReadyProfile();
@@ -551,7 +558,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(TextField), findsOneWidget);
-      expect(find.text('6 字节认证码'), findsOneWidget);
+      expect(find.text('12 位十六进制安全码'), findsOneWidget);
 
       final mirrorsBeforeCancel = appLogStore.publicMirrorSyncCount;
       await tester.tap(find.widgetWithText(AppButton, '取消'));
@@ -565,14 +572,19 @@ void main() {
       });
       await tester.pump();
 
-      expect(transport.writes, isEmpty);
+      expect(
+        transport.writes.map(
+          (bytes) => EvtProtocolCodec().decode(bytes).value?.command,
+        ),
+        contains(0x01),
+      );
       expect(appLogStore.publicMirrorSyncCount, mirrorsBeforeCancel + 1);
 
       await tester.tap(find.widgetWithText(AppButton, '认证设备'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
-      await tester.enterText(find.byType(TextField), '123456');
+      await tester.enterText(find.byType(TextField), '313233343536');
       await tester.pump();
       await tester.tap(find.widgetWithText(AppButton, '开始认证'));
       await tester.pump();
@@ -584,13 +596,13 @@ void main() {
       });
       await tester.pump();
 
-      expect(transport.writes, hasLength(1));
-      expect(transport.writtenCharacteristics, hasLength(1));
+      expect(transport.writes, hasLength(2));
+      expect(transport.writtenCharacteristics, hasLength(2));
       expect(
-        transport.writtenCharacteristics.single.characteristicUuid,
+        transport.writtenCharacteristics.last.characteristicUuid,
         '0000FA19-1212-EFDE-1523-785FEABCD123',
       );
-      expect(transport.writes.single, <int>[
+      expect(transport.writes.last, <int>[
         0xED,
         0x0A,
         0x00,

@@ -73,6 +73,7 @@ class EvtProtocolCodec {
       EvtFrame(
         command: command,
         content: Uint8List.fromList(bytes.sublist(4, contentEnd)),
+        rawBytes: Uint8List.fromList(bytes),
       ),
     );
   }

@@ -220,7 +220,7 @@
       <article class="card feature">
         <div class="feature-title"><h3>认证后初始化</h3><span class="status ok">认证成功后自动执行</span></div>
         <div class="feature-body">
-          <div><span class="label">App 操作</span><p>请求 ATT MTU，要求实际协商值至少为 136；发送 <code>0x01</code> 读取设备信息，要求设备返回协议版本 3；再发送 <code>0x02</code> 写入 EVT 默认配置。</p></div>
+          <div><span class="label">App 操作</span><p>请求 ATT MTU，要求实际协商值至少为 136；发送 <code>0x01</code> 读取设备信息并记录协议版本（当前联调暂不拦截版本值）；再发送 <code>0x02</code> 写入 EVT 默认配置。</p></div>
           <div><span class="label">结果</span><p>初始化成功后进入状态可观察阶段，开放状态、配置、设备录音和文件导入。关键步骤失败会中断并断开，避免“已连接但数据不完整”的状态。</p></div>
         </div>
       </article>
@@ -414,7 +414,7 @@
           <thead><tr><th>逻辑用途</th><th>特征值 / 命令</th><th>App 行为</th><th>设备要求</th></tr></thead>
           <tbody>
             <tr><td>V1 认证</td><td><code>FA19 / 0x09 → 0x89</code></td><td>发送认证、绑定或恢复初始码动作。</td><td>FA19 必须 Write + Indicate；成功回复单字节 <code>1</code>。</td></tr>
-            <tr><td>设备信息</td><td><code>0x01 → 0x81</code></td><td>认证后读取并验证 ProtocolVersion=3。</td><td>返回合法设备信息。</td></tr>
+            <tr><td>设备信息</td><td><code>0x01 → 0x81</code></td><td>认证后读取并记录 ProtocolVersion，联调阶段不按版本值拦截。</td><td>返回合法设备信息。</td></tr>
             <tr><td>默认配置</td><td><code>0x02 → 0x82</code></td><td>认证后写入 EVT 默认配置。</td><td>返回配置结果。</td></tr>
             <tr><td>存储、状态、电量</td><td><code>0x05 / 0x06 / 0x11</code></td><td>自动或手动读取，显示在设备详情。</td><td>从正确特征值返回匹配响应。</td></tr>
             <tr><td>设备录音</td><td><code>FA17 / 0x07 → 0x87</code></td><td>开始、暂停、继续、结束录音。</td><td>按动作返回正确录音状态帧。</td></tr>

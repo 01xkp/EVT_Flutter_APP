@@ -18,6 +18,24 @@ import 'package:aipin/features/device_session/domain/device_file_transfer_gatewa
 import 'package:aipin/features/device_session/domain/device_info.dart';
 import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
 
+/// Indicates that a structurally valid 0xA3 data frame cannot fit within the
+/// negotiated ATT MTU. It remains a [StateError] so callers can handle it as a
+/// protocol-state failure while retaining the values needed for diagnostics.
+final class EvtFileTransferChunkMtuException extends StateError {
+  EvtFileTransferChunkMtuException({
+    required this.chunkBytes,
+    required this.maxChunkBytes,
+    this.attMtu,
+  }) : super(
+         '设备文件数据块 $chunkBytes 字节超过当前 ATT MTU 可承载上限 '
+         '$maxChunkBytes。',
+       );
+
+  final int chunkBytes;
+  final int maxChunkBytes;
+  final int? attMtu;
+}
+
 class DeviceProtocolRepository implements DeviceFileTransferGateway {
   DeviceProtocolRepository({
     required this.deviceId,
@@ -26,18 +44,28 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     required this.commands,
     required this.codec,
     Duration legacySecurityResponseTimeout = const Duration(seconds: 2),
+    Duration legacyBindResponseTimeout = const Duration(seconds: 65),
+    Duration legacyUnbindResponseTimeout = const Duration(seconds: 120),
     Duration fileListResponseTimeout = const Duration(seconds: 2),
     Duration fileTransferIdleTimeout = const Duration(seconds: 15),
     Duration gattReadTimeout = const Duration(seconds: 2),
+    int? Function()? negotiatedAttMtuProvider,
   }) : // Preserve public named timeout hooks used by the test and integration layers.
        // ignore: prefer_initializing_formals
        _legacySecurityResponseTimeout = legacySecurityResponseTimeout,
+       // V1.6 gives BIND a 60-second button window plus response margin.
+       // ignore: prefer_initializing_formals
+       _legacyBindResponseTimeout = legacyBindResponseTimeout,
+       // ignore: prefer_initializing_formals
+       _legacyUnbindResponseTimeout = legacyUnbindResponseTimeout,
        // ignore: prefer_initializing_formals
        _fileListResponseTimeout = fileListResponseTimeout,
        // ignore: prefer_initializing_formals
        _fileTransferIdleTimeout = fileTransferIdleTimeout,
        // ignore: prefer_initializing_formals
-       _gattReadTimeout = gattReadTimeout;
+       _gattReadTimeout = gattReadTimeout,
+       // ignore: prefer_initializing_formals
+       _negotiatedAttMtuProvider = negotiatedAttMtuProvider;
 
   final String deviceId;
   final DeviceProfile profile;
@@ -45,11 +73,22 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
   final EvtCommandClient commands;
   final EvtProtocolCodec codec;
   final Duration _legacySecurityResponseTimeout;
+  final Duration _legacyBindResponseTimeout;
+  final Duration _legacyUnbindResponseTimeout;
   final Duration _fileListResponseTimeout;
   final Duration _fileTransferIdleTimeout;
   final Duration _gattReadTimeout;
 
-  Future<DeviceInfo> readDeviceInfo() async {
+  /// Returns the ATT MTU negotiated for the active connection, when the
+  /// repository is owned by [SessionController]. Keeping this optional keeps
+  /// the data layer usable in isolated protocol tests and integrations that
+  /// do not expose MTU state.
+  final int? Function()? _negotiatedAttMtuProvider;
+
+  /// Reads 0x01 from FA11. During connection admission V1.6 returns a fixed
+  /// 90-byte redacted payload before Action=00; callers pass [unauthenticated]
+  /// so the resulting model cannot be mistaken for an authoritative snapshot.
+  Future<DeviceInfo> readDeviceInfo({bool unauthenticated = false}) async {
     final response = await commands.execute(
       EvtCommandRequest(
         command: 0x01,
@@ -58,10 +97,11 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
         content: const [],
       ),
     );
-    return decodeDeviceInfo(response.frame);
+    return decodeDeviceInfo(response.frame, redacted: unauthenticated);
   }
 
   Future<void> writeConfiguration(DeviceConfiguration configuration) async {
+    _validateConfiguration(configuration);
     final writer = ProtocolWriter()
       ..u32Le(configuration.systemTime.toUtc().millisecondsSinceEpoch ~/ 1000)
       ..u16Le(configuration.recordDurationSeconds)
@@ -70,9 +110,10 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
       ..u8(configuration.denoise ? 1 : 0)
       ..u8(configuration.powerOff)
       ..u8(configuration.chargingMode)
-      // V1.5 configuration remains 12 bytes; EVT keeps this final reserved
-      // byte disabled instead of exposing a later-stage capability.
-      ..u8(0);
+      // V1.6 keeps AudioStream in the fixed 12-byte configuration payload.
+      // The EVT build does not support the FA18 real-time audio capability,
+      // so admission validation requires this byte to remain zero.
+      ..u8(configuration.audioStream);
     final response = await commands.execute(
       EvtCommandRequest(
         command: 0x02,
@@ -90,7 +131,7 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
 
   /// Reads the device's current UTC through FA12 GATT Read.
   ///
-  /// V1.5 defines this as a characteristic read returning a 0x82 frame; it
+  /// V1.6 defines this as a characteristic read returning a 0x82 frame; it
   /// must not be encoded as an empty 0x02 business write.
   Future<DateTime> readConfigurationTime() async {
     final frame = _decodeFrame(
@@ -131,8 +172,25 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
   Future<Uint8List> readBatteryFrame() =>
       _readFrame(BleLogicalEndpoint.fb10Fb11, expectedCommand: 0x91);
 
-  Future<Uint8List> readStorageFrame() =>
-      _readFrame(BleLogicalEndpoint.fa10Fa15, expectedCommand: 0x85);
+  /// V1.6 changed FA15 from a GATT Read to a framed Write + Indicate
+  /// exchange. The request has an empty Content field.
+  Future<Uint8List> readStorageFrame() async {
+    final response = await commands.execute(
+      EvtCommandRequest(
+        command: 0x05,
+        content: const [],
+        writeCharacteristic: _characteristic(BleLogicalEndpoint.fa10Fa15),
+        expectedResponseCommand: 0x85,
+        responseMatcher: (frame) => frame.content.length == 8,
+      ),
+    );
+    _expectContentLength(response.frame, 8);
+    // Keep the exact device response for diagnostics and downstream import.
+    // A frame constructed by a test or legacy caller may not have raw bytes;
+    // retain the canonical fallback for that case.
+    return response.frame.rawBytes ??
+        codec.encodeRequest(response.frame.command, response.frame.content);
+  }
 
   Future<DeviceBattery> readBattery() async =>
       decodeBattery(_decodeFrame(await readBatteryFrame()));
@@ -141,11 +199,19 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
       decodeStorage(_decodeFrame(await readStorageFrame()));
 
   Future<int> readFileCount() async {
-    final bytes = await _readFrame(
-      BleLogicalEndpoint.ff10Ff11,
-      expectedCommand: 0xA1,
+    // V1.6 changed FF11 from a GATT Read to a framed Write + Indicate
+    // exchange. Keep this compatibility command optional at the session
+    // layer, but encode its wire direction correctly when available.
+    final response = await commands.execute(
+      EvtCommandRequest(
+        command: 0x21,
+        content: const [],
+        writeCharacteristic: _characteristic(BleLogicalEndpoint.ff10Ff11),
+        expectedResponseCommand: 0xA1,
+        responseMatcher: (frame) => frame.content.length == 2,
+      ),
     );
-    return decodeFileCount(_decodeFrame(bytes));
+    return decodeFileCount(response.frame);
   }
 
   Future<EvtFrame> setRecordAction(int action) async {
@@ -170,12 +236,23 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
       ),
     );
     validateRecordState(response.frame);
+    final errorCode = recordStateErrorCode(response.frame);
+    if (errorCode != null) {
+      // V1.6 reports command failures as a valid 0x87 state frame. Keep the
+      // original frame attached so the session layer and diagnostics can
+      // distinguish a device-reported error from a lost indication timeout.
+      throw EvtRecordActionException(
+        action: action,
+        errorCode: errorCode,
+        frame: response.frame,
+      );
+    }
     return response.frame;
   }
 
-  /// Executes the V1 EVT 0x09 envelope: Action:u8 + SecurityCode[6].
+  /// Executes the V1.6 EVT 0x09 envelope: Action:u8 + SecurityCode[6].
   ///
-  /// A successful legacy response contains exactly the single byte [0x01].
+  /// A successful V1.6 response contains exactly the single byte [0x01].
   /// The strict response matcher rejects any differently shaped 0x89 frame.
   Future<bool> executeEvtLegacySecurity(
     EvtLegacySecurityRequest request,
@@ -188,10 +265,20 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
         command: 0x09,
         content: request.content,
         writeCharacteristic: _characteristic(BleLogicalEndpoint.fa10Fa19),
+        // V1.6 permits only a previously submitted UNBIND to be retried on a
+        // fresh connection without Action=00.  Keep the exception explicit
+        // in the command request so the session admission gate can inspect it
+        // immediately before the native write; it has no wire representation.
+        allowUnauthenticatedUnbindRecovery: request.recovery,
         expectedResponseCommand: 0x89,
         responseMatcher: (frame) => frame.content.length == 1,
-        timeout: _legacySecurityResponseTimeout,
-        // V1 bind/reset can change the accepted security code. Never replay
+        timeout: switch (request.action) {
+          EvtLegacySecurityAction.authenticate =>
+            _legacySecurityResponseTimeout,
+          EvtLegacySecurityAction.bind => _legacyBindResponseTimeout,
+          EvtLegacySecurityAction.unbind => _legacyUnbindResponseTimeout,
+        },
+        // V1.6 bind/unbind can change the accepted security code. Never replay
         // the frame when the Indicate result was lost.
         maxRetries: 0,
       ),
@@ -223,7 +310,7 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
         writeCharacteristic: _characteristic(BleLogicalEndpoint.ff10Ff12),
         expectedResponseCommand: 0xA2,
         timeout: _fileListResponseTimeout,
-        // V1.5 does not echo FileListOffset in the 0xA2 response. Retrying a
+        // V1.6 does not echo FileListOffset in the 0xA2 response. Retrying a
         // timed-out page on the same connection lets a late first response be
         // mistaken for the retry or the next page. The session controller
         // resets the transport after this timeout before a new listing starts.
@@ -237,13 +324,15 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     return files;
   }
 
-  /// Starts the V1.5 continuous 0x23 Notify transfer with exactly one write.
+  /// Starts the V1.6 continuous 0x23 request / 0xA3 Notify transfer with
+  /// exactly one write.
   /// The device marks the end of the transfer with a zero-length data frame.
   @override
   Stream<EvtDeviceFileTransferEvent> downloadEvtFile({
     required List<int> nameSlot,
     int startOffset = 0,
     int chunkSize = 0,
+    int? expectedFileLength,
   }) async* {
     _validateNameSlot(nameSlot);
     if (startOffset < 0 || startOffset > 0xFFFFFFFF) {
@@ -251,6 +340,27 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     }
     if (chunkSize < 0 || chunkSize > 0xFFFF) {
       throw RangeError.range(chunkSize, 0, 0xFFFF);
+    }
+    if (chunkSize > 480) {
+      throw RangeError.range(chunkSize, 0, 480);
+    }
+    if (expectedFileLength != null &&
+        (expectedFileLength < 0 || expectedFileLength > 0xFFFFFFFF)) {
+      throw RangeError.range(expectedFileLength, 0, 0xFFFFFFFF);
+    }
+    if (expectedFileLength != null && startOffset > expectedFileLength) {
+      throw StateError('文件起始偏移超过 0x22 声明的文件长度。');
+    }
+    final negotiatedMtu = _negotiatedAttMtuProvider?.call();
+    final effectiveChunkLimit = _effectiveFileChunkLimit(negotiatedMtu);
+    if (negotiatedMtu != null && negotiatedMtu < 33) {
+      throw StateError('当前 ATT MTU 不足，无法承载 0x23 文件数据。');
+    }
+    if (chunkSize > 0 && chunkSize > effectiveChunkLimit) {
+      throw StateError(
+        '请求分块 $chunkSize 字节超过当前 ATT MTU 可承载上限 '
+        '$effectiveChunkLimit。',
+      );
     }
     final writer = ProtocolWriter()..addAll(nameSlot);
     if (startOffset != 0 || chunkSize != 0) {
@@ -264,22 +374,38 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
         command: 0x23,
         content: writer.bytes,
         writeCharacteristic: _characteristic(BleLogicalEndpoint.ff10Ff13),
-        expectedResponseCommand: 0x23,
+        expectedResponseCommand: 0xA3,
       ),
       isTerminal: _isFileDataTerminalFrame,
       idleTimeout: _fileTransferIdleTimeout,
     )) {
-      final chunk = _decodeFileDataFrame(frame, expectedOffset);
+      final chunk = _decodeFileDataFrame(
+        frame,
+        expectedOffset,
+        maxChunkSize: effectiveChunkLimit,
+        attMtu: negotiatedMtu,
+      );
       if (chunk.isEmpty) {
+        if (expectedFileLength != null &&
+            expectedOffset != expectedFileLength) {
+          throw StateError(
+            '设备文件结束偏移 $expectedOffset 与 0x22 声明长度 '
+            '$expectedFileLength 不一致。',
+          );
+        }
         yield EvtDeviceFileTransferEvent.terminal();
         return;
+      }
+      if (expectedFileLength != null &&
+          expectedOffset + chunk.length > expectedFileLength) {
+        throw StateError('设备文件数据超过 0x22 声明的文件长度。');
       }
       expectedOffset += chunk.length;
       yield EvtDeviceFileTransferEvent.data(chunk);
     }
   }
 
-  static DeviceInfo decodeDeviceInfo(EvtFrame frame) {
+  static DeviceInfo decodeDeviceInfo(EvtFrame frame, {bool redacted = false}) {
     _expectCommand(frame, 0x81);
     final reader = ProtocolReader(frame.content);
     if (frame.content.length < 83) {
@@ -301,15 +427,20 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
       throw const FormatException('设备信息缺少录音状态。');
     }
     final recordStatus = reader.u8(recordOffset);
-    if (recordStatus > 3) {
+    if (recordStatus != 0 &&
+        recordStatus != 1 &&
+        recordStatus != 2 &&
+        recordStatus != 0xFF) {
       throw const FormatException('设备信息录音状态无效。');
     }
-    final recordDataLength = recordStatus == 0 ? 0 : 7;
+    // 0x01 uses a compact one-byte ERROR state. Unlike the 0x07 status
+    // indication, it does not append an ErrorCode in this response.
+    final recordDataLength = recordStatus == 1 || recordStatus == 2 ? 7 : 0;
     final expectedLength = recordOffset + 1 + recordDataLength + 6;
     if (frame.content.length != expectedLength) {
       throw const FormatException('设备信息条件字段长度无效。');
     }
-    if (recordStatus != 0) {
+    if (recordStatus == 1 || recordStatus == 2) {
       _validateActiveRecordFields(frame.content, recordOffset + 1);
     }
     final batteryOffset = recordOffset + 1 + recordDataLength;
@@ -318,6 +449,7 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     final buzzer = reader.u8(batteryOffset + 2);
     final powerOff = reader.u8(batteryOffset + 3);
     final chargingMode = reader.u8(batteryOffset + 4);
+    final audioStream = reader.u8(batteryOffset + 5);
     _validateDeviceInfoStateFields(
       batteryLevel: batteryLevel,
       charging: charging,
@@ -325,6 +457,24 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
       powerOff: powerOff,
       chargingMode: chargingMode,
     );
+    if (redacted) {
+      // V1.6 defines the pre-auth response as exactly 90 bytes with all
+      // user-state fields zeroed. Accepting a non-zero placeholder here would
+      // let an unauthenticated payload leak into the live device snapshot.
+      if (frame.content.length != 90 ||
+          reserved != 0 ||
+          recordStatus != 0 ||
+          total != 0 ||
+          remain != 0 ||
+          batteryLevel != 0 ||
+          charging != 0 ||
+          buzzer != 0 ||
+          powerOff != 0 ||
+          chargingMode != 0 ||
+          audioStream != 0) {
+        throw const FormatException('未认证设备信息不符合 V1.6 脱敏布局。');
+      }
+    }
     return DeviceInfo(
       capabilities: DeviceCapabilities(protocolVersion: protocolVersion),
       deviceCode: deviceCode,
@@ -338,6 +488,29 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
       charging: charging,
       powerOff: powerOff,
       chargingMode: chargingMode,
+      reservedFeatureStatus: reserved,
+      audioStream: audioStream,
+      recordDurationSeconds: recordStatus == 1 || recordStatus == 2
+          ? reader.u16Le(recordOffset + 1)
+          : null,
+      currentDurationSeconds: recordStatus == 1 || recordStatus == 2
+          ? reader.u16Le(recordOffset + 3)
+          : null,
+      recordMode: recordStatus == 1 || recordStatus == 2
+          ? reader.u8(recordOffset + 5)
+          : null,
+      recordType: recordStatus == 1 || recordStatus == 2
+          ? reader.u8(recordOffset + 6)
+          : null,
+      denoise: recordStatus == 1 || recordStatus == 2
+          ? reader.u8(recordOffset + 7)
+          : null,
+      // The 0x81 device-information response uses a compact one-byte
+      // RecordStatus for ERROR. V1.6 deliberately does not append an
+      // ErrorCode here; the six following bytes are the normal battery/state
+      // tail. ErrorCode is only carried by the dedicated 0x87 indication.
+      errorCode: null,
+      isRedacted: redacted,
     );
   }
 
@@ -396,37 +569,69 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
 
   /// Validates the EVT 0x87 variable-layout recording state frame.
   ///
-  /// A stopped state is one byte. Every active, paused, or resumed state
-  /// carries the seven recording detail bytes defined by V1.5.
+  /// V1.6 defines STOPPED as one byte, RECORDING/PAUSED as eight bytes, and
+  /// ERROR as three bytes (`0xFF` plus a signed u16 error code).
   static void validateRecordState(EvtFrame frame) {
     _expectCommand(frame, 0x87);
     if (frame.content.isEmpty) {
       throw const FormatException('设备录音状态缺失。');
     }
     final recordStatus = frame.content.first;
-    if (recordStatus > 3) {
+    if (recordStatus != 0 &&
+        recordStatus != 1 &&
+        recordStatus != 2 &&
+        recordStatus != 0xFF) {
       throw const FormatException('设备录音状态枚举无效。');
     }
-    final expectedLength = recordStatus == 0 ? 1 : 8;
+    final expectedLength = switch (recordStatus) {
+      0 => 1,
+      1 || 2 => 8,
+      0xFF => 3,
+      _ => -1,
+    };
     if (frame.content.length != expectedLength) {
       throw const FormatException('设备录音状态条件字段长度无效。');
     }
-    if (recordStatus != 0) {
+    if (recordStatus == 1 || recordStatus == 2) {
       _validateActiveRecordFields(frame.content, 1);
     }
   }
 
-  /// Matches a V1.5 record-control result without allowing malformed
+  /// Returns the signed V1.6 ErrorCode carried by a 0x87 error state, or null
+  /// for a valid stopped/recording/paused state. The frame is validated before
+  /// decoding so callers cannot accidentally interpret a truncated payload.
+  static int? recordStateErrorCode(EvtFrame frame) {
+    validateRecordState(frame);
+    if (frame.content.first != 0xFF) {
+      return null;
+    }
+    final raw = frame.content[1] | (frame.content[2] << 8);
+    return raw >= 0x8000 ? raw - 0x10000 : raw;
+  }
+
+  /// Matches a V1.6 record-control result without allowing malformed
   /// unsolicited FA17 state events to break the pending command stream.
   static bool _matchesRecordActionResponse(EvtFrame frame, int action) {
-    if (frame.command != 0x87 ||
-        frame.content.isEmpty ||
-        frame.content.first != action) {
+    if (frame.command != 0x87 || frame.content.isEmpty) {
       return false;
     }
     try {
       validateRecordState(frame);
-      return true;
+      // The V1.6 response carries resulting RecordStatus, not the request
+      // action. Match the resulting state so an unrelated asynchronous event
+      // cannot complete a pending control command.
+      final expectedStatus = switch (action) {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3 => 1,
+        _ => -1,
+      };
+      // 0xFF is a valid command-level error response. It has no action field,
+      // so when a command is pending it is the only terminal error signal the
+      // protocol provides; setRecordAction converts it to a typed exception.
+      return frame.content.first == 0xFF ||
+          frame.content.first == expectedStatus;
     } on FormatException {
       return false;
     }
@@ -479,17 +684,46 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     return ProtocolReader(frame.content).u16Le(4) == 0;
   }
 
-  static Uint8List _decodeFileDataFrame(EvtFrame frame, int expectedOffset) {
-    if (frame.command != 0x23 || frame.content.length < 6) {
+  static Uint8List _decodeFileDataFrame(
+    EvtFrame frame,
+    int expectedOffset, {
+    int maxChunkSize = 480,
+    int? attMtu,
+  }) {
+    if (frame.command != 0xA3 || frame.content.length < 6) {
       throw const FormatException('设备文件数据帧无效。');
     }
     final reader = ProtocolReader(frame.content);
     final offset = reader.u32Le(0);
     final length = reader.u16Le(4);
+    // Keep an oversized but otherwise structurally valid chunk distinguishable
+    // from a malformed or out-of-order frame. The session layer needs the
+    // exact size to emit its MTU diagnostic before invalidating the connection.
+    if (length > maxChunkSize && frame.content.length == 6 + length) {
+      throw EvtFileTransferChunkMtuException(
+        chunkBytes: length,
+        maxChunkBytes: maxChunkSize,
+        attMtu: attMtu,
+      );
+    }
     if (frame.content.length != 6 + length || offset != expectedOffset) {
       throw const FormatException('文件数据 offset 或长度不连续。');
     }
     return Uint8List.fromList(frame.content.sublist(6));
+  }
+
+  /// V1.6 reserves 32 bytes of an ATT packet for the outer business frame and
+  /// the FileOffset/DataLength fields. A repository used without a session
+  /// MTU provider still enforces the protocol's absolute 480-byte cap.
+  static int _effectiveFileChunkLimit(int? attMtu) {
+    if (attMtu == null) {
+      return 480;
+    }
+    final available = attMtu - 32;
+    if (available <= 0) {
+      return 0;
+    }
+    return available < 480 ? available : 480;
   }
 
   Future<Uint8List> _readFrame(
@@ -510,7 +744,7 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
         }
         return Uint8List.fromList(bytes);
       } on TimeoutException {
-        // V1.5 explicitly permits one retry for an idempotent GATT Read.
+        // V1.6 explicitly permits one retry for an idempotent GATT Read.
         if (attempt == 1) {
           rethrow;
         }
@@ -629,13 +863,16 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
 
   static bool _isBoolean(int value) => value == 0 || value == 1;
 
-  /// V1.5 active record layouts are:
+  /// V1.6 active record layouts are:
   /// RecordDuration:u16, CurrentDuration:u16, RecordMode:u8,
   /// RecordType:u8, Denoise:u8.
   static void _validateActiveRecordFields(List<int> bytes, int offset) {
+    final recordMode = bytes[offset + 4];
     final recordType = bytes[offset + 5];
     final denoise = bytes[offset + 6];
-    if ((recordType != 1 && recordType != 2) || !_isBoolean(denoise)) {
+    if (recordMode != 1 ||
+        (recordType != 1 && recordType != 2) ||
+        !_isBoolean(denoise)) {
       throw const FormatException('设备录音参数枚举无效。');
     }
   }
@@ -645,10 +882,10 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     required int charging,
     required int chargingMode,
   }) {
-    // V1.5 defines 0=not charging, 1=charging, and 2=fully charged.
-    // Treating a fully charged device as malformed interrupts the post-auth
-    // 0x01 synchronization path on real hardware.
-    if (batteryLevel > 100 || charging > 2 || !_isBoolean(chargingMode)) {
+    // V1.6 restricts Charging to 0 (not charging) or 1 (charging).
+    if (batteryLevel > 100 ||
+        !_isBoolean(charging) ||
+        !_isBoolean(chargingMode)) {
       throw const FormatException('设备电池状态枚举无效。');
     }
   }
@@ -670,7 +907,43 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     }
   }
 
+  /// Validates the values that the App is about to place in the fixed V1.6
+  /// 0x02 payload. ProtocolWriter catches byte-width overflow, but it cannot
+  /// distinguish an in-range value that violates a field's documented enum.
+  static void _validateConfiguration(DeviceConfiguration configuration) {
+    if (configuration.recordDurationSeconds < 0 ||
+        configuration.recordDurationSeconds > 0xFFFF) {
+      throw RangeError.range(
+        configuration.recordDurationSeconds,
+        0,
+        0xFFFF,
+        'recordDurationSeconds',
+      );
+    }
+    if (configuration.recordMode != 1) {
+      throw const FormatException('RecordMode 当前 EVT 固定为 1。');
+    }
+    if (configuration.recordType != 1 && configuration.recordType != 2) {
+      throw const FormatException('RecordType 必须为 1 或 2。');
+    }
+    if (!_isBoolean(configuration.powerOff)) {
+      throw const FormatException('PowerOff 必须为 0 或 1。');
+    }
+    if (!_isBoolean(configuration.chargingMode)) {
+      throw const FormatException('ChargingMode 必须为 0 或 1。');
+    }
+    if (configuration.audioStream < 0 || configuration.audioStream > 0xFF) {
+      throw RangeError.range(configuration.audioStream, 0, 0xFF, 'audioStream');
+    }
+    if (configuration.audioStream != 0) {
+      throw const FormatException('AudioStream 当前 EVT 固定为 0。');
+    }
+  }
+
   static void _validateNameSlot(List<int> nameSlot) {
+    if (nameSlot.length != 17) {
+      throw const FormatException('FileName[17] 必须固定为 17 字节。');
+    }
     ProtocolReader(nameSlot).asciiSlot17(0);
   }
 
@@ -685,5 +958,33 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
         (or == null || frame.content.length != or)) {
       throw const FormatException('设备响应长度无效。');
     }
+  }
+}
+
+/// A valid EVT 0x87 response that reports a device-side recording error.
+///
+/// The V1.6 frame has no request/action identifier, so the originating action
+/// is supplied by the pending App command. [frame] is retained for diagnostics
+/// and for callers that need the exact wire-level payload.
+class EvtRecordActionException implements Exception {
+  const EvtRecordActionException({
+    required this.action,
+    required this.errorCode,
+    required this.frame,
+  });
+
+  final int action;
+  final int errorCode;
+  final EvtFrame frame;
+
+  @override
+  String toString() {
+    final actionHex = action.toRadixString(16).padLeft(2, '0').toUpperCase();
+    final errorHex = (errorCode & 0xFFFF)
+        .toRadixString(16)
+        .padLeft(4, '0')
+        .toUpperCase();
+    return 'EvtRecordActionException(action=0x$actionHex, '
+        'errorCode=$errorCode (0x$errorHex))';
   }
 }

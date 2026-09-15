@@ -77,16 +77,11 @@ public class ReactiveBlePlugin: NSObject, FlutterPlugin {
             name: "characteristic value update stream handler",
             context: context,
             onListen: { context, sink in
-                context.characteristicValueUpdateSink = sink
-                context.messageQueue.forEach { msg in
-                    sink.add(.success(msg))
-                }
-                context.messageQueue.removeAll()
+                context.installCharacteristicValueSink(sink)
                 return nil
             },
             onCancel: { context in
-                context.messageQueue.removeAll()
-                context.characteristicValueUpdateSink = nil
+                context.removeCharacteristicValueSink()
                 return nil
             }
         )

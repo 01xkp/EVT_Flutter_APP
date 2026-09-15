@@ -22,7 +22,7 @@ class RememberedDevice {
   /// UUID and must not be treated as a MAC address.
   final String connectionId;
 
-  /// Optional Bluetooth address supplied by the V1.5 manufacturer broadcast.
+  /// Optional Bluetooth address supplied by the V1.6 manufacturer broadcast.
   final String? physicalMacAddress;
 
   /// Last user-visible device name, bounded for private local storage.
@@ -32,7 +32,7 @@ class RememberedDevice {
   final DateTime lastConnectedAt;
 
   bool matches(DeviceCandidate candidate) {
-    final candidateMacAddress = _hasV15PhysicalMacAddress(candidate)
+    final candidateMacAddress = _hasEvtPhysicalMacAddress(candidate)
         ? candidate.physicalDeviceId
         : null;
     if (physicalMacAddress != null && candidateMacAddress != null) {
@@ -42,7 +42,7 @@ class RememberedDevice {
     return connectionId == candidate.connectionId;
   }
 
-  static bool _hasV15PhysicalMacAddress(DeviceCandidate candidate) {
+  static bool _hasEvtPhysicalMacAddress(DeviceCandidate candidate) {
     final manufacturerData = candidate.manufacturerData;
     return manufacturerData.length == 8 &&
         manufacturerData[0] == 0xA3 &&

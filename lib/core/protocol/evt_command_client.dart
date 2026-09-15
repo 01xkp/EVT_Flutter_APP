@@ -7,6 +7,8 @@ import 'package:aipin/core/diagnostics/evt_packet_log_summary.dart';
 import 'package:aipin/core/diagnostics/evt_response_wait_log.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
+import 'package:aipin/core/protocol/evt_frame_assembler.dart';
+import 'package:aipin/core/protocol/evt_protocol_contract.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 
 typedef EvtResponseMatcher = bool Function(EvtFrame frame);
@@ -24,6 +26,7 @@ class EvtCommandRequest {
     required this.command,
     required this.writeCharacteristic,
     this.content = const [],
+    this.allowUnauthenticatedUnbindRecovery = false,
     this.expectedResponseCommand,
     this.expectedSubCommand,
     this.expectedSequence,
@@ -36,6 +39,13 @@ class EvtCommandRequest {
   final int command;
   final List<int> content;
   final BleCharacteristic writeCharacteristic;
+
+  /// Internal admission hint for the V1.6 UNBIND recovery exception.
+  ///
+  /// This flag never changes the wire frame.  It is consumed by the session
+  /// permission gate immediately before the write and is only set by the
+  /// explicit Action=2 recovery path.  No other command may use it.
+  final bool allowUnauthenticatedUnbindRecovery;
   final int? expectedResponseCommand;
   final int? expectedSubCommand;
   final int? expectedSequence;
@@ -89,10 +99,12 @@ class EvtCommandClient {
   final SafeAppLogger _logger;
   final StreamController<EvtFrame> _events =
       StreamController<EvtFrame>.broadcast();
+  final EvtFrameAssembler _frameAssembler = EvtFrameAssembler();
   StreamSubscription<Uint8List>? _responseSubscription;
   Future<void> _queue = Future<void>.value();
   _PendingRequest? _pending;
   Object? _transportError;
+  StackTrace? _transportErrorStackTrace;
   var _closed = false;
 
   Stream<EvtFrame> get events => _events.stream;
@@ -106,6 +118,30 @@ class EvtCommandClient {
         fields: _requestFields(request, reason: 'client_closed'),
       );
       return Future<EvtCommandResponse>.error(StateError('命令客户端已关闭。'));
+    }
+    final transportError = _transportError;
+    if (transportError != null) {
+      _logWarning(
+        'evt_command_rejected',
+        stage: 'request',
+        result: 'failed',
+        fields: _requestFields(
+          request,
+          reason: 'response_stream_failed',
+          errorType: transportError.runtimeType.toString(),
+        ),
+      );
+      return Future<EvtCommandResponse>.error(
+        transportError,
+        _transportErrorStackTrace,
+      );
+    }
+    final unavailable = _unavailableCommandError(request);
+    if (unavailable != null) {
+      return Future<EvtCommandResponse>.error(
+        unavailable.error,
+        unavailable.stackTrace,
+      );
     }
     _logInfo(
       'evt_command_queued',
@@ -134,6 +170,29 @@ class EvtCommandClient {
       );
       return Stream<EvtFrame>.error(StateError('命令客户端已关闭。'));
     }
+    final transportError = _transportError;
+    if (transportError != null) {
+      _logWarning(
+        'evt_stream_command_rejected',
+        stage: 'request',
+        result: 'failed',
+        fields: _requestFields(
+          request,
+          timeout: idleTimeout,
+          reason: 'response_stream_failed',
+          errorType: transportError.runtimeType.toString(),
+        ),
+      );
+      return Stream<EvtFrame>.error(transportError, _transportErrorStackTrace);
+    }
+    final unavailable = _unavailableCommandError(
+      request,
+      timeout: idleTimeout,
+      streaming: true,
+    );
+    if (unavailable != null) {
+      return Stream<EvtFrame>.error(unavailable.error, unavailable.stackTrace);
+    }
     late final StreamController<EvtFrame> controller;
     _PendingStreamingCommand? active;
     controller = StreamController<EvtFrame>(
@@ -152,6 +211,7 @@ class EvtCommandClient {
           _PendingStreamingCommand? pending;
           final stopwatch = Stopwatch();
           try {
+            _ensureUsable();
             _admitWrite(request);
             stopwatch.start();
             _logInfo(
@@ -258,10 +318,12 @@ class EvtCommandClient {
               controller.addError(error, stackTrace);
             }
           } finally {
-            pending?.waitLog.finish(
-              'failed',
-              reason: '【回包监听】【结束】连续命令已退出，停止剩余等待日志',
-            );
+            if (pending != null && !pending.waitLog.isFinished) {
+              pending.waitLog.finish(
+                'cancelled',
+                reason: '【回包监听】【结束】连续命令已退出，停止剩余等待日志',
+              );
+            }
             if (pending != null && identical(_pending, pending)) {
               _pending = null;
             }
@@ -294,6 +356,21 @@ class EvtCommandClient {
   }
 
   Future<EvtCommandResponse> _run(EvtCommandRequest request) async {
+    try {
+      _ensureUsable();
+    } catch (error, stackTrace) {
+      _logError(
+        'evt_command_unavailable',
+        stage: 'request',
+        result: 'failed',
+        fields: _requestFields(
+          request,
+          reason: _closed ? 'client_closed' : 'response_stream_failed',
+          errorType: error.runtimeType.toString(),
+        ),
+      );
+      Error.throwWithStackTrace(error, stackTrace);
+    }
     late final Uint8List bytes;
     try {
       bytes = _codec.encodeRequest(request.command, request.content);
@@ -427,7 +504,12 @@ class EvtCommandClient {
           ),
         );
       } finally {
-        pending.waitLog.finish('cancelled', reason: '【回包监听】【结束】命令已退出，停止剩余等待日志');
+        if (!pending.waitLog.isFinished) {
+          pending.waitLog.finish(
+            'cancelled',
+            reason: '【回包监听】【结束】命令已退出，停止剩余等待日志',
+          );
+        }
         if (identical(_pending, pending)) {
           _pending = null;
         }
@@ -441,16 +523,93 @@ class EvtCommandClient {
   }
 
   void _admitWrite(EvtCommandRequest request) {
-    if (_closed) {
-      throw StateError('命令客户端已关闭。');
-    }
+    _ensureUsable();
     _beforeWrite?.call(request);
-    if (_closed) {
-      throw StateError('命令客户端已关闭。');
+    _ensureUsable();
+  }
+
+  _CommandRejection? _unavailableCommandError(
+    EvtCommandRequest request, {
+    Duration? timeout,
+    bool streaming = false,
+  }) {
+    try {
+      EvtProtocolContract.requireBusinessCommand(request.command);
+      // 0x11 is part of the EVT command vocabulary, but V1.6 exposes it only
+      // as a native GATT Read.  Keep this guard in the lowest framed-write
+      // layer as well as SessionController so an independently constructed
+      // command client cannot accidentally put a read-only operation on a
+      // characteristic write queue.
+      if (EvtProtocolContract.writeEndpointForCommand(request.command) ==
+          null) {
+        throw EvtProtocolUnavailableException(
+          'EVT 命令 0x${request.command.toRadixString(16).padLeft(2, '0').toUpperCase()} '
+          '仅支持 GATT Read，不允许通过业务写入发送。',
+        );
+      }
+      // Keep fixed V1.6 payload validation at the shared client entrance.
+      // SessionController also validates its own requests, but the command
+      // client is independently constructible in integration code and tests.
+      // A direct caller must not be able to put an invalid frame on GATT.
+      EvtProtocolContract.validateWritePayload(
+        request.command,
+        request.content,
+      );
+      return null;
+    } catch (error, stackTrace) {
+      _logWarning(
+        streaming ? 'evt_stream_command_rejected' : 'evt_command_rejected',
+        stage: 'request',
+        result: 'failed',
+        fields: _requestFields(
+          request,
+          timeout: timeout,
+          reason: error is EvtProtocolUnavailableException
+              ? 'command_not_enabled_for_evt'
+              : 'request_payload_invalid',
+          errorType: error.runtimeType.toString(),
+        ),
+      );
+      return _CommandRejection(error, stackTrace);
     }
   }
 
   void _onBytes(Uint8List bytes) {
+    if (_closed) {
+      return;
+    }
+    final assembled = _frameAssembler.add(bytes);
+    _logInfo(
+      'evt_command_response_chunk_received',
+      stage: 'response',
+      result: 'pending',
+      fields: {
+        'bytes': bytes.length,
+        'count': assembled.frames.length,
+        'length': assembled.bufferedByteCount,
+        'reason': 'ble_value_assembled',
+      },
+    );
+    for (final rejected in assembled.rejectedFrames) {
+      final packet = EvtPacketLogSummary.fromWireBytes(rejected);
+      _logWarning(
+        'evt_command_response_decode_failed',
+        stage: 'response',
+        result: 'failed',
+        fields: {
+          ...packet.fields,
+          'event_kind': 'decode_failed',
+          'failure_kind': 'protocol',
+          'reason': 'frame_assembly_rejected',
+        },
+      );
+    }
+    for (final frameBytes in assembled.frames) {
+      _onFrameBytes(frameBytes);
+    }
+  }
+
+  void _onFrameBytes(Uint8List bytes) {
     final packet = EvtPacketLogSummary.fromWireBytes(bytes);
     final result = _codec.decode(bytes);
     if (!result.isSuccess) {
@@ -527,11 +686,18 @@ class EvtCommandClient {
             : 'response_not_expected',
       },
     );
-    _events.add(frame);
+    if (!_events.isClosed) {
+      _events.add(frame);
+    }
   }
 
   void _onTransportError(Object error, StackTrace stackTrace) {
+    if (_closed || _transportError != null) {
+      return;
+    }
     _transportError = error;
+    _transportErrorStackTrace = stackTrace;
+    _frameAssembler.reset();
     final pending = _pending;
     _logError(
       'evt_command_transport_error',
@@ -546,11 +712,26 @@ class EvtCommandClient {
     _pending?.completeError(error, stackTrace);
   }
 
+  void _ensureUsable() {
+    if (_closed) {
+      throw StateError('命令客户端已关闭。');
+    }
+    final transportError = _transportError;
+    if (transportError != null) {
+      final stackTrace = _transportErrorStackTrace;
+      if (stackTrace == null) {
+        throw transportError;
+      }
+      Error.throwWithStackTrace(transportError, stackTrace);
+    }
+  }
+
   Future<void> close() async {
     if (_closed) {
       return;
     }
     _closed = true;
+    _frameAssembler.reset();
     _pending?.waitLog.finish('cancelled', reason: '【回包监听】【取消】当前连接或命令客户端已关闭');
     _logInfo(
       'evt_command_client_closing',
@@ -584,6 +765,7 @@ class EvtCommandClient {
       'expected_command': _commandHex(expectedCommand),
       'max_retries': request.maxRetries < 0 ? 0 : request.maxRetries,
       'timeout_ms': (timeout ?? request.timeout).inMilliseconds,
+      if (request.allowUnauthenticatedUnbindRecovery) 'unbind_recovery': true,
       'characteristic': EvtPacketLogSummary.characteristicReference(
         request.writeCharacteristic.characteristicUuid,
       ),
@@ -677,6 +859,13 @@ class EvtCommandClient {
       // Logging is best effort. Command execution retains its original result.
     }
   }
+}
+
+class _CommandRejection {
+  const _CommandRejection(this.error, this.stackTrace);
+
+  final Object error;
+  final StackTrace stackTrace;
 }
 
 abstract interface class _PendingRequest {

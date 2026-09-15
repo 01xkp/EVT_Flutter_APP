@@ -32,6 +32,11 @@ class EvtResponseWaitLog {
   bool _finished = false;
   int _responseCount = 0;
 
+  /// True after a terminal response, timeout, cancellation, or transport
+  /// error has closed this wait. Callers use this to avoid emitting a second
+  /// misleading terminal state from an async cleanup block.
+  bool get isFinished => _finished;
+
   void writeCompleted() {
     if (_finished) return;
     _writeCompleted = true;

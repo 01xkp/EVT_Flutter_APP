@@ -8,12 +8,14 @@ import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/core/protocol/device_event.dart';
 import 'package:aipin/core/protocol/evt_command_client.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
+import 'package:aipin/core/protocol/evt_frame_assembler.dart';
 import 'package:aipin/core/protocol/evt_protocol_contract.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:aipin/features/device_session/data/device_protocol_repository.dart';
 import 'package:aipin/features/device_session/domain/device_configuration.dart';
 import 'package:aipin/features/device_session/domain/device_permission.dart';
 import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
+import 'package:aipin/features/device_session/domain/evt_unbind_preflight.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
 import 'package:aipin/features/device_session/domain/device_file_transfer_gateway.dart';
 import 'package:aipin/features/device_session/domain/device_info.dart';
@@ -32,7 +34,9 @@ class SessionController extends ChangeNotifier
     this._codec, {
     SafeAppLogger? logger,
     SafeAppLogger? commandLogger,
-    this._legacySecurityResponseTimeout = const Duration(seconds: 5),
+    this._legacySecurityResponseTimeout = const Duration(seconds: 2),
+    this._legacyBindResponseTimeout = const Duration(seconds: 65),
+    this._legacyUnbindResponseTimeout = const Duration(seconds: 120),
     this._fileListResponseTimeout = const Duration(seconds: 2),
     this._fileTransferIdleTimeout = const Duration(seconds: 15),
     this._permissionGate,
@@ -42,8 +46,15 @@ class SessionController extends ChangeNotifier
   static const _connectionSetupTimeout = Duration(seconds: 15);
   static const _operationTimeout = Duration(seconds: 15);
   static const _notificationSetupTimeout = Duration(seconds: 8);
-  // The largest legal 0x81 indication is 133 bytes, plus the ATT header.
-  static const _v3AdmissionMinimumAttMtu = 136;
+  // V1.6 pre-authentication 0x81 is a fixed 90-byte Content payload. The
+  // complete business frame is 96 bytes and an ATT indication reserves three
+  // bytes for its ATT/L2CAP header, so the connection must negotiate MTU 99
+  // before the identity read is dispatched.
+  static const _v16PreAuthenticationMinimumAttMtu = 99;
+  // Authenticated 0x81 may include the 30-byte compatibility area and the
+  // seven-byte active-record fields. Its largest legal frame is 133 bytes;
+  // keep the larger admission gate for the protected read.
+  static const _v16AuthenticatedInfoMinimumAttMtu = 136;
   static const _evtResponseCommandByEndpoint = <BleLogicalEndpoint, int>{
     BleLogicalEndpoint.fa10Fa11: 0x81,
     BleLogicalEndpoint.fa10Fa12: 0x82,
@@ -54,7 +65,9 @@ class SessionController extends ChangeNotifier
     BleLogicalEndpoint.fb10Fb11: 0x91,
     BleLogicalEndpoint.ff10Ff11: 0xA1,
     BleLogicalEndpoint.ff10Ff12: 0xA2,
-    BleLogicalEndpoint.ff10Ff13: 0x23,
+    // V1.6 reserves CMD=0x23 for the request; file-data Notify uses
+    // response CMD=0xA3 (0x23 | 0x80).
+    BleLogicalEndpoint.ff10Ff13: 0xA3,
   };
 
   final BleTransport _transport;
@@ -63,6 +76,8 @@ class SessionController extends ChangeNotifier
   final SafeAppLogger _logger;
   final SafeAppLogger _commandLogger;
   final Duration _legacySecurityResponseTimeout;
+  final Duration _legacyBindResponseTimeout;
+  final Duration _legacyUnbindResponseTimeout;
   final Duration _fileListResponseTimeout;
   final Duration _fileTransferIdleTimeout;
   final DevicePermissionGate? _permissionGate;
@@ -78,6 +93,10 @@ class SessionController extends ChangeNotifier
   Future<void>? _closeFuture;
   Future<void>? _transportCloseFuture;
   int? _attMtu;
+  // Only the connection-time, fixed 90-byte 0x01 read may bypass the normal
+  // permission gate. The flag is scoped to the pending command and cleared in
+  // a finally block so no later business request can use the exception.
+  var _preAuthenticationInfoReadInProgress = false;
   int _connectionAttempt = 0;
   var _isDisposed = false;
   var _changeNotifierDisposed = false;
@@ -114,8 +133,17 @@ class SessionController extends ChangeNotifier
         BleLogicalEndpoint.fa10Fa11,
         critical: true,
       );
-      // CCC registration can outlive the V1 authentication window. Recheck
-      // immediately before scheduling the protected device-info request.
+      // Recheck connection-scoped authorization immediately before scheduling
+      // the protected device-info request; this closes a disconnect/revoke
+      // race while CCC registration is pending.
+      _requireDevicePermission(DevicePermission.status);
+      // An authenticated 0x81 response may include the optional 30-byte
+      // compatibility area and active-record fields (up to a 133-byte frame).
+      // The pre-auth identity read only requires ATT MTU 99, so refresh the
+      // negotiated capacity before every public protected read as well. The
+      // cached value makes this a no-op after the normal post-auth sync.
+      await _ensureAuthenticatedDeviceInfoAttMtu();
+      _requireCurrentConnectionAttempt(_connectionAttempt);
       _requireDevicePermission(DevicePermission.status);
       final info = await _requireProtocol().readDeviceInfo();
       _logger.info(
@@ -585,19 +613,26 @@ class SessionController extends ChangeNotifier
   ) async {
     final connectionAttempt = _connectionAttempt;
     final startedAt = DateTime.now();
-    final operation = request.action == EvtLegacySecurityAction.bind
-        ? 'device_bind'
-        : 'device_authenticate';
+    final operation = switch (request.action) {
+      EvtLegacySecurityAction.authenticate => 'device_authenticate',
+      EvtLegacySecurityAction.bind => 'device_bind',
+      EvtLegacySecurityAction.unbind => 'device_unbind',
+    };
+    final responseTimeout = switch (request.action) {
+      EvtLegacySecurityAction.authenticate => _legacySecurityResponseTimeout,
+      EvtLegacySecurityAction.bind => _legacyBindResponseTimeout,
+      EvtLegacySecurityAction.unbind => _legacyUnbindResponseTimeout,
+    };
     _logger.info(
       'legacy_security_exchange_started',
       operation: operation,
       stage: 'fa19_write',
       result: 'pending',
-      fields: _sessionFields('【会话认证】准备通过 FA19 发起 V1 认证或绑定交换', {
+      fields: _sessionFields('【会话认证】准备通过 FA19 发起 V1.6 认证或绑定交换', {
         'connection_attempt': connectionAttempt,
         'action': request.action.name,
         'endpoint': BleLogicalEndpoint.fa10Fa19.name,
-        'timeout_ms': _legacySecurityResponseTimeout.inMilliseconds,
+        'timeout_ms': responseTimeout.inMilliseconds,
         'length': request.securityCode.length,
       }),
     );
@@ -666,13 +701,13 @@ class SessionController extends ChangeNotifier
             'gatt_cache_refresh_result': cacheRefresh.name,
         }),
       );
-      // V1 only returns BindResult. Without an action or transaction id, a
+      // V1.6 only returns BindResult. Without an action or transaction id, a
       // late response cannot be distinguished from the next 0x09 operation.
       await _invalidateSessionForAmbiguousProtocolResult(
         connectionAttempt: connectionAttempt,
         event: 'legacy_security_result_uncertain',
         message: '设备认证结果未确认，已断开连接，请重新连接后重试。',
-        fields: _sessionFields('【会话认证】V1 认证响应无法关联，主动断开避免误用迟到数据', {
+        fields: _sessionFields('【会话认证】V1.6 认证响应无法关联，主动断开避免误用迟到数据', {
           'action': request.action.name,
           'error_type': error.runtimeType.toString(),
           if (cacheRefresh != null)
@@ -684,7 +719,7 @@ class SessionController extends ChangeNotifier
     }
   }
 
-  /// A V1 `0x09` response has no action or transaction identifier. Once its
+  /// A V1.6 `0x09` response has no action or transaction identifier. Once its
   /// response window expires, the session must be discarded instead of
   /// retrying the command. On Android, clear the cache while the connection is
   /// still alive so the user's next reconnect re-discovers the current GATT
@@ -819,10 +854,15 @@ class SessionController extends ChangeNotifier
         BleLogicalEndpoint.fa10Fa11,
         critical: true,
       );
+      // V1.6 gates every protected characteristic behind the current
+      // connection's Action=00. FA11/FA19 were subscribed during admission;
+      // all other EVT CCCs are enabled only after the AUTH response arrives.
+      await _subscribeEvtEndpointsAfterAuthentication();
       _requireDevicePermission(DevicePermission.status);
-      mtu = await _ensureV3AdmissionAttMtu();
-      // The V1 authentication window can end while CCC/MTU setup is pending.
-      // Recheck immediately before the protected 0x01 command is scheduled.
+      mtu = await _ensureAuthenticatedDeviceInfoAttMtu();
+      // Recheck connection-scoped authorization immediately before the
+      // protected 0x01 command is scheduled. V1.6's 60-second value is only
+      // the firmware deadline before AUTH succeeds, not a post-AUTH TTL.
       _requireDevicePermission(DevicePermission.status);
       info = await repository.readDeviceInfo();
       _logger.info(
@@ -831,7 +871,7 @@ class SessionController extends ChangeNotifier
         stage: 'sync',
         result: 'success',
         elapsed: DateTime.now().difference(startedAt),
-        fields: _sessionFields('【会话认证】已收到认证后的设备信息，开始校验 EVT 版本', {
+        fields: _sessionFields('【会话认证】已收到认证后的设备信息，记录设备上报的协议版本', {
           'connection_attempt': connectionAttempt,
           'endpoint': BleLogicalEndpoint.fa10Fa11.name,
           'command': '0x81',
@@ -839,15 +879,28 @@ class SessionController extends ChangeNotifier
           'mtu': mtu,
         }),
       );
-      if (info.capabilities.protocolVersion != 3) {
-        throw BleTransportException(
-          EvtFailure.protocol(
-            message: '设备协议版本不受支持。',
-            detail:
-                '需要 ProtocolVersion=3，实际为 ${info.capabilities.protocolVersion}。',
-          ),
-        );
-      }
+      // TEMP(EVT): Skip only the version gate during firmware integration.
+      // Restore after firmware alignment; payload and FileName[17] rules stay.
+      // if (info.capabilities.protocolVersion !=
+      //     EvtProtocolContract.evtV16ProtocolVersion) {
+      //   throw BleTransportException(
+      //     EvtFailure.protocol(
+      //       message: '设备协议版本不受支持。',
+      //       detail:
+      //           '需要 ProtocolVersion=${EvtProtocolContract.evtV16ProtocolVersion}，实际为 ${info.capabilities.protocolVersion}。',
+      //     ),
+      //   );
+      // }
+      _logger.warning(
+        'authentication_protocol_version_check_skipped',
+        operation: 'device_authenticate',
+        stage: 'validation',
+        result: 'accepted',
+        fields: _sessionFields('【协议版本】联调阶段临时跳过版本号校验，仍按当前字段布局和 17 字节文件名规则处理', {
+          'connection_attempt': connectionAttempt,
+          'protocol_version': info.capabilities.protocolVersion,
+        }),
+      );
       configuration = _baselineConfigurationFor(info);
       await _writeAuthenticationConfiguration(configuration);
     } catch (error) {
@@ -914,6 +967,10 @@ class SessionController extends ChangeNotifier
       denoise: false,
       powerOff: info.powerOff,
       chargingMode: info.chargingMode,
+      // EVT does not expose the FA18 real-time audio feature. Always clear
+      // the fixed V1.6 AudioStream byte so an earlier P2/PVT state cannot be
+      // retained when this connection completes authentication.
+      audioStream: 0,
     );
   }
 
@@ -981,6 +1038,147 @@ class SessionController extends ChangeNotifier
     }
   }
 
+  /// Confirms that normal V1.6 Action=2 may be sent on the current session.
+  ///
+  /// This is deliberately a fresh device-side check rather than a check of
+  /// only cached UI values: a destructive UNBIND must not race an active
+  /// recording, sync, or an unsynchronized file. A recovery Action=2 is not
+  /// routed here because it represents a command that was already sent.
+  Future<void> verifyEvtUnbindPreflight() async {
+    final connectionAttempt = _connectionAttempt;
+    final startedAt = DateTime.now();
+    _logger.info(
+      'evt_unbind_preflight_requested',
+      operation: 'device_unbind',
+      stage: 'preflight',
+      result: 'pending',
+      fields: _sessionFields('【解绑预检】开始确认设备可以安全执行解绑，不发送 Action=2', {
+        'connection_attempt': connectionAttempt,
+        'checks': const <String>[
+          'observable_session',
+          'record_state',
+          'sync_state',
+          'first_file_page',
+        ],
+      }),
+    );
+    if (!_state.isObservable) {
+      _rejectEvtUnbindPreflight(
+        connectionAttempt: connectionAttempt,
+        startedAt: startedAt,
+        check: 'observable_session',
+        message: '设备尚未完成认证并进入可用状态，暂时不能解绑。',
+      );
+    }
+    if (_state.isRecordActionInFlight) {
+      _rejectEvtUnbindPreflight(
+        connectionAttempt: connectionAttempt,
+        startedAt: startedAt,
+        check: 'record_action',
+        message: '设备录音操作仍在处理中，请完成后再解绑。',
+      );
+    }
+    final cachedState = _state.latestSnapshot?.state;
+    if (cachedState == DeviceState.recording ||
+        cachedState == DeviceState.paused) {
+      _rejectEvtUnbindPreflight(
+        connectionAttempt: connectionAttempt,
+        startedAt: startedAt,
+        check: 'record_state_cached',
+        message: '设备正在录音或已暂停录音，请先结束录音后再解绑。',
+        fields: {'state': cachedState?.name},
+      );
+    }
+
+    try {
+      _requireDevicePermission(DevicePermission.status);
+      _requireDevicePermission(DevicePermission.files);
+      final info = await readDeviceInfo();
+      _requireCurrentConnectionAttempt(connectionAttempt);
+      if (info.recordStatus != 0) {
+        _rejectEvtUnbindPreflight(
+          connectionAttempt: connectionAttempt,
+          startedAt: startedAt,
+          check: 'record_state_live',
+          message: info.recordStatus == 1 || info.recordStatus == 2
+              ? '设备正在录音或已暂停录音，请先结束录音后再解绑。'
+              : '设备录音状态异常，无法确认可以安全解绑。',
+          fields: {'record_status': info.recordStatus},
+        );
+      }
+
+      final status = await readStatus();
+      _requireCurrentConnectionAttempt(connectionAttempt);
+      if (status.syncState != 0) {
+        _rejectEvtUnbindPreflight(
+          connectionAttempt: connectionAttempt,
+          startedAt: startedAt,
+          check: 'sync_state',
+          message: '设备正在同步或同步状态异常，请完成文件同步后再解绑。',
+          fields: {'sync_state': status.syncState},
+        );
+      }
+
+      final files = await listFiles(offset: 0, pageSize: 1);
+      _requireCurrentConnectionAttempt(connectionAttempt);
+      _requireDevicePermission(DevicePermission.files);
+      if (files.isNotEmpty) {
+        _rejectEvtUnbindPreflight(
+          connectionAttempt: connectionAttempt,
+          startedAt: startedAt,
+          check: 'first_file_page',
+          message: '设备仍有未同步录音文件，请先完成文件同步后再解绑。',
+          fields: {'file_count_on_first_page': files.length},
+        );
+      }
+    } on EvtUnbindPreflightException {
+      rethrow;
+    } catch (error) {
+      _rejectEvtUnbindPreflight(
+        connectionAttempt: connectionAttempt,
+        startedAt: startedAt,
+        check: 'device_verification',
+        message: '无法确认设备录音、同步和文件状态，请重新连接后完成文件同步再解绑。',
+        fields: {'error_type': error.runtimeType.toString()},
+      );
+    }
+
+    _logger.info(
+      'evt_unbind_preflight_completed',
+      operation: 'device_unbind',
+      stage: 'preflight',
+      result: 'success',
+      elapsed: DateTime.now().difference(startedAt),
+      fields: _sessionFields('【解绑预检】设备处于空闲、未同步文件为空，可以打开安全码输入', {
+        'connection_attempt': connectionAttempt,
+        'sync_state': 0,
+        'file_count_on_first_page': 0,
+      }),
+    );
+  }
+
+  Never _rejectEvtUnbindPreflight({
+    required int connectionAttempt,
+    required DateTime startedAt,
+    required String check,
+    required String message,
+    Map<String, Object?> fields = const {},
+  }) {
+    _logger.warning(
+      'evt_unbind_preflight_rejected',
+      operation: 'device_unbind',
+      stage: 'preflight',
+      result: 'failed',
+      elapsed: DateTime.now().difference(startedAt),
+      fields: _sessionFields('【解绑预检】$message', {
+        'connection_attempt': connectionAttempt,
+        'check': check,
+        ...fields,
+      }),
+    );
+    throw EvtUnbindPreflightException(message);
+  }
+
   Future<List<DeviceFile>> listFiles({
     int offset = 0,
     int pageSize = 10,
@@ -1010,10 +1208,15 @@ class SessionController extends ChangeNotifier
     _requireDevicePermission(DevicePermission.files);
     final mtu = await _ensureAttMtu(31);
     _requireCurrentConnectionAttempt(connectionAttempt);
-    // The V1 authentication window can expire while CCC or MTU work is
-    // pending. Check again immediately before the 0x22 command is written.
+    // Recheck connection-scoped authorization immediately before the 0x22
+    // command is written. This also closes a disconnect/revoke race while CCC
+    // or MTU setup is pending; V1.6 has no post-AUTH local TTL.
     _requireDevicePermission(DevicePermission.files);
-    final supportedPageSize = max(1, min(20, (mtu - 10) ~/ 21));
+    // A 0xA2 page has a seven-byte outer-frame overhead plus 21 bytes per
+    // entry, and the ATT indication reserves three bytes. Do not turn an
+    // undersized MTU into a fictitious one-entry capability; _ensureAttMtu
+    // above has already required the protocol minimum of 31.
+    final supportedPageSize = min(20, (mtu - 10) ~/ 21);
     final effectivePageSize = min(pageSize, supportedPageSize);
     _logger.info(
       'file_list_request_admitted',
@@ -1021,7 +1224,7 @@ class SessionController extends ChangeNotifier
       stage: 'request',
       result: 'accepted',
       elapsed: DateTime.now().difference(startedAt),
-      fields: _sessionFields('【会话文件】文件列表请求已通过 MTU 和认证窗口校验', {
+      fields: _sessionFields('【会话文件】文件列表请求已通过 MTU 和当前连接认证权限校验', {
         'endpoint': BleLogicalEndpoint.ff10Ff12.name,
         'command': '0x22',
         'offset': offset,
@@ -1051,7 +1254,7 @@ class SessionController extends ChangeNotifier
       );
       return files;
     } catch (error, stackTrace) {
-      // V1.5 0xA2 does not carry the requested page offset. A late indication
+      // V1.6 0xA2 does not carry the requested page offset. A late indication
       // therefore cannot be safely distinguished from a later 0x22 request.
       // Reset the BLE session after any dispatched 0x22 failure before a new
       // listing can begin. That also covers an ambiguous GATT write failure.
@@ -1099,27 +1302,35 @@ class SessionController extends ChangeNotifier
     required List<int> nameSlot,
     int startOffset = 0,
     int chunkSize = 0,
+    int? expectedFileLength,
   }) {
     final connectionAttempt = _connectionAttempt;
+    final transferRequestFields = <String, Object?>{
+      'endpoint': BleLogicalEndpoint.ff10Ff13.name,
+      'command': '0x23',
+      'expected_command': '0xA3',
+      'offset': startOffset,
+      'length': chunkSize,
+      'content_length': nameSlot.length,
+    };
+    if (expectedFileLength != null) {
+      transferRequestFields['expected_file_length'] = expectedFileLength;
+    }
     _logger.info(
       'file_transfer_requested',
       operation: 'device_file_import',
       stage: 'request',
       result: 'pending',
-      fields: _sessionFields('【会话文件】准备请求设备文件流，不记录文件名槽位或音频内容', {
-        'endpoint': BleLogicalEndpoint.ff10Ff13.name,
-        'command': '0x23',
-        'expected_command': '0x23',
-        'offset': startOffset,
-        'length': chunkSize,
-        'content_length': nameSlot.length,
-      }),
+      fields: _sessionFields(
+        '【会话文件】准备请求设备文件流，不记录文件名槽位或音频内容',
+        transferRequestFields,
+      ),
     );
     // An async* wrapper does not propagate a caller's cancellation through an
     // await-for until its child stream resumes. A silent 0x23 transfer can
     // therefore wait for the 15-second idle timer after the file screen has
     // gone away. Keep a direct subscription here so caller cancellation can
-    // close the ambiguous V1.5 transfer session immediately while this layer
+    // close the ambiguous V1.6 transfer session immediately while this layer
     // remains available to absorb the resulting source-stream error.
     late final StreamController<EvtDeviceFileTransferEvent> controller;
     StreamSubscription<EvtDeviceFileTransferEvent>? transferSubscription;
@@ -1189,6 +1400,7 @@ class SessionController extends ChangeNotifier
             nameSlot: nameSlot,
             startOffset: startOffset,
             chunkSize: chunkSize,
+            expectedFileLength: expectedFileLength,
             onTransferStarted: () => transferStarted = true,
             onTerminalReceived: () => terminalReceived = true,
             isCallerCancelled: () => callerCancelled,
@@ -1273,7 +1485,7 @@ class SessionController extends ChangeNotifier
           }),
         );
         // Do not await the source cancellation. Its async* body can be
-        // waiting for the next Notify, while the V1.5 session must be reset
+        // waiting for the next Notify, while the V1.6 session must be reset
         // now to stop a late frame entering a later transfer.
         final subscription = transferSubscription;
         if (subscription != null) {
@@ -1294,6 +1506,7 @@ class SessionController extends ChangeNotifier
     required List<int> nameSlot,
     required int startOffset,
     required int chunkSize,
+    required int? expectedFileLength,
     required VoidCallback onTransferStarted,
     required VoidCallback onTerminalReceived,
     required bool Function() isCallerCancelled,
@@ -1310,6 +1523,19 @@ class SessionController extends ChangeNotifier
     var receivedBytes = 0;
     var nextProgressLogBytes = 64 * 1024;
     var terminalReceived = false;
+    var incompleteTransferNotified = false;
+
+    Future<void> notifyIncompleteTransfer(Object error) async {
+      // The async* body can enter both catch and finally for the same failure.
+      // Keep session invalidation idempotent here so a single broken transfer
+      // cannot trigger duplicate disconnects or mask the original error.
+      if (terminalReceived || incompleteTransferNotified) {
+        return;
+      }
+      incompleteTransferNotified = true;
+      await onIncompleteTransfer(error);
+    }
+
     try {
       requireActiveCaller();
       _requireDevicePermission(DevicePermission.files);
@@ -1326,8 +1552,19 @@ class SessionController extends ChangeNotifier
       );
       final mtu = await _ensureAttMtu(requiredMtu);
       requireActiveCaller();
-      // Do not let an expired V1 window reach the 0x23 write after an awaited
-      // setup step. The per-event check below also stops an active transfer.
+      final effectiveChunkLimit = _effectiveFileChunkLimit(mtu);
+      if (effectiveChunkLimit < 1) {
+        throw StateError('当前 ATT MTU 不足，无法接收文件数据。');
+      }
+      if (chunkSize > 0 && chunkSize > effectiveChunkLimit) {
+        throw StateError(
+          '请求分块 $chunkSize 字节超过当前 ATT MTU 可承载上限 '
+          '$effectiveChunkLimit。',
+        );
+      }
+      // Do not let a revoked/disconnected session reach the 0x23 write after
+      // an awaited setup step. The per-event check below also stops an active
+      // transfer; successful AUTH remains valid until BLE disconnect/restart.
       _requireDevicePermission(DevicePermission.files);
       _logger.info(
         'file_transfer_request_admitted',
@@ -1342,12 +1579,14 @@ class SessionController extends ChangeNotifier
           'length': chunkSize,
           'required_mtu': requiredMtu,
           'mtu': mtu,
+          'effective_chunk_limit': effectiveChunkLimit,
         }),
       );
       final transfer = _requireProtocol().downloadEvtFile(
         nameSlot: nameSlot,
         startOffset: startOffset,
         chunkSize: chunkSize,
+        expectedFileLength: expectedFileLength,
       );
       onTransferStarted();
       _logger.info(
@@ -1366,7 +1605,7 @@ class SessionController extends ChangeNotifier
         requireActiveCaller();
         // The permission is checked immediately before the one and only 0x23
         // Write. Once the device has accepted that write, every following
-        // Notify belongs to the same continuous transfer. A V1 auth window
+        // Notify belongs to the same continuous transfer. A V1.6 auth window
         // expiring while a large file is in flight must block a later command,
         // not discard already-authorized bytes and force a needless restart.
         if (event.isTerminal) {
@@ -1385,6 +1624,27 @@ class SessionController extends ChangeNotifier
             }),
           );
         } else {
+          if (event.bytes.length > effectiveChunkLimit) {
+            _logger.warning(
+              'file_transfer_chunk_exceeds_mtu',
+              operation: 'device_file_import',
+              stage: 'download',
+              result: 'failed',
+              elapsed: DateTime.now().difference(startedAt),
+              fields: _sessionFields('【会话文件】设备文件数据块超过当前 ATT MTU 可承载上限，拒绝写入本地', {
+                'endpoint': BleLogicalEndpoint.ff10Ff13.name,
+                'command': '0xA3',
+                'chunk_bytes': event.bytes.length,
+                'effective_chunk_limit': effectiveChunkLimit,
+                'mtu': mtu,
+                'received_bytes': receivedBytes,
+              }),
+            );
+            throw StateError(
+              '设备文件数据块 ${event.bytes.length} 字节超过当前 ATT MTU '
+              '可承载上限 $effectiveChunkLimit。',
+            );
+          }
           receivedBytes += event.bytes.length;
           if (receivedBytes >= nextProgressLogBytes) {
             _logger.info(
@@ -1409,6 +1669,27 @@ class SessionController extends ChangeNotifier
         throw StateError('设备文件传输未返回结束帧。');
       }
     } catch (error, stackTrace) {
+      if (error is EvtFileTransferChunkMtuException) {
+        // The repository has already validated the frame shape. Preserve the
+        // MTU-specific reason here so a real-device log clearly distinguishes
+        // an oversized Notify from malformed or out-of-order file data before
+        // the ambiguous transfer session is disconnected below.
+        _logger.warning(
+          'file_transfer_chunk_exceeds_mtu',
+          operation: 'device_file_import',
+          stage: 'download',
+          result: 'failed',
+          elapsed: DateTime.now().difference(startedAt),
+          fields: _sessionFields('【会话文件】设备文件数据块超过当前 ATT MTU 可承载上限，拒绝写入本地', {
+            'endpoint': BleLogicalEndpoint.ff10Ff13.name,
+            'command': '0xA3',
+            'chunk_bytes': error.chunkBytes,
+            'effective_chunk_limit': error.maxChunkBytes,
+            if (error.attMtu != null) 'mtu': error.attMtu,
+            'received_bytes': receivedBytes,
+          }),
+        );
+      }
       _logger.warning(
         'file_transfer_failed',
         operation: 'device_file_import',
@@ -1422,7 +1703,7 @@ class SessionController extends ChangeNotifier
           'error_type': error.runtimeType.toString(),
         }),
       );
-      await onIncompleteTransfer(error);
+      await notifyIncompleteTransfer(error);
       Error.throwWithStackTrace(error, stackTrace);
     } finally {
       if (terminalReceived) {
@@ -1438,8 +1719,12 @@ class SessionController extends ChangeNotifier
             'bytes': receivedBytes,
           }),
         );
+      } else {
+        // A cancellation, source error, or stream close without EOF is an
+        // ambiguous transfer result and must invalidate the session. Normal
+        // EOF deliberately leaves the BLE connection usable.
+        await notifyIncompleteTransfer(StateError('连续文件传输未收到结束帧。'));
       }
-      await onIncompleteTransfer(StateError('连续文件传输已取消。'));
     }
   }
 
@@ -1485,6 +1770,7 @@ class SessionController extends ChangeNotifier
     _responseController = null;
     _protocolRepository = null;
     _attMtu = null;
+    _preAuthenticationInfoReadInProgress = false;
     if (previousDeviceId != null) {
       _logger.info(
         'previous_session_disconnect_requested',
@@ -1769,7 +2055,7 @@ class SessionController extends ChangeNotifier
         );
         _fail(
           EvtFailure.access(
-            message: '设备 GATT 不符合 EVT V1.5 联调要求。',
+            message: '设备 GATT 不符合 EVT V1.6 联调要求。',
             detail: _gattContractFailureDetail(
               missingEndpointOperations: missingEndpointOperations,
               iosCccModeConflicts: iosCccModeConflicts,
@@ -1814,20 +2100,31 @@ class SessionController extends ChangeNotifier
         commands: _commandClient!,
         codec: _codec,
         legacySecurityResponseTimeout: _legacySecurityResponseTimeout,
+        legacyBindResponseTimeout: _legacyBindResponseTimeout,
+        legacyUnbindResponseTimeout: _legacyUnbindResponseTimeout,
         fileListResponseTimeout: _fileListResponseTimeout,
         fileTransferIdleTimeout: _fileTransferIdleTimeout,
+        negotiatedAttMtuProvider: () => _attMtu,
       );
       _logger.info(
-        'evt_subscription_setup_requested',
+        'evt_pre_auth_subscription_setup_requested',
         operation: 'device_connect',
         stage: 'connect',
         result: 'pending',
-        fields: _sessionFields('【会话订阅】开始按 EVT V1.5 固定顺序订阅响应特征', {
+        fields: _sessionFields('【会话订阅】V1.6 预认证阶段只订阅 FA11 和 FA19', {
           'connection_attempt': connectionAttempt,
+          'endpoints': EvtProtocolContract.preAuthenticationSubscriptionOrder
+              .map((endpoint) => endpoint.name)
+              .toList(growable: false),
           'timeout_ms': _notificationSetupTimeout.inMilliseconds,
         }),
       );
       await _subscribeEvtEndpointsBeforeAuthentication();
+      if (!_isCurrentConnectionAttempt(connectionAttempt) ||
+          _state.phase != SessionPhase.subscribing) {
+        return;
+      }
+      await _readPreAuthenticationDeviceInfo(connectionAttempt);
       if (!_isCurrentConnectionAttempt(connectionAttempt) ||
           _state.phase != SessionPhase.subscribing) {
         return;
@@ -1839,10 +2136,10 @@ class SessionController extends ChangeNotifier
         stage: 'connect',
         result: 'success',
         elapsed: DateTime.now().difference(startedAt),
-        fields: _sessionFields('【会话订阅】必要响应特征已就绪，可以发起 V1 认证或绑定', {
+        fields: _sessionFields('【会话订阅】预认证身份读取完成，可以发起 V1.6 认证或绑定', {
           'connection_attempt': connectionAttempt,
           'subscription_count': _subscribedEndpointKeys.length,
-          'protocol_version': 3,
+          'protocol_version': EvtProtocolContract.evtV16ProtocolVersion,
         }),
       );
     } catch (error) {
@@ -1944,13 +2241,24 @@ class SessionController extends ChangeNotifier
   }
 
   Future<void> _loadDeviceBattery(DeviceProtocolRepository repository) async {
+    // V1.6 defines FB11 as Read + Indicate. The Read result is used for the
+    // explicit refresh below, while the Indicate subscription keeps the
+    // battery/charging snapshot current when the device changes state.
     if (!_state.supportsEndpoint(
-      BleLogicalEndpoint.fb10Fb11,
-      BleOperation.read,
-    )) {
+          BleLogicalEndpoint.fb10Fb11,
+          BleOperation.read,
+        ) ||
+        !_state.supportsEndpoint(
+          BleLogicalEndpoint.fb10Fb11,
+          BleOperation.indicate,
+        )) {
       return;
     }
     try {
+      await _ensureResponseSubscription(
+        BleLogicalEndpoint.fb10Fb11,
+        critical: false,
+      );
       _requireDevicePermission(DevicePermission.status);
       final battery = await repository.readBattery();
       _updateDeviceDetails(deviceBattery: battery, repository: repository);
@@ -2037,12 +2345,20 @@ class SessionController extends ChangeNotifier
 
   Future<void> _loadDeviceStorage(DeviceProtocolRepository repository) async {
     if (!_state.supportsEndpoint(
-      BleLogicalEndpoint.fa10Fa15,
-      BleOperation.read,
-    )) {
+          BleLogicalEndpoint.fa10Fa15,
+          BleOperation.write,
+        ) ||
+        !_state.supportsEndpoint(
+          BleLogicalEndpoint.fa10Fa15,
+          BleOperation.indicate,
+        )) {
       return;
     }
     try {
+      await _ensureResponseSubscription(
+        BleLogicalEndpoint.fa10Fa15,
+        critical: false,
+      );
       _requireDevicePermission(DevicePermission.status);
       final storage = await repository.readStorage();
       _updateDeviceDetails(deviceStorage: storage, repository: repository);
@@ -2054,8 +2370,8 @@ class SessionController extends ChangeNotifier
         fields: _sessionFields('【会话刷新】已读取设备存储容量并更新详情快照', {
           'endpoint': BleLogicalEndpoint.fa10Fa15.name,
           'command': '0x85',
-          'total_mb': storage.totalMegabytes,
           'free_mb': storage.freeMegabytes,
+          'total_mb': storage.totalMegabytes,
         }),
       );
     } catch (error) {
@@ -2065,12 +2381,20 @@ class SessionController extends ChangeNotifier
 
   Future<void> _loadFileCount(DeviceProtocolRepository repository) async {
     if (!_state.supportsEndpoint(
-      BleLogicalEndpoint.ff10Ff11,
-      BleOperation.read,
-    )) {
+          BleLogicalEndpoint.ff10Ff11,
+          BleOperation.write,
+        ) ||
+        !_state.supportsEndpoint(
+          BleLogicalEndpoint.ff10Ff11,
+          BleOperation.indicate,
+        )) {
       return;
     }
     try {
+      await _ensureResponseSubscription(
+        BleLogicalEndpoint.ff10Ff11,
+        critical: false,
+      );
       _requireDevicePermission(DevicePermission.files);
       final count = await repository.readFileCount();
       _updateDeviceDetails(fileCount: count, repository: repository);
@@ -2087,6 +2411,74 @@ class SessionController extends ChangeNotifier
       );
     } catch (error) {
       _logDeviceDetailFailure('device_file_count_load_failed', error);
+    }
+  }
+
+  /// Performs the V1.6 connection admission read. This is intentionally
+  /// separate from the public authenticated [readDeviceInfo] API: FA11/0x01
+  /// is the one protected-surface exception that exposes only the fixed
+  /// 90-byte identity/version layout before Action=00 authentication.
+  Future<void> _readPreAuthenticationDeviceInfo(int connectionAttempt) async {
+    _requireCurrentConnectionAttempt(connectionAttempt);
+    final repository = _requireProtocol();
+    if (!_state.supportsEndpoint(
+          BleLogicalEndpoint.fa10Fa11,
+          BleOperation.write,
+        ) ||
+        !_state.supportsEndpoint(
+          BleLogicalEndpoint.fa10Fa11,
+          BleOperation.indicate,
+        )) {
+      throw StateError('设备未提供预认证设备信息所需的 FA11 能力。');
+    }
+    final startedAt = DateTime.now();
+    _logger.info(
+      'pre_authentication_device_info_requested',
+      operation: 'device_connect',
+      stage: 'pre_authentication',
+      result: 'pending',
+      fields: _sessionFields('【预认证】开始读取未认证 0x01 身份与版本信息', {
+        'connection_attempt': connectionAttempt,
+        'endpoint': BleLogicalEndpoint.fa10Fa11.name,
+        'command': '0x01',
+        'expected_command': '0x81',
+        'redacted_content_bytes': 90,
+        'minimum_att_mtu': _v16PreAuthenticationMinimumAttMtu,
+      }),
+    );
+    final mtu = await _ensureAttMtu(_v16PreAuthenticationMinimumAttMtu);
+    _requireCurrentConnectionAttempt(connectionAttempt);
+    _preAuthenticationInfoReadInProgress = true;
+    try {
+      final info = await repository.readDeviceInfo(unauthenticated: true);
+      _requireCurrentConnectionAttempt(connectionAttempt);
+      if (!info.isRedacted) {
+        throw const FormatException('未认证设备信息未按 V1.6 脱敏布局返回。');
+      }
+      // Keep identity/version available to the UI and future HTTPS code
+      // lookup, but never copy redacted capacity, battery or record fields to
+      // the authoritative live snapshot.
+      _state = _state.copyWith(deviceInfo: info);
+      notifyListeners();
+      _logger.info(
+        'pre_authentication_device_info_received',
+        operation: 'device_connect',
+        stage: 'pre_authentication',
+        result: 'success',
+        elapsed: DateTime.now().difference(startedAt),
+        fields: _sessionFields('【预认证】已收到脱敏设备信息，可据 DeviceCode 取得安全码', {
+          'connection_attempt': connectionAttempt,
+          'endpoint': BleLogicalEndpoint.fa10Fa11.name,
+          'command': '0x81',
+          'content_bytes': 90,
+          'mtu': mtu,
+          'protocol_version': info.capabilities.protocolVersion,
+          'device_code_present': info.deviceCode.isNotEmpty,
+          'redacted': info.isRedacted,
+        }),
+      );
+    } finally {
+      _preAuthenticationInfoReadInProgress = false;
     }
   }
 
@@ -2337,7 +2729,7 @@ class SessionController extends ChangeNotifier
       logicalEndpoint,
       BleOperation.notify,
     );
-    // V1.5 assigns a fixed CCC mode to each response characteristic. FF13
+    // V1.6 assigns a fixed CCC mode to each response characteristic. FF13
     // streams file bytes through Notify; every other EVT response endpoint
     // uses Indicate. Do not infer the mode from a firmware that advertises
     // both properties, because the wrong CCC value suppresses its payload.
@@ -2421,6 +2813,10 @@ class SessionController extends ChangeNotifier
       }),
     );
     _subscribedEndpointKeys.add(key);
+    // Native BLE values may split or coalesce EVT business frames. Keep one
+    // assembler per characteristic so bytes from separate endpoints can
+    // never be joined into a false frame.
+    final frameAssembler = EvtFrameAssembler();
     late final StreamSubscription<Uint8List> subscription;
     subscription = _transport
         .subscribe(_characteristic(session.candidate.connectionId, endpoint))
@@ -2430,57 +2826,85 @@ class SessionController extends ChangeNotifier
                 responseController.isClosed) {
               return;
             }
-            final decoded = _codec.decode(bytes);
-            if (!decoded.isSuccess) {
+            final assembled = frameAssembler.add(bytes);
+            _logger.info(
+              'notification_value_received',
+              operation: 'device_connect',
+              stage: 'response',
+              result: 'pending',
+              fields: _sessionFields('【会话接收】原生 BLE value 已进入 EVT 组帧器', {
+                'endpoint': logicalEndpoint.name,
+                'bytes': bytes.length,
+                'count': assembled.frames.length,
+                'length': assembled.bufferedByteCount,
+                'discarded_bytes': assembled.discardedByteCount,
+              }),
+            );
+            for (final rejected in assembled.rejectedFrames) {
               _logger.warning(
-                'notification_frame_decode_failed',
+                'notification_frame_assembly_rejected',
                 operation: 'device_connect',
                 stage: 'response',
                 result: 'failed',
-                fields: _sessionFields('【会话订阅】特征通知帧无法解析，完整原始字节请查看前置 BLE 接收日志', {
+                fields: _sessionFields('【会话接收】EVT 帧组装后 CRC 或长度校验失败，继续寻找下一帧', {
                   'endpoint': logicalEndpoint.name,
-                  'bytes': bytes.length,
-                  'failure_kind': decoded.failure?.kind.name ?? 'protocol',
-                }),
-              );
-              _onNotification(bytes);
-              return;
-            }
-            final frame = decoded.value!;
-            if (!_isExpectedResponseForEndpoint(logicalEndpoint, frame)) {
-              _logger.info(
-                'notification_endpoint_mismatch',
-                fields: _sessionFields('【会话订阅】收到不属于当前特征的响应帧，已隔离不转发', {
-                  'endpoint': logicalEndpoint.name,
-                  'command': _hexCommand(frame.command),
-                  'expected_command': _hexCommand(expectedCommand),
-                  'content_length': frame.content.length,
-                }),
-              );
-              return;
-            }
-            if (logicalEndpoint != BleLogicalEndpoint.ff10Ff13) {
-              _logger.info(
-                'notification_frame_forwarded',
-                operation: 'device_connect',
-                stage: 'response',
-                fields: _sessionFields('【会话订阅】已转发匹配的 EVT 响应帧到命令队列', {
-                  'endpoint': logicalEndpoint.name,
-                  'command': _hexCommand(frame.command),
-                  'content_length': frame.content.length,
-                  'bytes': bytes.length,
+                  'bytes': rejected.length,
+                  'reason': 'frame_assembly_rejected',
                 }),
               );
             }
-            responseController.add(bytes);
-            if (logicalEndpoint == BleLogicalEndpoint.ff10Ff13) {
-              // File payloads are consumed by the active 0x23 transfer only.
-              // Retaining every chunk as a session event would duplicate audio
-              // bytes, rebuild listeners per packet, and grow memory with the
-              // full device file.
-              return;
+            for (final frameBytes in assembled.frames) {
+              final decoded = _codec.decode(frameBytes);
+              if (!decoded.isSuccess) {
+                _logger.warning(
+                  'notification_frame_decode_failed',
+                  operation: 'device_connect',
+                  stage: 'response',
+                  result: 'failed',
+                  fields: _sessionFields('【会话订阅】完整 EVT 通知帧无法解析，已丢弃并继续监听', {
+                    'endpoint': logicalEndpoint.name,
+                    'bytes': frameBytes.length,
+                    'failure_kind': decoded.failure?.kind.name ?? 'protocol',
+                  }),
+                );
+                continue;
+              }
+              final frame = decoded.value!;
+              if (!_isExpectedResponseForEndpoint(logicalEndpoint, frame)) {
+                _logger.info(
+                  'notification_endpoint_mismatch',
+                  fields: _sessionFields('【会话订阅】收到不属于当前特征的响应帧，已隔离不转发', {
+                    'endpoint': logicalEndpoint.name,
+                    'command': _hexCommand(frame.command),
+                    'expected_command': _hexCommand(expectedCommand),
+                    'content_length': frame.content.length,
+                  }),
+                );
+                continue;
+              }
+              if (logicalEndpoint != BleLogicalEndpoint.ff10Ff13) {
+                _logger.info(
+                  'notification_frame_forwarded',
+                  operation: 'device_connect',
+                  stage: 'response',
+                  fields: _sessionFields('【会话订阅】已转发匹配的 EVT 响应帧到命令队列', {
+                    'endpoint': logicalEndpoint.name,
+                    'command': _hexCommand(frame.command),
+                    'content_length': frame.content.length,
+                    'bytes': frameBytes.length,
+                  }),
+                );
+              }
+              responseController.add(frameBytes);
+              if (logicalEndpoint == BleLogicalEndpoint.ff10Ff13) {
+                // File payloads are consumed by the active 0x23 transfer only.
+                // Retaining every chunk as a session event would duplicate audio
+                // bytes, rebuild listeners per packet, and grow memory with the
+                // full device file.
+                continue;
+              }
+              _onNotification(frameBytes);
             }
-            _onNotification(bytes);
           },
           onError: (Object error, StackTrace stackTrace) {
             if (!_isCurrentConnectionAttempt(connectionAttempt)) {
@@ -2646,13 +3070,23 @@ class SessionController extends ChangeNotifier
       ? '-'
       : '0x${command.toRadixString(16).padLeft(2, '0').toUpperCase()}';
 
-  /// Establishes required EVT CCCs before V1 `0x09` is sent.
-  ///
-  /// `FF11 / 0x21` is a compatibility-only file-count summary. It is
-  /// subscribed when present, but cannot block authentication because `0x22`
-  /// supplies the required file-list synchronization path.
+  /// Establishes only the two V1.6 CCCs that are legal before authentication.
+  /// FA11 carries the redacted identity response and FA19 carries the 0x09
+  /// exchange. Opening any other business CCC here would expose a protected
+  /// stream before the current connection has completed Action=00.
   Future<void> _subscribeEvtEndpointsBeforeAuthentication() async {
-    for (final endpoint in EvtProtocolContract.requiredSubscriptionOrder) {
+    for (final endpoint
+        in EvtProtocolContract.preAuthenticationSubscriptionOrder) {
+      await _ensureResponseSubscription(endpoint, critical: true);
+    }
+  }
+
+  /// Enables the remaining protected EVT response channels after the current
+  /// connection has completed Action=00. FF11/0x21 is a compatibility-only
+  /// summary and is therefore best-effort; the required file path is FF12/13.
+  Future<void> _subscribeEvtEndpointsAfterAuthentication() async {
+    for (final endpoint
+        in EvtProtocolContract.postAuthenticationSubscriptionOrder) {
       await _ensureResponseSubscription(endpoint, critical: true);
     }
     for (final endpoint in EvtProtocolContract.optionalSubscriptionOrder) {
@@ -2677,7 +3111,7 @@ class SessionController extends ChangeNotifier
         }
         return DeviceSnapshot(
           state: switch (frame.content.first) {
-            1 || 3 => DeviceState.recording,
+            1 => DeviceState.recording,
             2 => DeviceState.paused,
             _ => DeviceState.standby,
           },
@@ -2691,7 +3125,7 @@ class SessionController extends ChangeNotifier
 
   DeviceSnapshot _snapshotFromDeviceInfo(DeviceInfo info) => DeviceSnapshot(
     state: switch (info.recordStatus) {
-      1 || 3 => DeviceState.recording,
+      1 => DeviceState.recording,
       2 => DeviceState.paused,
       _ => DeviceState.standby,
     },
@@ -2704,7 +3138,7 @@ class SessionController extends ChangeNotifier
   List<String> _missingRequiredEndpointOperations(List<BleService> services) {
     return [
       for (final entry
-          in DeviceProfile.evtV15RequiredEndpointOperations.entries)
+          in DeviceProfile.evtV16RequiredEndpointOperations.entries)
         for (final operation in entry.value)
           if (!_hasEndpoint(services, _profile.endpoint(entry.key), operation))
             '${entry.key.name}.${operation.name}',
@@ -2712,27 +3146,32 @@ class SessionController extends ChangeNotifier
   }
 
   /// CoreBluetooth exposes one `setNotifyValue` API for both CCC modes. When
-  /// a required EVT characteristic declares both flags, iOS cannot be told to
-  /// choose the V1.5-required mode. Reject that ambiguous peripheral before a
-  /// command can be sent; Android keeps its explicit native mode selection.
+  /// an EVT characteristic declares both flags, iOS cannot be told to choose
+  /// the V1.6-required mode. Reject that ambiguous peripheral before a command
+  /// can be sent; Android keeps its explicit native mode selection. FF11 is
+  /// optional, but it still needs the same guard when it is present.
   List<String> _iosCccModeConflicts(List<BleService> services) {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
       return const [];
     }
+    final endpointOperations = <BleLogicalEndpoint, Set<BleOperation>>{
+      ...DeviceProfile.evtV16RequiredEndpointOperations,
+      ...DeviceProfile.evtV16OptionalEndpointOperations,
+    };
     return [
-      for (final entry
-          in DeviceProfile.evtV15RequiredEndpointOperations.entries)
-        if (_discoveredCharacteristic(
-              services,
-              _profile.endpoint(entry.key),
-            )?.operations.contains(
-              entry.key == BleLogicalEndpoint.ff10Ff13
-                  ? BleOperation.indicate
-                  : BleOperation.notify,
-            ) ??
-            false)
-          '${entry.key.name}.${entry.key == BleLogicalEndpoint.ff10Ff13 ? BleOperation.indicate.name : BleOperation.notify.name}',
+      for (final entry in endpointOperations.entries)
+        if (_isIosCccAmbiguous(
+          _discoveredCharacteristic(services, _profile.endpoint(entry.key)),
+        ))
+          '${entry.key.name}.notify+indicate',
     ];
+  }
+
+  static bool _isIosCccAmbiguous(BleDiscoveredCharacteristic? characteristic) {
+    final operations = characteristic?.operations;
+    return operations != null &&
+        operations.contains(BleOperation.notify) &&
+        operations.contains(BleOperation.indicate);
   }
 
   String _gattContractFailureDetail({
@@ -2850,7 +3289,7 @@ class SessionController extends ChangeNotifier
     notifyListeners();
   }
 
-  /// Clears a GATT session when V1.5 cannot correlate a delayed response or
+  /// Clears a GATT session when V1.6 cannot correlate a delayed response or
   /// an old continuous file stream with a future request.
   Future<void> _invalidateSessionForAmbiguousProtocolResult({
     required int connectionAttempt,
@@ -2949,6 +3388,7 @@ class SessionController extends ChangeNotifier
     }
     _protocolRepository = null;
     _attMtu = null;
+    _preAuthenticationInfoReadInProgress = false;
     final connectionSubscription = _connectionSubscription;
     _connectionSubscription = null;
     await connectionSubscription?.cancel();
@@ -3034,18 +3474,44 @@ class SessionController extends ChangeNotifier
     }
   }
 
-  /// Rechecks the V1 authorization window when a queued EVT command reaches
-  /// the head of the BLE write queue. Initial UI checks alone are not enough:
-  /// a command can wait behind a long-running request until the 60-second
-  /// window has expired.
+  /// Rechecks connection-scoped V1.6 authorization when a queued EVT command
+  /// reaches the head of the BLE write queue. Initial UI checks alone are not
+  /// enough because a disconnect or explicit revoke can occur while a command
+  /// waits behind another request. The firmware's 60-second value is only the
+  /// deadline to complete AUTH after connection establishment, not a local
+  /// permission lease after AUTH succeeds.
   void _admitEvtCommandWrite(EvtCommandRequest request) {
+    final endpoint = EvtProtocolContract.writeEndpointForCommand(
+      request.command,
+    );
+    if (endpoint == null) {
+      // 0x11 is in the business allow-list, but V1.6 exposes it as a native
+      // GATT Read. It must never be sent through the framed write queue.
+      throw StateError('EVT 0x11 仅支持 GATT Read，不允许通过业务写入发送。');
+    }
+    _requireEvtCommandCharacteristic(request, endpoint);
+    EvtProtocolContract.validateWritePayload(request.command, request.content);
+    if (request.allowUnauthenticatedUnbindRecovery &&
+        (request.command != 0x09 ||
+            request.content.length != 7 ||
+            request.content.first !=
+                EvtLegacySecurityAction.unbind.wireValue)) {
+      throw StateError('EVT 未绑定恢复标记只能用于 0x09 Action=2。');
+    }
     switch (request.command) {
       case 0x01:
-        _requireDevicePermission(DevicePermission.status);
+        // V1.6 permits exactly one unauthenticated command: the connection
+        // admission identity read. All later 0x01 reads require Action=00.
+        if (!_preAuthenticationInfoReadInProgress) {
+          _requireDevicePermission(DevicePermission.status);
+        }
         return;
       case 0x02:
       case 0x07:
         _requireDevicePermission(DevicePermission.configuration);
+        return;
+      case 0x05:
+        _requireDevicePermission(DevicePermission.status);
         return;
       case 0x06:
         if (request.content.isEmpty) {
@@ -3063,17 +3529,30 @@ class SessionController extends ChangeNotifier
           default:
             throw StateError('EVT 阶段不允许发送未声明的 0x06 SubCmd。');
         }
+      case 0x21:
+        _requireDevicePermission(DevicePermission.files);
+        return;
       case 0x22:
       case 0x23:
         _requireDevicePermission(DevicePermission.files);
         return;
       case 0x09:
-        // V1 code authentication must remain callable before authentication
+        // V1.6 code authentication must remain callable before authentication
         // has granted any scoped permissions. The V2 envelope is DVT-only,
         // so keep its marker and variable-length payload out of EVT even if
         // a future caller bypasses the repository boundary.
         if (request.content.length != 7 || request.content.first > 2) {
-          throw StateError('EVT 阶段只允许 V1 认证码格式的 0x09 命令。');
+          throw StateError('EVT 阶段只允许 V1.6 认证码格式的 0x09 命令。');
+        }
+        // Action=02 is destructive UNBIND. A normal unbind request is only
+        // valid on a connection that has already completed Action=00. V1.6
+        // explicitly allows a previously submitted UNBIND to be resumed on a
+        // fresh connection; the explicit request marker is the sole bypass
+        // and it grants no DevicePermission.
+        if (request.content.first == EvtLegacySecurityAction.unbind.wireValue) {
+          if (!request.allowUnauthenticatedUnbindRecovery) {
+            _requireDevicePermission(DevicePermission.status);
+          }
         }
         return;
       default:
@@ -3081,6 +3560,52 @@ class SessionController extends ChangeNotifier
           'EVT 阶段不允许发送未声明授权范围的设备命令 '
           '0x${request.command.toRadixString(16).padLeft(2, '0').toUpperCase()}。',
         );
+    }
+  }
+
+  /// Verifies the final write target against the V1.6 command-to-characteristic
+  /// map immediately before native BLE I/O. Public operation methods already
+  /// check discovery capabilities, but this second check closes queued-command
+  /// races and prevents a malformed caller from writing a valid frame to a
+  /// different characteristic.
+  void _requireEvtCommandCharacteristic(
+    EvtCommandRequest request,
+    BleLogicalEndpoint endpoint,
+  ) {
+    final configured = _profile.endpoints[endpoint];
+    if (configured == null || configured.characteristicUuid.isEmpty) {
+      throw StateError(
+        'EVT 命令 0x${request.command.toRadixString(16).padLeft(2, '0').toUpperCase()} '
+        '对应的 GATT 特征未配置：${endpoint.name}。',
+      );
+    }
+    final actualService = normalizeBleUuid(
+      request.writeCharacteristic.serviceUuid,
+    );
+    final actualCharacteristic = normalizeBleUuid(
+      request.writeCharacteristic.characteristicUuid,
+    );
+    final expectedService = normalizeBleUuid(configured.serviceUuid);
+    final expectedCharacteristic = normalizeBleUuid(
+      configured.characteristicUuid,
+    );
+    final activeDeviceId = _state.session?.candidate.connectionId;
+    if (activeDeviceId != null &&
+        request.writeCharacteristic.deviceId != activeDeviceId) {
+      throw StateError('EVT 命令写入目标设备与当前连接不一致。');
+    }
+    if (actualService.toUpperCase() != expectedService.toUpperCase() ||
+        actualCharacteristic.toUpperCase() !=
+            expectedCharacteristic.toUpperCase()) {
+      throw StateError(
+        'EVT 命令 0x${request.command.toRadixString(16).padLeft(2, '0').toUpperCase()} '
+        '必须写入 ${endpoint.name}（${expectedCharacteristic.toUpperCase()}），'
+        '实际为 ${actualCharacteristic.toUpperCase()}。',
+      );
+    }
+    if (!_profile.canOperate(endpoint, BleOperation.write) ||
+        !_state.supportsEndpoint(endpoint, BleOperation.write)) {
+      throw StateError('当前连接未提供 ${endpoint.name} 的 GATT Write 能力。');
     }
   }
 
@@ -3122,9 +3647,9 @@ class SessionController extends ChangeNotifier
     _requireObservableEndpoint(endpoint, responseOperation);
   }
 
-  Future<int> _ensureV3AdmissionAttMtu() async {
+  Future<int> _ensureAuthenticatedDeviceInfoAttMtu() async {
     try {
-      return await _ensureAttMtu(_v3AdmissionMinimumAttMtu);
+      return await _ensureAttMtu(_v16AuthenticatedInfoMinimumAttMtu);
     } on BleTransportException {
       rethrow;
     } on StateError catch (error) {
@@ -3133,7 +3658,7 @@ class SessionController extends ChangeNotifier
           message: '设备蓝牙 MTU 不足，无法读取设备信息。',
           detail:
               'V3 设备信息最大 Indicate 需要 ATT MTU >= '
-              '$_v3AdmissionMinimumAttMtu。$error',
+              '$_v16AuthenticatedInfoMinimumAttMtu。$error',
         ),
       );
     }
@@ -3198,7 +3723,29 @@ class SessionController extends ChangeNotifier
   static int _requiredFileTransferMtu({
     required int startOffset,
     required int chunkSize,
-  }) => startOffset == 0 && chunkSize == 0 ? 26 : 32;
+  }) {
+    if (startOffset < 0 || startOffset > 0xFFFFFFFF) {
+      throw RangeError.range(startOffset, 0, 0xFFFFFFFF);
+    }
+    if (chunkSize < 0 || chunkSize > 480) {
+      throw RangeError.range(chunkSize, 0, 480);
+    }
+    // FF13 responses reserve 32 bytes for the outer frame and protocol
+    // fields. MTU 32 cannot carry even the smallest data response; explicit
+    // chunks additionally require MTU >= ChunkSize + 32.
+    return max(33, chunkSize + 32);
+  }
+
+  /// Returns the maximum number of pure FileData bytes that can fit in one
+  /// V1.6 0xA3 Notify frame for [attMtu]. The protocol reserves 32 bytes for
+  /// the outer frame and file-offset/length fields, and caps the payload at
+  /// 480 bytes even when the negotiated MTU is larger.
+  static int _effectiveFileChunkLimit(int attMtu) =>
+      min(480, max(0, attMtu - 32));
+
+  @visibleForTesting
+  static int effectiveFileChunkLimitForTesting(int attMtu) =>
+      _effectiveFileChunkLimit(attMtu);
 
   DeviceProtocolRepository _requireProtocol() {
     final repository = _protocolRepository;
@@ -3271,6 +3818,7 @@ class SessionController extends ChangeNotifier
     _responseController = null;
     _protocolRepository = null;
     _attMtu = null;
+    _preAuthenticationInfoReadInProgress = false;
   }
 
   @override

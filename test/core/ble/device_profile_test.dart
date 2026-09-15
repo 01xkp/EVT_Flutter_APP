@@ -14,14 +14,14 @@ void main() {
     expect(profile.validationFailure!.kind, EvtFailureKind.access);
   });
 
-  test('profile is ready when all EVT V1.5 endpoints are declared', () {
+  test('profile is ready when all EVT V1.6 endpoints are declared', () {
     final profile = _evtProfile();
 
     expect(profile.isGattReady, isTrue);
     expect(profile.validationFailure, isNull);
   });
 
-  test('compiled EVT V1.5 profile is ready and immutable for connections', () {
+  test('compiled EVT V1.6 profile is ready and immutable for connections', () {
     final first = DeviceProfile.evtV15();
     final second = DeviceProfile.evtV15();
 
@@ -120,16 +120,13 @@ void main() {
     expect(_evtProfile(endpoints: endpoints).isGattReady, isFalse);
   });
 
-  test(
-    'profile blocks startup when the V1.5 advertisement contract drifts',
-    () {
-      final profile = _evtProfile(
-        serviceUuid: '0000AF31-0000-1000-8000-00805F9B34FB',
-      );
+  test('profile blocks startup when the EVT advertisement contract drifts', () {
+    final profile = _evtProfile(
+      serviceUuid: '0000AF31-0000-1000-8000-00805F9B34FB',
+    );
 
-      expect(profile.isGattReady, isFalse);
-    },
-  );
+    expect(profile.isGattReady, isFalse);
+  });
 
   test('profile blocks startup when JSON declares a non-EVT endpoint', () {
     final raw =
@@ -149,7 +146,7 @@ void main() {
     expect(profile.isGattReady, isFalse);
   });
 
-  test('bundled profile declares only the EVT V1.5 endpoint set', () {
+  test('bundled profile declares only the EVT V1.6 endpoint set', () {
     final decoded = jsonDecode(
       File('assets/config/device_profile.json').readAsStringSync(),
     );
@@ -222,7 +219,7 @@ final _evtEndpoints = <BleLogicalEndpoint, BleEndpoint>{
   BleLogicalEndpoint.fa10Fa15: const BleEndpoint(
     serviceUuid: _fa10,
     characteristicUuid: _fa15,
-    operations: {BleOperation.read, BleOperation.indicate},
+    operations: {BleOperation.write, BleOperation.indicate},
   ),
   BleLogicalEndpoint.fa10Fa16: const BleEndpoint(
     serviceUuid: _fa10,
@@ -247,7 +244,7 @@ final _evtEndpoints = <BleLogicalEndpoint, BleEndpoint>{
   BleLogicalEndpoint.ff10Ff11: const BleEndpoint(
     serviceUuid: _ff10,
     characteristicUuid: _ff11,
-    operations: {BleOperation.read, BleOperation.indicate},
+    operations: {BleOperation.write, BleOperation.indicate},
   ),
   BleLogicalEndpoint.ff10Ff12: const BleEndpoint(
     serviceUuid: _ff10,

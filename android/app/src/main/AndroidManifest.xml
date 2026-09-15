@@ -11,9 +11,14 @@
     <uses-permission
         android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
+    <!--
+         RxAndroidBle contributes `neverForLocation` on this permission. EVT
+         discovery must receive the complete system scan result set, so remove
+         the dependency attribute during manifest merge.
+    -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation" />
+        tools:remove="android:usesPermissionFlags" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission
         android:name="android.permission.ACCESS_FINE_LOCATION"

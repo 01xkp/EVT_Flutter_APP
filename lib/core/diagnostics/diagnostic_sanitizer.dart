@@ -35,6 +35,7 @@ class DiagnosticSanitizer {
     'ai_transcription',
     'device_authenticate',
     'device_bind',
+    'device_unbind',
     'device_connect',
     'device_file_import',
     'device_reconnect',
@@ -44,6 +45,7 @@ class DiagnosticSanitizer {
 
   static const _safeStages = <String>{
     'archive',
+    'preflight',
     'challenge',
     'connect',
     'download',
@@ -135,6 +137,8 @@ class DiagnosticSanitizer {
     'bytes',
     'characteristic',
     'characteristic_count',
+    'check',
+    'checks',
     'critical',
     'command',
     'configured',
@@ -158,6 +162,7 @@ class DiagnosticSanitizer {
     'error_type',
     'failure_kind',
     'file_count',
+    'file_count_on_first_page',
     'foreground_before',
     'free_mb',
     'gatt_cache_refresh_attempted',
@@ -196,6 +201,7 @@ class DiagnosticSanitizer {
     'reason',
     'reconnect_paused_for_background',
     'record_mode',
+    'record_status',
     'record_type',
     'reported_write_payload',
     'required_mtu',
@@ -207,6 +213,7 @@ class DiagnosticSanitizer {
     'stage',
     'state',
     'status',
+    'sync_state',
     'subscription_count',
     'supports_indicate',
     'supports_notify',
@@ -427,7 +434,7 @@ class DiagnosticSanitizer {
       'http_status',
       // This is an integer reported by CoreBluetooth, not a wire payload.
       // It is needed to diagnose whether the negotiated ATT MTU can carry
-      // EVT V1.5's largest indication frame.
+      // EVT V1.6's largest indication frame.
       'reported_write_payload',
       'stage',
     }.contains(normalized)) {

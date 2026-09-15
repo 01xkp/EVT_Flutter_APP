@@ -142,6 +142,7 @@ class DeviceConnectorTest {
             sut.connection.test()
 
             verify(exactly = 1) { updateListener.invoke(ConnectionUpdateError(deviceId, errorMessage)) }
+            assertThat(sut.isTerminal).isTrue()
         }
 
         @Test
@@ -166,6 +167,23 @@ class DeviceConnectorTest {
         connectionObserver.assertComplete()
 
         verify(exactly = 1) { updateListener.invoke(ConnectionUpdateSuccess(deviceId, ConnectionState.DISCONNECTED.code)) }
+    }
+
+    @Test
+    @DisplayName("Dispose terminal connector without publishing a stale disconnect")
+    fun disposeSilentlyOnTerminalReplacement() {
+        prepareActiveConnection()
+
+        val connectionObserver = sut.connection.test()
+        assertThat(sut.connectionDisposable?.isDisposed).isFalse()
+
+        sut.disposeSilently()
+
+        assertThat(sut.connectionDisposable?.isDisposed).isTrue()
+        connectionObserver.assertComplete()
+        verify(exactly = 0) {
+            updateListener.invoke(ConnectionUpdateSuccess(deviceId, ConnectionState.DISCONNECTED.code))
+        }
     }
 
     @Test

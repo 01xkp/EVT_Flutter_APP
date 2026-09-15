@@ -6,6 +6,40 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('retains safe EVT unbind preflight diagnostics', () {
+    const sanitizer = DiagnosticSanitizer();
+
+    final fields = sanitizer.sanitize(
+      scope: 'SESSION',
+      fields: const <String, Object?>{
+        'check': 'sync_state',
+        'checks': <String>[
+          'observable_session',
+          'record_state',
+          'sync_state',
+          'first_file_page',
+        ],
+        'record_status': 0,
+        'sync_state': 0,
+        'file_count_on_first_page': 0,
+      },
+    );
+
+    expect(fields, <String, Object?>{
+      'check': 'sync_state',
+      'checks': <Object?>[
+        'observable_session',
+        'record_state',
+        'sync_state',
+        'first_file_page',
+      ],
+      'file_count_on_first_page': 0,
+      'record_status': 0,
+      'sync_state': 0,
+    });
+    expect(sanitizer.normalizeStage('preflight'), 'preflight');
+  });
+
   test('retains safe reconnect and BLE discovery diagnostics', () {
     const sanitizer = DiagnosticSanitizer();
 

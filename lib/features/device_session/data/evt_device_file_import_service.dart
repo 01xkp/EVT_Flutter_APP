@@ -169,6 +169,7 @@ class EvtDeviceFileImportService {
         nameSlot: file.nameSlot,
         startOffset: received,
         chunkSize: 0,
+        expectedFileLength: file.length,
       )) {
         if (event.isTerminal) {
           if (receivedTerminal) {

@@ -6,6 +6,7 @@
 
 import Foundation
 import class CoreBluetooth.CBUUID
+import struct CoreBluetooth.CBCharacteristicProperties
 import class CoreBluetooth.CBService
 import enum CoreBluetooth.CBManagerState
 import var CoreBluetooth.CBAdvertisementDataServiceDataKey
@@ -14,7 +15,23 @@ import var CoreBluetooth.CBAdvertisementDataManufacturerDataKey
 import var CoreBluetooth.CBAdvertisementDataIsConnectable
 import var CoreBluetooth.CBAdvertisementDataLocalNameKey
 
+private func evtSupportsNotify(_ properties: CBCharacteristicProperties) -> Bool {
+    properties.contains(.notify) || properties.contains(.notifyEncryptionRequired)
+}
+
+private func evtSupportsIndicate(_ properties: CBCharacteristicProperties) -> Bool {
+    properties.contains(.indicate) || properties.contains(.indicateEncryptionRequired)
+}
+
 final class PluginController {
+
+    private static let evtFileTransferCharacteristicUUID = CBUUID(
+        string: "0000FF13-1212-EFDE-1523-785FEABCD123"
+    )
+    // A control/read indication can arrive during the method-channel handoff
+    // that follows CCC setup. Keep a bounded queue for that short window;
+    // never retain the unbounded FF13 audio/file stream without a Dart sink.
+    private static let pendingCharacteristicMessageLimit = 64
 
     struct Scan {
         let services: [CBUUID]
@@ -45,13 +62,87 @@ final class PluginController {
             }
         }
     }
-    var messageQueue: [CharacteristicValueInfo] = []
+    private var messageQueue: [CharacteristicValueInfo] = []
     var connectedDeviceSink: EventSink?
-    var characteristicValueUpdateSink: EventSink?
+    private var characteristicValueUpdateSink: EventSink?
+    private let characteristicMessageLock = NSLock()
     private var notificationSetupStates: [NotificationSetupKey: NotificationSetupState] = [:]
+
+    /// Installs the Dart characteristic stream sink and atomically takes the
+    /// bounded handoff queue. The queued control frames are delivered while
+    /// the lock is held so a newly arriving frame cannot overtake an older
+    /// response during the flush.
+    func installCharacteristicValueSink(_ sink: EventSink) {
+        characteristicMessageLock.lock()
+        defer { characteristicMessageLock.unlock() }
+
+        characteristicValueUpdateSink = sink
+        let queued = messageQueue
+        messageQueue.removeAll(keepingCapacity: true)
+        print(
+            "【AIPIN原生BLE】【通知通道】Flutter监听已建立，补发暂存回包：\(queued.count)条"
+        )
+        queued.forEach { message in
+            sink.add(.success(message))
+        }
+    }
+
+    /// Clears only the handoff queue. It is used when a peripheral disconnects
+    /// or the native client is reinitialized, because buffered frames belong
+    /// to the previous GATT connection.
+    func clearCharacteristicMessageQueue() {
+        characteristicMessageLock.lock()
+        messageQueue.removeAll(keepingCapacity: true)
+        characteristicMessageLock.unlock()
+    }
+
+    /// Removes the Dart sink and drops buffered frames as one operation. This
+    /// closes the cancellation race with CoreBluetooth value callbacks.
+    func removeCharacteristicValueSink() {
+        characteristicMessageLock.lock()
+        characteristicValueUpdateSink = nil
+        messageQueue.removeAll(keepingCapacity: true)
+        characteristicMessageLock.unlock()
+    }
+
+    /// Delivers a characteristic value or stores it for the short method
+    /// channel handoff window. FF13 is a streaming file/audio channel and is
+    /// intentionally never buffered without an active Dart consumer.
+    func emitCharacteristicValue(
+        _ message: CharacteristicValueInfo,
+        isFileTransfer: Bool
+    ) {
+        characteristicMessageLock.lock()
+        defer { characteristicMessageLock.unlock() }
+
+        if let sink = characteristicValueUpdateSink {
+            sink.add(.success(message))
+            return
+        }
+
+        if isFileTransfer {
+            print(
+                "【AIPIN原生BLE】【回包丢弃】Flutter监听未建立，丢弃FF13文件/音频流分包：\(message.value.count)字节"
+            )
+            return
+        }
+
+        if messageQueue.count >= Self.pendingCharacteristicMessageLimit {
+            messageQueue.removeFirst()
+            print("【AIPIN原生BLE】【回包暂存】控制回包缓存已满，丢弃最旧一条")
+        }
+        messageQueue.append(message)
+        print(
+            "【AIPIN原生BLE】【回包暂存】Flutter监听未建立，暂存控制回包：当前\(messageQueue.count)条"
+        )
+    }
 
     func initialize(name: String, completion: @escaping PlatformMethodCompletionHandler) {
         invalidateAllNotificationSetups()
+        // A value can be queued while Flutter is between stream listeners.
+        // Never carry that packet across a new native BLE client: it belongs
+        // to the previous GATT session and could satisfy a new command.
+        clearCharacteristicMessageQueue()
         if let central = central {
             central.stopScan()
             central.disconnectAll()
@@ -103,6 +194,10 @@ final class PluginController {
                     return
                 case .failedToConnect(let underlyingError), .disconnected(let underlyingError):
                     context.invalidateNotificationSetups(for: peripheral.identifier.uuidString)
+                    // Drop packets buffered before the disconnect callback.
+                    // The queue is only valid for the current peripheral
+                    // connection and must not be replayed after reconnect.
+                    context.clearCharacteristicMessageQueue()
                     failure = underlyingError.map { (.failedToConnect, "\($0)") }
                 }
 
@@ -155,13 +250,15 @@ final class PluginController {
                         }
                     }
                 }
-                let sink = context.characteristicValueUpdateSink
-                if sink != nil {
-                    sink!.add(.success(message))
-                } else {
-                    // In case message arrives before sink is created
-                    context.messageQueue.append(message)
-                }
+                // CoreBluetooth can deliver an indication in the small
+                // window between CCC acknowledgement and the Dart stream
+                // listener being attached. Route it through the atomic sink /
+                // queue handoff so that response cannot be lost or reordered.
+                context.emitCharacteristicValue(
+                    message,
+                    isFileTransfer: characteristic.id ==
+                        PluginController.evtFileTransferCharacteristicUUID
+                )
             }
         )
 
@@ -178,6 +275,7 @@ final class PluginController {
         central.stopScan()
         central.disconnectAll()
         invalidateAllNotificationSetups()
+        clearCharacteristicMessageQueue()
 
         self.central = nil
 
@@ -336,8 +434,8 @@ final class PluginController {
                         $0.isReadable = characteristic.properties.contains(.read)
                         $0.isWritableWithResponse = characteristic.properties.contains(.write)
                         $0.isWritableWithoutResponse = characteristic.properties.contains(.writeWithoutResponse)
-                        $0.isNotifiable = characteristic.properties.contains(.notify)
-                        $0.isIndicatable = characteristic.properties.contains(.indicate)
+                        $0.isNotifiable = evtSupportsNotify(characteristic.properties)
+                        $0.isIndicatable = evtSupportsIndicate(characteristic.properties)
                     }
                 }
 
@@ -350,6 +448,30 @@ final class PluginController {
                 for: deviceID,
                 discover: .all,
                 completion: { central, peripheral, errors in
+                    // Keep the method-channel contract consistent with
+                    // Android: a partial CoreBluetooth discovery must not be
+                    // reported as a successful, complete GATT snapshot. The
+                    // connected-device event stream also reports this error,
+                    // but callers awaiting discoverServices need the failure
+                    // on the method result to stop before subscribing or
+                    // sending EVT commands against an incomplete profile.
+                    if !errors.isEmpty {
+                        completion(.failure(
+                            PluginError.unknown(
+                                NSError(
+                                    domain: "reactive_ble_mobile.service_discovery",
+                                    code: ConnectionFailure.unknown.rawValue,
+                                    userInfo: [
+                                        NSLocalizedDescriptionKey: errors
+                                            .map(String.init(describing:))
+                                            .joined(separator: "\n")
+                                    ]
+                                )
+                            ).asFlutterError
+                        ))
+                        return
+                    }
+
                     completion(.success(DiscoverServicesInfo.with {
                         $0.deviceID = deviceID.uuidString
                         $0.services = (peripheral.services ?? []).map(makeDiscoveredService)
@@ -391,8 +513,8 @@ final class PluginController {
                         $0.isReadable = characteristic.properties.contains(.read)
                         $0.isWritableWithResponse = characteristic.properties.contains(.write)
                         $0.isWritableWithoutResponse = characteristic.properties.contains(.writeWithoutResponse)
-                        $0.isNotifiable = characteristic.properties.contains(.notify)
-                        $0.isIndicatable = characteristic.properties.contains(.indicate)
+                        $0.isNotifiable = evtSupportsNotify(characteristic.properties)
+                        $0.isIndicatable = evtSupportsIndicate(characteristic.properties)
                     }
                 }
 
@@ -689,12 +811,6 @@ final class PluginController {
         do {
             try central.read(characteristic: characteristic)
         } catch {
-            guard let sink = characteristicValueUpdateSink
-            else {
-                print("Warning! No subscription to report a characteristic read failure: \(error)")
-                return
-            }
-
             let message = CharacteristicValueInfo.with {
                 $0.characteristic = args.characteristic
                 $0.failure = GenericFailure.with {
@@ -702,7 +818,10 @@ final class PluginController {
                     $0.message = "\(error)"
                 }
             }
-            sink.add(.success(message))
+            // Read failures use the same handoff queue as successful values;
+            // otherwise a failure arriving before the Dart listener would be
+            // silently lost and the command layer would wait until timeout.
+            emitCharacteristicValue(message, isFileTransfer: false)
         }
     }
 

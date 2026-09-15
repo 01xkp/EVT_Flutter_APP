@@ -5,6 +5,7 @@ import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/ble/device_profile.dart';
 import 'package:aipin/features/device_discovery/domain/device_candidate.dart';
+import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 
 class FakeBleTransport implements BleTransport {
   FakeBleTransport({
@@ -19,10 +20,16 @@ class FakeBleTransport implements BleTransport {
     this.gattCacheClearError,
     this.closeSubscriptionImmediatelyForCharacteristic,
     this.deferNotificationSetup = false,
+    this.autoRespondToPreAuthenticationDeviceInfo = true,
+    List<int>? preAuthenticationDeviceInfoResponse,
     Map<String, Object> notificationSetupFailureByCharacteristicUuid = const {},
     Map<String, List<int>> readValuesByCharacteristicUuid = const {},
   }) : profile = profile ?? DeviceProfile.empty(),
        services = services ?? const [],
+       _preAuthenticationDeviceInfoResponse = Uint8List.fromList(
+         preAuthenticationDeviceInfoResponse ??
+             _defaultPreAuthenticationDeviceInfoResponse,
+       ),
        _readValuesByCharacteristicUuid = Map.unmodifiable(
          readValuesByCharacteristicUuid.map(
            (uuid, value) => MapEntry(uuid, Uint8List.fromList(value)),
@@ -65,7 +72,7 @@ class FakeBleTransport implements BleTransport {
         BleLogicalEndpoint.fa10Fa15: BleEndpoint(
           serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
           characteristicUuid: '0000FA15-1212-EFDE-1523-785FEABCD123',
-          operations: {BleOperation.read, BleOperation.indicate},
+          operations: {BleOperation.write, BleOperation.indicate},
         ),
         BleLogicalEndpoint.fa10Fa16: BleEndpoint(
           serviceUuid: '0000FA10-1212-EFDE-1523-785FEABCD123',
@@ -85,7 +92,7 @@ class FakeBleTransport implements BleTransport {
         BleLogicalEndpoint.ff10Ff11: BleEndpoint(
           serviceUuid: '0000FF10-1212-EFDE-1523-785FEABCD123',
           characteristicUuid: '0000FF11-1212-EFDE-1523-785FEABCD123',
-          operations: {BleOperation.read, BleOperation.indicate},
+          operations: {BleOperation.write, BleOperation.indicate},
         ),
         BleLogicalEndpoint.ff10Ff12: BleEndpoint(
           serviceUuid: '0000FF10-1212-EFDE-1523-785FEABCD123',
@@ -129,7 +136,7 @@ class FakeBleTransport implements BleTransport {
             ),
             BleDiscoveredCharacteristic(
               uuid: '0000FA15-1212-EFDE-1523-785FEABCD123',
-              operations: {BleOperation.read, BleOperation.indicate},
+              operations: {BleOperation.write, BleOperation.indicate},
             ),
             BleDiscoveredCharacteristic(
               uuid: '0000FA17-1212-EFDE-1523-785FEABCD123',
@@ -151,7 +158,7 @@ class FakeBleTransport implements BleTransport {
           characteristics: [
             BleDiscoveredCharacteristic(
               uuid: '0000FF11-1212-EFDE-1523-785FEABCD123',
-              operations: {BleOperation.read, BleOperation.indicate},
+              operations: {BleOperation.write, BleOperation.indicate},
             ),
             BleDiscoveredCharacteristic(
               uuid: '0000FF12-1212-EFDE-1523-785FEABCD123',
@@ -213,6 +220,12 @@ class FakeBleTransport implements BleTransport {
   final Object? gattCacheClearError;
   final String? closeSubscriptionImmediatelyForCharacteristic;
   final bool deferNotificationSetup;
+
+  /// Simulates the V1.6 admission exchange (FA11 0x01 -> 0x81) for a complete
+  /// GATT-ready fake. Tests that exercise a missing/late pre-auth response can
+  /// disable this without changing the transport's regular write behavior.
+  final bool autoRespondToPreAuthenticationDeviceInfo;
+  final Uint8List _preAuthenticationDeviceInfoResponse;
   final Map<String, Object> _notificationSetupFailureByCharacteristicUuid;
   final Map<String, Uint8List> _readValuesByCharacteristicUuid;
   final Completer<Uint8List> _deferredRead = Completer<Uint8List>();
@@ -221,6 +234,7 @@ class FakeBleTransport implements BleTransport {
   final Completer<void> _deferredNotificationSetup = Completer<void>();
   final Completer<void> _deferredDisconnect = Completer<void>();
   final List<BleService> services;
+  var _preAuthenticationDeviceInfoResponseSent = false;
   Uint8List readValue = Uint8List(0);
   final List<int> requestedMtus = [];
 
@@ -269,6 +283,7 @@ class FakeBleTransport implements BleTransport {
 
   @override
   Stream<BleConnectionState> connect(String deviceId) async* {
+    _preAuthenticationDeviceInfoResponseSent = false;
     yield BleConnectionState.connected;
     yield* _connectionController.stream;
   }
@@ -361,7 +376,57 @@ class FakeBleTransport implements BleTransport {
   Future<void> write(BleCharacteristic characteristic, Uint8List bytes) async {
     writtenCharacteristics.add(characteristic);
     writes.add(Uint8List.fromList(bytes));
+    _schedulePreAuthenticationDeviceInfoResponse(characteristic, bytes);
   }
+
+  void _schedulePreAuthenticationDeviceInfoResponse(
+    BleCharacteristic characteristic,
+    Uint8List bytes,
+  ) {
+    if (!autoRespondToPreAuthenticationDeviceInfo ||
+        _preAuthenticationDeviceInfoResponseSent ||
+        !profile.isGattReady ||
+        services.isEmpty ||
+        characteristic.characteristicUuid.toUpperCase() !=
+            profile
+                .endpoint(BleLogicalEndpoint.fa10Fa11)
+                .characteristicUuid
+                .toUpperCase()) {
+      return;
+    }
+    final frame = EvtProtocolCodec().decode(bytes).value;
+    if (frame == null || frame.command != 0x01 || frame.content.isNotEmpty) {
+      return;
+    }
+    _preAuthenticationDeviceInfoResponseSent = true;
+    // Deliver after the native write future completes. This mirrors a
+    // peripheral indication and guarantees the command client's pending slot
+    // is installed before the response reaches the session controller.
+    Future<void>.microtask(() {
+      emitSubscriptionBytesForCharacteristic(
+        characteristic.characteristicUuid,
+        _preAuthenticationDeviceInfoResponse,
+      );
+    });
+  }
+
+  static final List<int> _defaultPreAuthenticationDeviceInfoResponse = () {
+    final content = List<int>.filled(90, 0);
+    content[0] = 3;
+    content.setRange(1, 14, 'SN202608130001'.codeUnits);
+    content.setRange(21, 26, '1.0.0'.codeUnits);
+    content.setRange(29, 31, 'A1'.codeUnits);
+    content.setRange(45, 55, 'AIPIN_8423'.codeUnits);
+    // V1.6 pre-authentication responses must redact all state/capacity data.
+    content.setRange(74, 78, [0, 0, 0, 0]);
+    content.setRange(78, 82, [0, 0, 0, 0]);
+    content[83] = 0;
+    content[84] = 0;
+    content[85] = 0;
+    content[87] = 0;
+    content[88] = 0;
+    return EvtProtocolCodec().encodeRequest(0x81, content);
+  }();
 
   @override
   Future<void> writeWithoutResponse(

@@ -43,6 +43,8 @@ private class BleClientForTesting(
 ) : ReactiveBleClient(
         appContext,
     ) {
+    var createdConnectorCount = 0
+
     override fun initializeClient() {
         rxBleClient = bleClient
         activeConnections = mutableMapOf()
@@ -51,7 +53,10 @@ private class BleClientForTesting(
     override fun createDeviceConnector(
         device: RxBleDevice,
         timeout: Duration,
-    ): DeviceConnector = deviceConnector
+    ): DeviceConnector {
+        createdConnectorCount += 1
+        return deviceConnector
+    }
 }
 
 @DisplayName("BleClient unit tests")
@@ -150,6 +155,31 @@ class ReactiveBleClientTest {
     }
 
     @Test
+    fun `keeps EVT mode when Android reports an additional encryption flag`() {
+        // Android exposes encryption as a characteristic permission rather
+        // than a separate standard property bit. Keep the mode check tolerant
+        // of vendor/framework flags while requiring the base INDICATE/NOTIFY
+        // capability that the CCC setup actually uses.
+        val indicateWithExtraFlag =
+            BluetoothGattCharacteristic.PROPERTY_INDICATE or 0x100
+        val notifyWithExtraFlag =
+            BluetoothGattCharacteristic.PROPERTY_NOTIFY or 0x100
+
+        assertThat(
+            requireEvtNotificationMode(
+                UUID.fromString("0000fa19-1212-efde-1523-785feabcd123"),
+                indicateWithExtraFlag,
+            ),
+        ).isEqualTo(EvtNotificationMode.INDICATE)
+        assertThat(
+            requireEvtNotificationMode(
+                UUID.fromString("0000ff13-1212-efde-1523-785feabcd123"),
+                notifyWithExtraFlag,
+            ),
+        ).isEqualTo(EvtNotificationMode.NOTIFY)
+    }
+
+    @Test
     fun `rejects FA19 notify-only characteristic instead of downgrading to notify`() {
         val error = assertThrows(IllegalStateException::class.java) {
             requireEvtNotificationMode(
@@ -214,6 +244,18 @@ class ReactiveBleClientTest {
             sut.connectToDevice("test", testTimeout)
 
             verify(exactly = 1) { deviceConnector.connection }
+        }
+
+        @Test
+        fun `replaces a terminal connector before reconnecting`() {
+            ReactiveBleClient.activeConnections["test"] = deviceConnector
+            every { deviceConnector.isTerminal }.returns(true)
+            every { deviceConnector.disposeSilently() } returns Unit
+
+            sut.connectToDevice("test", testTimeout)
+
+            assertThat(sut.createdConnectorCount).isEqualTo(1)
+            verify(exactly = 1) { deviceConnector.disposeSilently() }
         }
     }
 

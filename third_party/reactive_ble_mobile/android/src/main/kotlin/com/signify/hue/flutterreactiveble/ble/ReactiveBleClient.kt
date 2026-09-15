@@ -58,14 +58,19 @@ private val EVT_INDICATE_CHARACTERISTIC_UUIDS =
         UUID.fromString("0000ff12-1212-efde-1523-785feabcd123"),
     )
 
+private val EVT_NOTIFY_CHARACTERISTIC_UUIDS =
+    setOf(
+        EVT_FILE_TRANSFER_CHARACTERISTIC_UUID,
+    )
+
 /**
- * EVT V1.5 response channels must use a real Client Characteristic
+ * EVT V1.6 response channels must use a real Client Characteristic
  * Configuration Descriptor. `NotificationSetupMode.COMPAT` only enables the
  * local Android callback; it deliberately skips the remote CCCD write and is
  * therefore invalid for a peripheral that sends Notify or Indicate packets.
  */
 private val EVT_CCCD_REQUIRED_CHARACTERISTIC_UUIDS =
-    EVT_INDICATE_CHARACTERISTIC_UUIDS + EVT_FILE_TRANSFER_CHARACTERISTIC_UUID
+    EVT_INDICATE_CHARACTERISTIC_UUIDS + EVT_NOTIFY_CHARACTERISTIC_UUIDS
 
 private val CLIENT_CHARACTERISTIC_CONFIGURATION_UUID: UUID =
     UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -77,7 +82,7 @@ internal fun requiresEvtCccd(characteristicId: UUID): Boolean =
 @VisibleForTesting
 internal fun evtNotificationModeFor(characteristicId: UUID): EvtNotificationMode? =
     when (characteristicId) {
-        EVT_FILE_TRANSFER_CHARACTERISTIC_UUID -> EvtNotificationMode.NOTIFY
+        in EVT_NOTIFY_CHARACTERISTIC_UUIDS -> EvtNotificationMode.NOTIFY
         in EVT_INDICATE_CHARACTERISTIC_UUIDS -> EvtNotificationMode.INDICATE
         else -> null
     }
@@ -180,7 +185,7 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
                 .setShouldCheckLocationServicesState(requireLocationServicesEnabled)
                 .apply {
-                    // EVT V1.5 uses a legacy primary advertisement plus scan
+                    // EVT V1.6 uses a legacy primary advertisement plus scan
                     // response. Restricting Android to extended advertisements
                     // makes the device undiscoverable on API 26 and newer.
                     // Android only added this setting on API 26; pre-O already
@@ -264,7 +269,12 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
         connectors.forEach { (device, connector) ->
             connector.disconnectDevice(device).subscribe()
         }
-        allConnections.dispose()
+        // Keep the aggregate disposable reusable.  The plugin can be
+        // deinitialized and initialized again during an app lifecycle (and
+        // the EVT reconnect flow may do exactly that); disposing this
+        // CompositeDisposable permanently would immediately dispose every
+        // later connect subscription added to it.
+        allConnections.clear()
     }
 
     override fun clearGattCache(deviceId: String): Completable =
@@ -403,8 +413,22 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
         timeout: Duration = Duration(0, TimeUnit.MILLISECONDS),
     ): Observable<EstablishConnectionResult> {
         val device = rxBleClient.getBleDevice(deviceId)
-        val connector =
-            activeConnections.getOrPut(deviceId) { createDeviceConnector(device, timeout) }
+        // An unexpected disconnect is converted to an
+        // EstablishConnectionFailure by DeviceConnector.  That value is
+        // retained by its BehaviorSubject, so reusing the connector would
+        // make every later reconnect immediately fail without touching the
+        // radio.  Replace only terminal connectors; an in-flight or healthy
+        // connector remains shared for concurrent operations.
+        val connector = synchronized(activeConnections) {
+            val existing = activeConnections[deviceId]
+            if (existing?.isTerminal == true) {
+                activeConnections.remove(deviceId)
+                existing.disposeSilently()
+            }
+            activeConnections.getOrPut(deviceId) {
+                createDeviceConnector(device, timeout)
+            }
+        }
 
         return connector.connection
     }
