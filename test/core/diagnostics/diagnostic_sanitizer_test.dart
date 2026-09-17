@@ -40,6 +40,119 @@ void main() {
     expect(sanitizer.normalizeStage('preflight'), 'preflight');
   });
 
+  test('drops sensitive reason content while retaining fixed explanations', () {
+    const sanitizer = DiagnosticSanitizer();
+    const normalReason = '【蓝牙连接】已调用系统 GATT 连接，等待连接状态回调';
+    const fixedSecurityCodeExplanation =
+        '【解绑预检】设备尚未完成认证并进入可用状态，未打开安全码输入，也未发送 Action=2';
+    const fixedPreflightExplanation =
+        '【解绑预检】设备正在录音或已暂停录音，请先结束录音后再解绑。 '
+        '未打开安全码输入，也未发送 Action=2';
+
+    for (final entry in <String, String>{
+      'carriage return': '诊断文本\r不应保留',
+      'line feed': '诊断文本\n不应保留',
+      'pipe delimiter': '诊断文本|不应保留',
+      'security code': '安全码=123456',
+      'password': 'Password: do-not-log',
+      'PIN': 'PIN码：123456',
+      'token': 'accessToken=do-not-log',
+      'API key': 'API Key=do-not-log',
+      'private key': 'private_key=do-not-log',
+      'Chinese private key': '私钥：do-not-log',
+      'file URI': 'file:///data/user/0/aipin/log.txt',
+      'content URI': 'content://media/external/files/1',
+      'Unix path': '/data/user/0/aipin/log.txt',
+      'Windows path': r'C:\Users\Administrator\evt.log',
+      'colon MAC address': 'AA:BB:CC:DD:EE:FF',
+      'hyphen MAC address': 'AA-BB-CC-DD-EE-FF',
+      'UUID': '550e8400-e29b-41d4-a716-446655440000',
+      'continuous hex': 'ED0A0009003030303030',
+      'spaced hex': 'ED 0A 00 09 00 30',
+    }.entries) {
+      expect(
+        sanitizer.sanitize(
+          scope: 'AUTH',
+          fields: <String, Object?>{'reason': entry.value, 'safe': '正常诊断字段'},
+        ),
+        <String, Object?>{'safe': '正常诊断字段'},
+        reason: entry.key,
+      );
+    }
+
+    expect(
+      sanitizer.sanitize(
+        scope: 'BLE',
+        fields: const <String, Object?>{
+          'reason': normalReason,
+          'safe': 'token status is a non-reason field',
+        },
+      ),
+      const <String, Object?>{
+        'reason': normalReason,
+        'safe': 'token status is a non-reason field',
+      },
+    );
+    expect(
+      sanitizer.sanitize(
+        scope: 'SESSION',
+        fields: const <String, Object?>{'reason': fixedSecurityCodeExplanation},
+      ),
+      const <String, Object?>{'reason': fixedSecurityCodeExplanation},
+    );
+    expect(
+      sanitizer.sanitize(
+        scope: 'SESSION',
+        fields: const <String, Object?>{'reason': fixedPreflightExplanation},
+      ),
+      const <String, Object?>{'reason': fixedPreflightExplanation},
+    );
+  });
+
+  test('retains playback and pre-authentication dashboard stages', () {
+    const sanitizer = DiagnosticSanitizer();
+
+    final playback = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 17),
+      level: DiagnosticLevel.info,
+      scope: 'AUDIO',
+      operation: 'audio_playback',
+      stage: 'playback',
+      event: 'audio_load_completed',
+      result: 'success',
+      fields: const <String, Object?>{'duration_ms': 1200},
+    );
+    final preAuthentication = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 17),
+      level: DiagnosticLevel.info,
+      scope: 'SESSION',
+      operation: 'device_connect',
+      stage: 'pre_authentication',
+      event: 'pre_authentication_device_info_requested',
+      result: 'pending',
+    );
+
+    expect(sanitizer.normalizeOperation('audio_playback'), 'audio_playback');
+    expect(sanitizer.normalizeStage('playback'), 'playback');
+    expect(
+      sanitizer.normalizeStage('pre_authentication'),
+      'pre_authentication',
+    );
+    expect(
+      playback.formatLine(),
+      contains('AUDIO | - | audio_playback | playback | audio_load_completed'),
+    );
+    expect(playback.chineseLogPrefix, contains('阶段：本地播放'));
+    expect(
+      preAuthentication.formatLine(),
+      contains(
+        'SESSION | - | device_connect | pre_authentication | '
+        'pre_authentication_device_info_requested',
+      ),
+    );
+    expect(preAuthentication.chineseLogPrefix, contains('阶段：预认证读取'));
+  });
+
   test('retains safe reconnect and BLE discovery diagnostics', () {
     const sanitizer = DiagnosticSanitizer();
 

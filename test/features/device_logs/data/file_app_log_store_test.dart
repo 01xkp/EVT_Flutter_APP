@@ -52,6 +52,100 @@ void main() {
   });
 
   test(
+    'creates a private upload snapshot without raw packets or a public mirror',
+    () async {
+      final sink = _FakePublicDiagnosticLogSink();
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        publicDiagnosticLogSink: sink,
+        mirrorDebounce: const Duration(hours: 1),
+        clock: () => DateTime.utc(2026, 9, 16, 10),
+      );
+      addTearDown(store.dispose);
+      store.info(
+        'notification_received',
+        scope: 'BLE',
+        fields: const {'raw_packet_hex': 'ED 04 00 89 01 2E AC', 'bytes': 7},
+      );
+      store.info(
+        'evt_command_frame_decoded',
+        scope: 'CMD',
+        fields: const {
+          'nested': {'raw_packet_hex': '31 32 33 34 35 36'},
+        },
+      );
+      await store.flush();
+
+      final path = await store.createUploadSnapshot();
+      final content = await File(path!).readAsString();
+
+      expect(
+        path,
+        contains('${Platform.pathSeparator}uploads${Platform.pathSeparator}'),
+      );
+      expect(await store.isTrustedSnapshot(path), isTrue);
+      final outsideUploadDirectory = File(
+        '${root.path}${Platform.pathSeparator}aipin-2026-09-16-10-00-00.log',
+      );
+      await outsideUploadDirectory.writeAsString('not a generated snapshot');
+      expect(
+        await store.isTrustedSnapshot(outsideUploadDirectory.path),
+        isFalse,
+      );
+      expect(content, contains('raw_packet_hex=omitted'));
+      expect(content, contains('raw_packet_hex":"omitted'));
+      expect(content, isNot(contains('ED 04 00 89 01 2E AC')));
+      expect(content, isNot(contains('31 32 33 34 35 36')));
+      expect(sink.calls, isEmpty);
+
+      store.info('received_after_snapshot', scope: 'BLE');
+      await store.flush();
+      expect(
+        await File(path).readAsString(),
+        isNot(contains('received_after_snapshot')),
+      );
+    },
+  );
+
+  test('redacts raw packets from user exports and public mirrors', () async {
+    final sink = _FakePublicDiagnosticLogSink();
+    final store = FileAppLogStore(
+      supportDirectoryProvider: () async => root,
+      enabled: true,
+      publicDiagnosticLogSink: sink,
+      clock: () => DateTime.utc(2026, 9, 16, 10),
+    );
+    addTearDown(store.dispose);
+    const rawPacket = '31 32 33 34 35 36';
+    store.info(
+      'evt_command_transmitted',
+      scope: 'CMD',
+      fields: const {'raw_packet_hex': rawPacket},
+    );
+    await store.flush();
+
+    final exportPath = await store.exportPath();
+    final exportContent = await File(exportPath!).readAsString();
+    expect(exportContent, contains('raw_packet_hex=omitted'));
+    expect(exportContent, isNot(contains(rawPacket)));
+    expect(sink.calls, isNotEmpty);
+    expect(
+      sink.calls.every((call) => call.contents?.contains(rawPacket) != true),
+      isTrue,
+    );
+    expect(
+      sink.calls.every(
+        (call) => call.contents?.contains('raw_packet_hex=omitted') == true,
+      ),
+      isTrue,
+    );
+
+    final canonical = await File(store.currentFilePath!).readAsString();
+    expect(canonical, contains(rawPacket));
+  });
+
+  test(
     'flushes every buffered debug entry without waiting for the write debounce',
     () async {
       final store = FileAppLogStore(
@@ -307,10 +401,7 @@ void main() {
 
     expect(sink.calls, hasLength(1));
     expect(sink.calls.single.filename, 'aipin-2026-09-01-12-00-00.log');
-    expect(
-      await File(sink.calls.single.sourcePath).readAsString(),
-      contains('second'),
-    );
+    expect(sink.calls.single.contents, contains('second'));
     expect(
       store.publicMirrorStatus?.relativePath,
       'Download/AIPIN/logs/aipin-2026-09-01-12-00-00.log',
@@ -346,7 +437,8 @@ void main() {
       );
       expect(await File(second!).readAsString(), contains('second_export'));
       expect(sink.calls.map((call) => call.filename).toSet(), hasLength(3));
-      expect(sink.calls.last.sourcePath, third);
+      expect(sink.calls.last.filename, 'aipin-2026-09-15-17-25-50.log');
+      expect(sink.calls.last.contents, contains('second_export'));
       expect(store.currentFilePath, endsWith('aipin-2026-09-15.log'));
     },
   );
@@ -543,10 +635,7 @@ void main() {
 
       expect(sink.calls, hasLength(1));
       expect(sink.calls.single.requestPermission, isFalse);
-      expect(
-        await File(sink.calls.single.sourcePath).readAsString(),
-        contains('legacy_security_timeout'),
-      );
+      expect(sink.calls.single.contents, contains('legacy_security_timeout'));
     },
   );
 
@@ -605,6 +694,7 @@ class _FakePublicDiagnosticLogSink implements PublicDiagnosticLogSink {
         sourcePath: sourcePath,
         filename: filename,
         requestPermission: requestPermission,
+        contents: await File(sourcePath).readAsString(),
       ),
     );
     if (shouldFail) {

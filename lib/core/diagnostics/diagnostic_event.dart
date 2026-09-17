@@ -179,6 +179,7 @@ class DiagnosticEvent {
   String _chineseStageLabel(String value) {
     return switch (value) {
       'archive' => '归档处理',
+      'pre_authentication' => '预认证读取',
       'challenge' => '认证挑战',
       'connect' => '蓝牙连接',
       'download' => '文件下载',
@@ -186,6 +187,7 @@ class DiagnosticEvent {
       'fa19_write' => '认证特征写入',
       'import' => '文件导入',
       'initialization' => '初始化',
+      'playback' => '本地播放',
       'read' => '特征读取',
       'request' => '请求准备',
       'response' => '回包处理',

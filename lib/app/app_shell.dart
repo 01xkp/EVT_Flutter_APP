@@ -1143,6 +1143,7 @@ class _AppShellState extends ConsumerState<AppShell>
 
   Future<void> _openDeviceLogs() async {
     final store = ref.read(appLogStoreProvider);
+    final uploadController = ref.read(appLogUploadControllerProvider);
     await store.initialize();
     if (!mounted) {
       return;
@@ -1152,6 +1153,7 @@ class _AppShellState extends ConsumerState<AppShell>
         builder: (_) => DeviceLogPage(
           store: store,
           onExport: (_) => _showLogExportResult(store),
+          onUpload: uploadController.uploadLatest,
         ),
       ),
     );
@@ -1166,7 +1168,7 @@ class _AppShellState extends ConsumerState<AppShell>
         : null;
     AppToast.show(
       context,
-      message: publicPath == null ? '日志已刷新到应用内部存储' : '日志已更新到 $publicPath',
+      message: publicPath == null ? '脱敏日志已导出到应用内部存储' : '脱敏日志已更新到 $publicPath',
     );
   }
 

@@ -1,14 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
 import 'package:aipin/core/design_system/widgets/app_text_action.dart';
 
 import '../data/file_app_log_store.dart';
 import '../domain/app_log_entry.dart';
+import '../domain/app_log_upload_port.dart';
 
 class DeviceLogPage extends StatefulWidget {
-  const DeviceLogPage({super.key, required this.store, this.onExport});
+  const DeviceLogPage({
+    super.key,
+    required this.store,
+    this.onExport,
+    this.onUpload,
+  });
 
   final FileAppLogStore store;
   final Future<void> Function(String path)? onExport;
+  final Future<AppLogUploadReceipt> Function()? onUpload;
 
   @override
   State<DeviceLogPage> createState() => _DeviceLogPageState();
@@ -18,6 +26,7 @@ class _DeviceLogPageState extends State<DeviceLogPage> {
   final _scrollController = ScrollController();
   var _paused = false;
   var _exporting = false;
+  var _uploading = false;
   List<AppLogEntry> entries = const [];
 
   @override
@@ -72,7 +81,13 @@ class _DeviceLogPageState extends State<DeviceLogPage> {
               ),
               AppTextAction(
                 label: _exporting ? '正在导出' : '导出日志',
-                onPressed: _exporting ? null : _export,
+                onPressed: _exporting || _uploading ? null : _export,
+              ),
+              AppTextAction(
+                label: _uploading ? '正在上传' : '上传日志',
+                onPressed: _exporting || _uploading || widget.onUpload == null
+                    ? null
+                    : _upload,
               ),
             ],
           ),
@@ -129,6 +144,44 @@ class _DeviceLogPageState extends State<DeviceLogPage> {
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
+  }
+
+  Future<void> _upload() async {
+    if (_uploading || _exporting || widget.onUpload == null) return;
+    final confirmed = await AppConfirmationSheet.show(
+      context,
+      title: '上传运行日志',
+      message: '将上传当前脱敏日志快照，用于联调问题定位。',
+      confirmLabel: '确认上传',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _uploading = true);
+    try {
+      final receipt = await widget.onUpload!();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('日志已上报（${_formatBytes(receipt.bytes)}）')),
+      );
+    } on AppLogUploadFailure catch (failure) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(failure.userMessage)));
+      }
+    } on Object {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('日志上报失败，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    return '${(bytes / 1024).toStringAsFixed(1)} KB';
   }
 
   String _logFileLocation() {

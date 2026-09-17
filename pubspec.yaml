@@ -44,6 +44,7 @@ dependencies:
   just_audio: 0.10.6
   path_provider: 2.1.6
   crypto: ^3.0.7
+  dartssh2: 4.1.0
 
 dev_dependencies:
   flutter_test:
