@@ -26,7 +26,7 @@ class WelcomePage extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    '连接设备后开始 EVT 联调',
+                    '连接设备后开始 DVT 联调',
                     style: Theme.of(context).textTheme.bodyLarge,
                   ),
                   const Spacer(flex: 2),

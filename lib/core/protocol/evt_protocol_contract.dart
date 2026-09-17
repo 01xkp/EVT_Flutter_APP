@@ -1,10 +1,10 @@
 import 'package:aipin/core/ble/ble_models.dart';
 
-/// The V1.6 subset that is intentionally enabled in the EVT build.
+/// The V1.6 wire contract shared by the retained EVT baseline and DVT.
 ///
-/// Only the commands and endpoints listed here participate in connection,
-/// subscription, and UI flows. Keeping the boundary in one place prevents a
-/// newly discovered GATT characteristic from becoming an EVT capability.
+/// DVT adds the `FF16 / 0x26` archive-confirmation path. The class keeps its
+/// existing name until session and UI call-sites are renamed in a dedicated
+/// migration.
 abstract final class EvtProtocolContract {
   /// ProtocolVersion carried by the V1.6 EVT device-information response.
   ///
@@ -18,6 +18,10 @@ abstract final class EvtProtocolContract {
   static const protocolVersion = evtV16ProtocolVersion;
   static const legacySecurityCodeBytes = 6;
 
+  /// 480B file data + offset(4) + length(2) + command(1) + CRC(2).
+  /// Includes the smaller DVT audio and archive response frames.
+  static const maxResponseLengthField = 489;
+
   static const businessCommands = <int>{
     0x01,
     0x02,
@@ -29,6 +33,7 @@ abstract final class EvtProtocolContract {
     0x21,
     0x22,
     0x23,
+    0x26,
   };
 
   /// GATT endpoint used by each EVT command that the App writes as a framed
@@ -47,6 +52,7 @@ abstract final class EvtProtocolContract {
     0x21: BleLogicalEndpoint.ff10Ff11,
     0x22: BleLogicalEndpoint.ff10Ff12,
     0x23: BleLogicalEndpoint.ff10Ff13,
+    0x26: BleLogicalEndpoint.ff10Ff16,
   };
 
   /// Returns the endpoint for a framed write command, or `null` for commands
@@ -82,12 +88,11 @@ abstract final class EvtProtocolContract {
         _requireBoolean(command, content[8], 'Denoise');
         _requireBoolean(command, content[9], 'PowerOff');
         _requireBoolean(command, content[10], 'ChargingMode');
-        // AudioStream belongs to the fixed V1.6 payload, but the FA18
-        // real-time audio feature is outside this EVT build. Enforce zero at
-        // the final admission boundary so direct command-client callers
-        // cannot reactivate a retained P2/PVT stream state.
-        if (content[11] != 0) {
-          _invalid(command, 'AudioStream 当前 EVT 固定为 0。');
+        // V1.6 carries AudioStream in every full configuration payload. DVT
+        // may set it to one only through the audio-probe flow, after FA18 CCC
+        // has been enabled; direct callers still cannot use another value.
+        if (content[11] != 0 && content[11] != 1) {
+          _invalid(command, 'AudioStream 必须为 0 或 1。');
         }
         return;
       case 0x06:
@@ -123,6 +128,9 @@ abstract final class EvtProtocolContract {
             _invalid(command, 'ChunkSize 不能超过 480B。');
           }
         }
+        return;
+      case 0x26:
+        _validateArchivePayload(content);
         return;
       case 0x11:
         _invalid(command, '0x11 仅支持 GATT Read，不允许通过业务写入发送。');
@@ -161,6 +169,33 @@ abstract final class EvtProtocolContract {
         return;
       default:
         _invalid(0x06, 'SubCmd 只能为 0x01、0x02、0x03 或 0x04。');
+    }
+  }
+
+  static void _validateArchivePayload(List<int> content) {
+    if (content.isEmpty) {
+      _invalid(0x26, '缺少 SubCmd。');
+    }
+    switch (content[0]) {
+      case 0x01: // GET_META
+        _requireLength(0x26, content, 19);
+        if (content[1] != 0x11) {
+          _invalid(0x26, 'GET_META 的 DataLength 必须为 17。');
+        }
+        _validateFileNameSlot(content.sublist(2, 19), 0x26);
+        return;
+      case 0x02: // ARCHIVE_CONFIRM
+        _requireLength(0x26, content, 28);
+        if (content[1] != 0x1A) {
+          _invalid(0x26, 'ARCHIVE_CONFIRM 的 DataLength 必须为 26。');
+        }
+        _validateFileNameSlot(content.sublist(2, 19), 0x26);
+        if (content[27] != 0x01) {
+          _invalid(0x26, 'ARCHIVE_CONFIRM 的 ArchiveResult 必须为 1。');
+        }
+        return;
+      default:
+        _invalid(0x26, 'SubCmd 只能为 0x01 或 0x02。');
     }
   }
 
@@ -222,6 +257,7 @@ abstract final class EvtProtocolContract {
     BleLogicalEndpoint.ff10Ff11,
     BleLogicalEndpoint.ff10Ff12,
     BleLogicalEndpoint.ff10Ff13,
+    BleLogicalEndpoint.ff10Ff16,
   };
 
   /// CCCs that must be enabled before an unauthenticated device-information
@@ -243,6 +279,12 @@ abstract final class EvtProtocolContract {
     BleLogicalEndpoint.fb10Fb11,
     BleLogicalEndpoint.ff10Ff12,
     BleLogicalEndpoint.ff10Ff13,
+    ...dvtRequiredPostAuthenticationEndpoints,
+  ];
+
+  /// DVT-specific response CCCs needed by the file archival workflow.
+  static const dvtRequiredPostAuthenticationEndpoints = <BleLogicalEndpoint>[
+    BleLogicalEndpoint.ff10Ff16,
   ];
 
   /// Compatibility alias for callers that need the complete mandatory set.
@@ -256,6 +298,15 @@ abstract final class EvtProtocolContract {
   /// regular file list on `FF12 / 0x22` is the required EVT path.
   static const optionalSubscriptionOrder = <BleLogicalEndpoint>[
     BleLogicalEndpoint.ff10Ff11,
+  ];
+
+  /// DVT validation capabilities are intentionally not part of regular
+  /// connection setup. A device missing any of them must still complete the
+  /// baseline recording-file workflow.
+  static const optionalDvtValidationEndpoints = <BleLogicalEndpoint>[
+    BleLogicalEndpoint.fa10Fa18,
+    BleLogicalEndpoint.wqota2001,
+    BleLogicalEndpoint.wqota2002,
   ];
 
   static bool allowsBusinessCommand(int command) =>

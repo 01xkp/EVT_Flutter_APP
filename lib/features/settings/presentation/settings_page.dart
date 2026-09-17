@@ -96,13 +96,26 @@ class _PermissionRow extends StatefulWidget {
   State<_PermissionRow> createState() => _PermissionRowState();
 }
 
-class _PermissionRowState extends State<_PermissionRow> {
+class _PermissionRowState extends State<_PermissionRow>
+    with WidgetsBindingObserver {
   AppPermissionState? _state;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_load());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_load());
   }
 
   @override

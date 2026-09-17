@@ -9,8 +9,9 @@ class DeviceFileDownloadCheckpoints extends Table {
   TextColumn get expectedLength => text()();
   TextColumn get expectedCrc32 => text()();
   IntColumn get receivedBytes => integer()();
-  // Retained solely to read and normalize pre-EVT/DVT database rows. EVT
-  // checkpoint behavior does not expose or branch on a phase value.
+  // The DVT archive layer uses this existing column to keep a locally
+  // CRC-validated file retryable until cloud persistence and device deletion
+  // both report a terminal result.
   TextColumn get phase => text().withDefault(const Constant('downloading'))();
   DateTimeColumn get updatedAt => dateTime()();
 

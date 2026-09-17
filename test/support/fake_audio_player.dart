@@ -7,12 +7,31 @@ class FakeAudioPlayer implements AudioPlayerPort {
   final _positions = StreamController<Duration>.broadcast();
   final _durations = StreamController<Duration?>.broadcast();
   final List<String> playedPaths = [];
+  final List<String> loadedPaths = [];
   final List<Duration> seekedPositions = [];
 
   String? activePath;
   bool disposed = false;
   Object? playError;
   Duration? playDuration;
+  Object? loadError;
+  Completer<Duration?>? pendingLoad;
+
+  @override
+  Future<Duration?> load(String absolutePath) async {
+    loadedPaths.add(absolutePath);
+    if (loadError case final error?) {
+      throw error;
+    }
+    final duration = pendingLoad == null
+        ? playDuration
+        : await pendingLoad!.future;
+    if (!disposed) {
+      activePath = absolutePath;
+      _durations.add(duration);
+    }
+    return duration;
+  }
 
   @override
   Stream<Duration?> get durations => _durations.stream;

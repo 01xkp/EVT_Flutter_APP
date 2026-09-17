@@ -380,6 +380,97 @@ void main() {
     },
   );
 
+  for (final streaming in [false, true]) {
+    test(
+      'rejects pending and queued commands when response stream closes (streaming=$streaming)',
+      () async {
+        final transport = FakeBleTransport();
+        final responses = StreamController<Uint8List>();
+        final client = EvtCommandClient(
+          transport: transport,
+          codec: EvtProtocolCodec(),
+          responses: responses.stream,
+        );
+        addTearDown(client.close);
+        const request = EvtCommandRequest(
+          command: 0x09,
+          content: _authenticateRequest,
+          writeCharacteristic: characteristic,
+          timeout: Duration(milliseconds: 100),
+          maxRetries: 0,
+        );
+        final Future<Object?> pending = streaming
+            ? client
+                  .executeStreaming(
+                    request,
+                    isTerminal: (_) => true,
+                    idleTimeout: const Duration(milliseconds: 100),
+                  )
+                  .toList()
+            : client.execute(request);
+        final queued = client.execute(request);
+        final pendingExpectation = expectLater(
+          pending,
+          throwsA(isA<StateError>()),
+        );
+        final queuedExpectation = expectLater(
+          queued,
+          throwsA(isA<StateError>()),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(transport.writes, hasLength(1));
+
+        await responses.close();
+        await pendingExpectation;
+        await queuedExpectation;
+        await expectLater(client.execute(request), throwsA(isA<StateError>()));
+        expect(transport.writes, hasLength(1));
+      },
+    );
+  }
+
+  test('does not start a cancelled queued file transfer', () async {
+    final transport = FakeBleTransport();
+    final codec = EvtProtocolCodec();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    addTearDown(client.close);
+    const infoRequest = EvtCommandRequest(
+      command: 0x01,
+      writeCharacteristic: characteristic,
+    );
+    final first = client.execute(infoRequest);
+    final cancelled = client
+        .executeStreaming(
+          const EvtCommandRequest(
+            command: 0x23,
+            content: _fileRequest,
+            writeCharacteristic: characteristic,
+            expectedResponseCommand: 0xA3,
+          ),
+          isTerminal: (_) => true,
+        )
+        .listen((_) {});
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.writes, hasLength(1));
+    await cancelled.cancel();
+    transport.emitSubscriptionBytes(codec.encodeRequest(0x81, const []));
+    await first;
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.writes, hasLength(1));
+
+    // Cancelling a queued transfer must also leave the command queue usable.
+    final next = client.execute(infoRequest);
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.writes, hasLength(2));
+    expect(codec.decode(transport.writes.last).value!.command, 0x01);
+    transport.emitSubscriptionBytes(codec.encodeRequest(0x81, const []));
+    await next;
+  });
+
   test(
     'ignores response-stream events that arrive after close begins',
     () async {
@@ -423,7 +514,7 @@ void main() {
       );
       addTearDown(client.close);
       const unsupported = EvtCommandRequest(
-        command: 0x26,
+        command: 0x27,
         writeCharacteristic: characteristic,
         content: <int>[0x00],
         maxRetries: 0,
@@ -495,7 +586,7 @@ void main() {
   );
 
   test(
-    'rejects a nonzero V1.6 AudioStream before either client entrance writes',
+    'rejects an invalid V1.6 AudioStream value before either client entrance writes',
     () async {
       final transport = FakeBleTransport();
       final logger = _CapturingLogger();
@@ -509,7 +600,7 @@ void main() {
       const invalidConfiguration = EvtCommandRequest(
         command: 0x02,
         writeCharacteristic: characteristic,
-        content: <int>[0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1],
+        content: <int>[0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 2],
         maxRetries: 0,
       );
 
@@ -537,6 +628,101 @@ void main() {
       );
     },
   );
+
+  test('discards impossible response lengths before a valid reply', () async {
+    final transport = FakeBleTransport();
+    final codec = EvtProtocolCodec();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    addTearDown(client.close);
+    final operation = client.execute(
+      const EvtCommandRequest(
+        command: 0x09,
+        content: _authenticateRequest,
+        writeCharacteristic: characteristic,
+        maxRetries: 0,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    transport.emitSubscriptionBytes(
+      Uint8List.fromList([
+        0xED,
+        0xFF,
+        0x7F,
+        0x89,
+        0xAA,
+        ...codec.encodeRequest(0x89, const [1]),
+      ]),
+    );
+    expect((await operation).frame.content, [1]);
+    expect(transport.writes, hasLength(1));
+  });
+
+  test('accepts a split maximum 480-byte file data response', () async {
+    final transport = FakeBleTransport();
+    final codec = EvtProtocolCodec();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    addTearDown(client.close);
+    final operation = client
+        .executeStreaming(
+          const EvtCommandRequest(
+            command: 0x23,
+            content: _fileRequest,
+            writeCharacteristic: characteristic,
+          ),
+          isTerminal: (frame) => frame.content.length == 6,
+        )
+        .toList();
+    await Future<void>.delayed(Duration.zero);
+    final embedded = codec.encodeRequest(0x89, const [1]);
+    final payload = [
+      ...embedded,
+      ...List<int>.filled(480 - embedded.length, 0xAA),
+    ];
+    final full = codec.encodeRequest(0xA3, [0, 0, 0, 0, 0xE0, 1, ...payload]);
+    transport.emitSubscriptionBytes(Uint8List.fromList(full.sublist(0, 30)));
+    transport.emitSubscriptionBytes(Uint8List.fromList(full.sublist(30)));
+    transport.emitSubscriptionBytes(
+      codec.encodeRequest(0xA3, [0xE0, 1, 0, 0, 0, 0]),
+    );
+    final received = await operation;
+    expect(received, hasLength(2));
+    expect(received.first.content.sublist(6), payload);
+  });
+
+  test('discards incomplete response bytes before a timeout retry', () async {
+    final transport = FakeBleTransport();
+    final codec = EvtProtocolCodec();
+    final client = EvtCommandClient(
+      transport: transport,
+      codec: codec,
+      responses: transport.subscriptionStream,
+    );
+    addTearDown(client.close);
+    final operation = client.execute(
+      const EvtCommandRequest(
+        command: 0x05,
+        writeCharacteristic: characteristic,
+        timeout: Duration(milliseconds: 30),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    transport.emitSubscriptionBytes(Uint8List.fromList([0xED, 100, 0, 0x85]));
+    while (transport.writes.length < 2) {
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+    }
+    transport.emitSubscriptionBytes(
+      codec.encodeRequest(0x85, [1, 0, 0, 0, 0, 0, 0, 0]),
+    );
+    expect((await operation).attempts, 2);
+  });
 
   test('retries once after timeout and then fails', () async {
     final transport = FakeBleTransport();

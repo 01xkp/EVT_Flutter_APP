@@ -38,6 +38,21 @@ void main() {
       'sync_state': 0,
     });
     expect(sanitizer.normalizeStage('preflight'), 'preflight');
+    expect(sanitizer.normalizeStage('cloud_archive'), 'cloud_archive');
+  });
+
+  test('retains DVT reason fields and drops legacy message fields', () {
+    const sanitizer = DiagnosticSanitizer();
+
+    final fields = sanitizer.sanitize(
+      scope: 'DVT_ARCHIVE',
+      fields: const <String, Object?>{
+        'reason': '本地校验已完成',
+        'message': 'legacy diagnostic text',
+      },
+    );
+
+    expect(fields, const <String, Object?>{'reason': '本地校验已完成'});
   });
 
   test('retains safe reconnect and BLE discovery diagnostics', () {

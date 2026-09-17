@@ -5,6 +5,7 @@ import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/ble/device_profile.dart';
 import 'package:aipin/core/diagnostics/evt_failure.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
+import 'package:aipin/core/diagnostics/evt_packet_log_summary.dart';
 import 'package:aipin/core/protocol/device_event.dart';
 import 'package:aipin/core/protocol/evt_command_client.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
@@ -25,6 +26,16 @@ import 'package:aipin/features/device_session/domain/device_session.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:flutter/foundation.dart';
+import 'package:aipin/features/device_session/domain/dvt_device_file_metadata_gateway.dart';
+import 'package:aipin/core/protocol/wqota_client.dart';
+import 'package:aipin/core/protocol/wqota_codec.dart';
+import 'package:aipin/features/device_session/domain/firmware_package.dart';
+import 'package:aipin/features/device_session/data/wqota_ble_update_gateway.dart';
+import 'package:aipin/features/device_session/data/shared_preferences_firmware_update_checkpoint_repository.dart';
+import 'package:aipin/features/device_session/application/wqota_update_controller.dart';
+
+part 'session_dvt_operations.dart';
+part 'session_dvt_ota.dart';
 
 class SessionController extends ChangeNotifier
     implements DeviceFileTransferGateway, EvtLegacySecurityGateway {
@@ -68,6 +79,7 @@ class SessionController extends ChangeNotifier
     // V1.6 reserves CMD=0x23 for the request; file-data Notify uses
     // response CMD=0xA3 (0x23 | 0x80).
     BleLogicalEndpoint.ff10Ff13: 0xA3,
+    BleLogicalEndpoint.ff10Ff16: 0xA6,
   };
 
   final BleTransport _transport;
@@ -86,6 +98,7 @@ class SessionController extends ChangeNotifier
   final Set<String> _subscribedEndpointKeys = <String>{};
   final Map<String, Future<void>> _subscriptionReadiness =
       <String, Future<void>>{};
+  final Map<String, EvtFrameAssembler> _notificationFrameAssemblers = {};
   StreamController<Uint8List>? _responseController;
   EvtCommandClient? _commandClient;
   DeviceProtocolRepository? _protocolRepository;
@@ -105,6 +118,7 @@ class SessionController extends ChangeNotifier
   );
 
   SessionState get state => _state;
+  final _dvtRuntime = _DvtSessionRuntime();
 
   Future<DeviceInfo> readDeviceInfo() async {
     final startedAt = DateTime.now();
@@ -304,6 +318,7 @@ class SessionController extends ChangeNotifier
   }
 
   void _cacheConfigurationTemplate(DeviceConfiguration configuration) {
+    _dvtRuntime.configuration = configuration;
     _logger.info(
       'configuration_applied',
       operation: 'device_connect',
@@ -1058,7 +1073,7 @@ class SessionController extends ChangeNotifier
           'observable_session',
           'record_state',
           'sync_state',
-          'first_file_page',
+          'all_file_archive_states',
         ],
       }),
     );
@@ -1119,18 +1134,8 @@ class SessionController extends ChangeNotifier
         );
       }
 
-      final files = await listFiles(offset: 0, pageSize: 1);
+      await verifyDvtArchivePreflight();
       _requireCurrentConnectionAttempt(connectionAttempt);
-      _requireDevicePermission(DevicePermission.files);
-      if (files.isNotEmpty) {
-        _rejectEvtUnbindPreflight(
-          connectionAttempt: connectionAttempt,
-          startedAt: startedAt,
-          check: 'first_file_page',
-          message: '设备仍有未同步录音文件，请先完成文件同步后再解绑。',
-          fields: {'file_count_on_first_page': files.length},
-        );
-      }
     } on EvtUnbindPreflightException {
       rethrow;
     } catch (error) {
@@ -1149,10 +1154,10 @@ class SessionController extends ChangeNotifier
       stage: 'preflight',
       result: 'success',
       elapsed: DateTime.now().difference(startedAt),
-      fields: _sessionFields('【解绑预检】设备处于空闲、未同步文件为空，可以打开安全码输入', {
+      fields: _sessionFields('【解绑预检】设备处于空闲、全部文件已归档或列表为空，可以打开安全码输入', {
         'connection_attempt': connectionAttempt,
         'sync_state': 0,
-        'file_count_on_first_page': 0,
+        'state': 'all_files_archived_or_empty',
       }),
     );
   }
@@ -1519,6 +1524,11 @@ class SessionController extends ChangeNotifier
       }
     }
 
+    if (dvtTransferBusy || _dvtRuntime.fileActive || _dvtRuntime.metadataBusy) {
+      throw StateError('设备正在执行其他传输任务。');
+    }
+    _dvtRuntime.fileActive = true;
+
     final startedAt = DateTime.now();
     var receivedBytes = 0;
     var nextProgressLogBytes = 64 * 1024;
@@ -1706,6 +1716,9 @@ class SessionController extends ChangeNotifier
       await notifyIncompleteTransfer(error);
       Error.throwWithStackTrace(error, stackTrace);
     } finally {
+      if (_isCurrentConnectionAttempt(connectionAttempt)) {
+        _dvtRuntime.fileActive = false;
+      }
       if (terminalReceived) {
         _logger.info(
           'file_transfer_completed',
@@ -2092,6 +2105,17 @@ class SessionController extends ChangeNotifier
         responses: _responseController!.stream,
         logger: _commandLogger,
         beforeWrite: _admitEvtCommandWrite,
+        onResponseTimeout: (request) {
+          // Old native writes can finish after a reconnect. Their timeout
+          // must never discard bytes belonging to the replacement session.
+          if (!_isCurrentConnectionAttempt(connectionAttempt)) return;
+          final characteristic = request.writeCharacteristic;
+          if (characteristic.deviceId != candidate.connectionId) return;
+          final key =
+              '${characteristic.serviceUuid}|${characteristic.characteristicUuid}'
+                  .toUpperCase();
+          _notificationFrameAssemblers[key]?.reset();
+        },
       );
       _protocolRepository = DeviceProtocolRepository(
         deviceId: candidate.connectionId,
@@ -2181,6 +2205,10 @@ class SessionController extends ChangeNotifier
       return;
     }
     if (permissions.contains(DevicePermission.status)) {
+      // GET_STATUS (0x06) does not contain RecordStatus. Re-read 0x01 so
+      // refresh can recover from a lost recording indication without
+      // replaying a non-idempotent 0x07 control command.
+      await _loadDeviceInfo(repository);
       await _loadDeviceStatus(repository);
       await _loadDeviceBattery(repository);
       await _loadDeviceStorage(repository);
@@ -2203,6 +2231,26 @@ class SessionController extends ChangeNotifier
             .toList(growable: false),
       }),
     );
+  }
+
+  Future<void> _loadDeviceInfo(DeviceProtocolRepository repository) async {
+    final connectionAttempt = _connectionAttempt;
+    try {
+      final info = await readDeviceInfo();
+      if (!_isCurrentConnectionAttempt(connectionAttempt) ||
+          !identical(repository, _protocolRepository) ||
+          !_state.isObservable) {
+        return;
+      }
+      _requireDevicePermission(DevicePermission.status);
+      _state = _state.copyWith(
+        deviceInfo: info,
+        latestSnapshot: _snapshotFromDeviceInfo(info, source: '设备状态刷新'),
+      );
+      notifyListeners();
+    } catch (error) {
+      _logDeviceDetailFailure('device_info_load_failed', error);
+    }
   }
 
   Future<void> _loadDeviceStatus(DeviceProtocolRepository repository) async {
@@ -2816,7 +2864,10 @@ class SessionController extends ChangeNotifier
     // Native BLE values may split or coalesce EVT business frames. Keep one
     // assembler per characteristic so bytes from separate endpoints can
     // never be joined into a false frame.
-    final frameAssembler = EvtFrameAssembler();
+    final frameAssembler = EvtFrameAssembler(
+      maxLengthField: EvtProtocolContract.maxResponseLengthField,
+    );
+    _notificationFrameAssemblers[key.toUpperCase()] = frameAssembler;
     late final StreamSubscription<Uint8List> subscription;
     subscription = _transport
         .subscribe(_characteristic(session.candidate.connectionId, endpoint))
@@ -2912,6 +2963,7 @@ class SessionController extends ChangeNotifier
             }
             _subscribedEndpointKeys.remove(key);
             _subscriptionReadiness.remove(key);
+            _notificationFrameAssemblers.remove(key.toUpperCase());
             _notificationSubscriptions.remove(subscription);
             _logger.info(
               'notification_subscription_failed',
@@ -2942,6 +2994,7 @@ class SessionController extends ChangeNotifier
             }
             _subscribedEndpointKeys.remove(key);
             _subscriptionReadiness.remove(key);
+            _notificationFrameAssemblers.remove(key.toUpperCase());
             _notificationSubscriptions.remove(subscription);
             _logger.info(
               'notification_subscription_closed',
@@ -3035,6 +3088,7 @@ class SessionController extends ChangeNotifier
       }
       if (key != null && identical(_subscriptionReadiness[key], readiness)) {
         _subscriptionReadiness.remove(key);
+        _notificationFrameAssemblers.remove(key.toUpperCase());
         _subscribedEndpointKeys.remove(key);
       }
       if (subscription != null) {
@@ -3111,9 +3165,10 @@ class SessionController extends ChangeNotifier
         }
         return DeviceSnapshot(
           state: switch (frame.content.first) {
+            0 => DeviceState.standby,
             1 => DeviceState.recording,
             2 => DeviceState.paused,
-            _ => DeviceState.standby,
+            _ => DeviceState.unknown,
           },
           observedAt: DateTime.now(),
           source: source,
@@ -3123,14 +3178,18 @@ class SessionController extends ChangeNotifier
     }
   }
 
-  DeviceSnapshot _snapshotFromDeviceInfo(DeviceInfo info) => DeviceSnapshot(
+  DeviceSnapshot _snapshotFromDeviceInfo(
+    DeviceInfo info, {
+    String source = '认证后设备信息',
+  }) => DeviceSnapshot(
     state: switch (info.recordStatus) {
+      0 => DeviceState.standby,
       1 => DeviceState.recording,
       2 => DeviceState.paused,
-      _ => DeviceState.standby,
+      _ => DeviceState.unknown,
     },
     observedAt: DateTime.now(),
-    source: '认证后设备信息',
+    source: source,
     batteryPercent: info.batteryLevel,
     isCharging: info.charging != 0,
   );
@@ -3160,9 +3219,13 @@ class SessionController extends ChangeNotifier
     };
     return [
       for (final entry in endpointOperations.entries)
-        if (_isIosCccAmbiguous(
-          _discoveredCharacteristic(services, _profile.endpoint(entry.key)),
-        ))
+        // Optional DVT capabilities are intentionally absent on a valid
+        // baseline peripheral. Do not turn that absence into a local
+        // StateError while checking CoreBluetooth's CCC ambiguity.
+        if (_profile.endpoints.containsKey(entry.key) &&
+            _isIosCccAmbiguous(
+              _discoveredCharacteristic(services, _profile.endpoint(entry.key)),
+            ))
           '${entry.key.name}.notify+indicate',
     ];
   }
@@ -3360,6 +3423,8 @@ class SessionController extends ChangeNotifier
     if (!_ownsConnectionForCleanup(expectedConnectionAttempt)) {
       return;
     }
+    await _resetDvtSession();
+    if (!_ownsConnectionForCleanup(expectedConnectionAttempt)) return;
     _logger.info(
       'transport_cleanup_started',
       operation: 'device_connect',
@@ -3408,6 +3473,7 @@ class SessionController extends ChangeNotifier
   }
 
   Future<void> _cancelNotificationSubscriptions() async {
+    _notificationFrameAssemblers.clear();
     if (_notificationSubscriptions.isEmpty) {
       _subscribedEndpointKeys.clear();
       _subscriptionReadiness.clear();
@@ -3481,6 +3547,14 @@ class SessionController extends ChangeNotifier
   /// deadline to complete AUTH after connection establishment, not a local
   /// permission lease after AUTH succeeds.
   void _admitEvtCommandWrite(EvtCommandRequest request) {
+    if (_dvtRuntime.otaActive) {
+      throw StateError('OTA 升级期间不允许并发发送业务命令。');
+    }
+    if ((_dvtRuntime.fileActive || _dvtRuntime.audioActive) &&
+        request.command == 0x09 &&
+        request.content.first == 2) {
+      throw StateError('请先结束音频验证或文件传输，再解绑设备。');
+    }
     final endpoint = EvtProtocolContract.writeEndpointForCommand(
       request.command,
     );
@@ -3534,6 +3608,7 @@ class SessionController extends ChangeNotifier
         return;
       case 0x22:
       case 0x23:
+      case 0x26:
         _requireDevicePermission(DevicePermission.files);
         return;
       case 0x09:
@@ -3551,7 +3626,12 @@ class SessionController extends ChangeNotifier
         // and it grants no DevicePermission.
         if (request.content.first == EvtLegacySecurityAction.unbind.wireValue) {
           if (!request.allowUnauthenticatedUnbindRecovery) {
-            _requireDevicePermission(DevicePermission.status);
+            final gate = _permissionGate;
+            final pendingUnbindAllowed =
+                gate is DeviceUnbindPermissionGate && gate.allowsPendingUnbind;
+            if (!pendingUnbindAllowed) {
+              _requireDevicePermission(DevicePermission.status);
+            }
           }
         }
         return;
@@ -3796,6 +3876,7 @@ class SessionController extends ChangeNotifier
   }
 
   Future<void> _closeResources(String? deviceId) async {
+    await _resetDvtSession();
     if (deviceId != null) {
       await _closeTransport(deviceId);
       return;

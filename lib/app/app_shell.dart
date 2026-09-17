@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:aipin/features/device_session/domain/device_file.dart';
 
 import 'package:aipin/app/app_destination.dart';
 import 'package:aipin/app/branding/aipin_brand_splash.dart';
@@ -28,7 +29,12 @@ import 'package:aipin/features/device_session/domain/evt_unbind_preflight.dart';
 import 'package:aipin/features/device_session/domain/session_phase.dart';
 import 'package:aipin/features/device_session/presentation/device_detail_page.dart';
 import 'package:aipin/features/device_session/presentation/device_file_browser_page.dart';
-import 'package:aipin/features/device_session/data/evt_device_file_import_service.dart';
+import 'package:aipin/features/device_session/data/dvt_device_file_import_service.dart';
+import 'package:aipin/features/device_session/data/dvt_device_file_archive_service.dart';
+import 'package:aipin/features/device_session/data/https_firmware_package_source.dart';
+import 'package:aipin/features/device_session/application/dvt_audio_probe_controller.dart';
+import 'package:aipin/features/device_session/presentation/dvt_audio_probe_page.dart';
+import 'package:aipin/features/device_session/presentation/dvt_firmware_update_page.dart';
 import 'package:aipin/features/device_session/presentation/evt_security_code_sheet.dart';
 import 'package:aipin/features/device_logs/data/file_app_log_store.dart';
 import 'package:aipin/features/device_logs/presentation/device_log_page.dart';
@@ -227,6 +233,9 @@ class _AppShellState extends ConsumerState<AppShell>
                 device: _deviceSummary(),
                 onConnectDevice: _openConnectionJourney,
                 onOpenSettings: _openSettings,
+                onOpenLogs: _openDeviceLogs,
+                onOpenSavedRecordings: () =>
+                    unawaited(_openSavedDeviceRecordings()),
                 onOpenDevice: session == null
                     ? null
                     : () => _openSessionDashboard(session),
@@ -571,6 +580,19 @@ class _AppShellState extends ConsumerState<AppShell>
               onOpenChecking: () => _openObservation(session.state),
               onOpenLogs: _openDeviceLogs,
               onOpenFiles: () => unawaited(_openDeviceFiles(session)),
+              onOpenSavedRecordings: () =>
+                  unawaited(_openSavedDeviceRecordings()),
+              onOpenDvtAudio:
+                  session.state.isObservable &&
+                      session.state.supportsEndpoint(
+                        BleLogicalEndpoint.fa10Fa18,
+                        BleOperation.notify,
+                      )
+                  ? () => unawaited(_openDvtAudio(session))
+                  : null,
+              onOpenDvtOta: session.state.isObservable
+                  ? () => unawaited(_openDvtOta(session))
+                  : null,
               onRecordAction: (action) =>
                   unawaited(_setHardwareRecordAction(session, action)),
               onRefreshDeviceDetails: () =>
@@ -732,7 +754,7 @@ class _AppShellState extends ConsumerState<AppShell>
         'session_open_evt_profile_ready',
         fields: {'operation': operation},
       );
-      final profile = DeviceProfile.evtV16();
+      final profile = DeviceProfile.dvtV16();
       logger.info(
         'session_open_evt_profile_verified',
         fields: {'operation': operation, 'gatt_ready': profile.isGattReady},
@@ -761,6 +783,13 @@ class _AppShellState extends ConsumerState<AppShell>
         );
         return false;
       }
+      final recoveryStore = ref.read(unbindRecoveryStoreProvider);
+      final recoveryKeys = _unbindRecoveryKeys(candidate).toList();
+      final persistedRecovery = await recoveryStore.containsAny(recoveryKeys);
+      if (!_isCurrentSessionConnectionOperation(operation)) return false;
+      if (persistedRecovery) {
+        _pendingUnbindRecoveryDeviceKeys.addAll(recoveryKeys);
+      }
       final unbindRecoveryPending = _hasPendingUnbindRecovery(candidate);
       if (unbindRecoveryPending) {
         logger.info(
@@ -775,6 +804,8 @@ class _AppShellState extends ConsumerState<AppShell>
       }
       final authController = EvtLegacyAuthController(
         unbindRecoveryPending: unbindRecoveryPending,
+        persistUnbindIntent: (pending) =>
+            recoveryStore.setPending(recoveryKeys, pending),
         logger: ref.read(scopedAppLoggerProvider('AUTH')),
       );
       final controller = SessionController(
@@ -1241,7 +1272,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '认证设备',
-      message: '请输入该设备当前的 12 位十六进制安全码（每 2 位代表 1 个字节）。',
+      message: '请输入该设备当前的安全码。',
       confirmLabel: '开始认证',
     );
     if (code == null ||
@@ -1327,7 +1358,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final code = await EvtSecurityCodeSheet.show(
       context,
       title: '首次绑定设备',
-      message: '请输入待绑定的 12 位十六进制安全码。提交后请在 60 秒内短按设备按键确认。',
+      message: '请输入待绑定的安全码。提交后请在 60 秒内短按设备按键确认。',
       confirmLabel: '确认绑定',
     );
     if (code == null ||
@@ -1451,8 +1482,8 @@ class _AppShellState extends ConsumerState<AppShell>
       context,
       title: recovery ? '恢复解绑' : '解绑设备',
       message: recovery
-          ? '设备上一次解绑尚未确认完成。请输入同一设备当前的 12 位十六进制安全码，继续恢复清除流程。'
-          : '请输入当前 12 位十六进制安全码。解绑前请先完成设备文件同步；设备会清除设备数据，最长等待 120 秒。',
+          ? '设备上一次解绑尚未确认完成。请输入同一设备当前的安全码，继续恢复清除流程。'
+          : '请输入当前安全码。解绑前请先完成设备文件归档；设备会清除设备数据，最长等待 120 秒。',
       confirmLabel: recovery ? '恢复解绑' : '确认解绑',
     );
     if (code == null ||
@@ -1770,6 +1801,37 @@ class _AppShellState extends ConsumerState<AppShell>
     }
   }
 
+  Future<void> _openDvtAudio(SessionController session) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => DvtAudioProbePage(
+          controller: DvtAudioProbeController(
+            validatedAudioPayloads: session.dvtAudioPayloads,
+            startDvtAudioProbe: session.startDvtAudioProbe,
+            stopDvtAudioProbe: session.stopDvtAudioProbe,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openDvtOta(SessionController session) async {
+    final deviceId = session.state.session?.candidate.physicalDeviceId;
+    if (deviceId == null) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => DvtFirmwareUpdatePage(
+          deviceId: deviceId,
+          loadPackage: HttpsFirmwarePackageSource().load,
+          createController: session.createDvtOtaController,
+          createVerificationController:
+              session.createDvtOtaVerificationController,
+          releaseTransport: session.releaseDvtOta,
+        ),
+      ),
+    );
+  }
+
   Future<void> _openDeviceFiles(SessionController session) async {
     if (_deviceAuthController?.allows(DevicePermission.files) != true) {
       if (mounted) {
@@ -1781,21 +1843,65 @@ class _AppShellState extends ConsumerState<AppShell>
     if (deviceId == null || !session.state.isObservable || !mounted) {
       return;
     }
-    final importer = EvtDeviceFileImportService(
+    final metadataGateway = SessionDvtFileGateway(session);
+    final importer = DvtDeviceFileImportService(
+      pendingArchives: ref.read(dvtPendingArchiveRepositoryProvider),
       deviceId: deviceId,
-      gateway: session,
+      metadataGateway: metadataGateway,
+      transferGateway: metadataGateway,
       files: ref.read(recordingFileStoreProvider),
       checkpoints: ref.read(deviceFileDownloadCheckpointRepositoryProvider),
       recordings: ref.read(localRecordingRepositoryProvider),
-      logger: ref.read(scopedAppLoggerProvider('FILE')),
+      logger: ref.read(scopedAppLoggerProvider('DVT_FILE')),
+    );
+    final archiver = DvtDeviceFileArchiveService(
+      pendingArchives: ref.read(dvtPendingArchiveRepositoryProvider),
+      metadataGateway: metadataGateway,
+      archiveGateway: ref.read(dvtArchiveGatewayProvider),
+      checkpoints: ref.read(deviceFileDownloadCheckpointRepositoryProvider),
+      logger: ref.read(scopedAppLoggerProvider('DVT_ARCHIVE')),
     );
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => DeviceFileBrowserPage(
           onListFiles: ({required offset, required pageSize}) =>
-              session.listFiles(offset: offset, pageSize: pageSize),
-          onImport: importer.import,
+              metadataGateway.listFiles(offset: offset, pageSize: pageSize),
+          onImport: (file, {onProgress}) async =>
+              (await importer.import(file, onProgress: onProgress)).recording,
+          onMetadata: (file) =>
+              metadataGateway.readDvtFileMetadata(nameSlot: file.nameSlot),
+          onListPendingArchives: () async => [
+            for (final imported in await importer.restoreReadyImports())
+              DeviceFile(
+                name: imported.metadata.name,
+                nameSlot: imported.metadata.nameSlot,
+                length: imported.metadata.fileSize,
+              ),
+          ],
+          onRetryArchive: (file) async {
+            final ready = await importer.restoreReadyImports();
+            final matches = ready.where(
+              (item) => item.metadata.matchesListedFile(file),
+            );
+            if (matches.length != 1) throw StateError('本地恢复文件缺失或校验失败，请查看日志。');
+            final result = await archiver.archiveAndConfirm(matches.single);
+            return result.deviceConfirmation.deviceDeleted
+                ? '归档已确认，设备源文件已释放'
+                : '归档已确认，设备源文件等待固件回收';
+          },
+          onArchive: (file) async {
+            final imported = await importer.import(file);
+            final result = await archiver.archiveAndConfirm(imported);
+            return result.deviceConfirmation.deviceDeleted
+                ? '归档完成，设备源文件已释放，本地录音保留'
+                : '归档已确认，设备源文件等待固件回收，本地录音保留';
+          },
           onOpenSavedRecordings: _openSavedDeviceRecordings,
+          isSavedRecordingAvailable: (recording) => ref
+              .read(recordingFileStoreProvider)
+              .exists(recording.relativePath),
+          onOpenRecording: (recording) =>
+              _openDeviceRecordingDetail(recording, [recording]),
         ),
       ),
     );

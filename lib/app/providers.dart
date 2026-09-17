@@ -1,4 +1,9 @@
 import 'dart:async';
+import 'package:aipin/features/device_session/data/shared_preferences_dvt_pending_archive_manifest_repository.dart';
+import 'package:aipin/features/device_session/domain/dvt_pending_archive_manifest_repository.dart';
+import 'package:aipin/features/device_session/data/shared_preferences_unbind_recovery_store.dart';
+import 'package:aipin/features/device_session/data/https_dvt_archive_gateway.dart';
+import 'package:aipin/features/device_session/domain/dvt_archive_gateway.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:aipin/core/ble/bluetooth_enable_gateway.dart';
@@ -91,9 +96,22 @@ final recordingFileStoreProvider = Provider<RecordingFileStore>((ref) {
   return AppRecordingFileStore();
 });
 
-final deviceAudioPlayerFactoryProvider = Provider<AudioPlayerPort Function()>(
-  (ref) => JustAudioPlayer.new,
-);
+final deviceAudioPlayerFactoryProvider = Provider<AudioPlayerPort Function()>((
+  ref,
+) {
+  final logger = ref.watch(scopedAppLoggerProvider('AUDIO'));
+  return () => JustAudioPlayer(logger: logger);
+});
+
+/// This URL is an explicitly configured backend adapter, not a BLE API route.
+final dvtArchiveGatewayProvider = Provider<DvtArchiveGateway>((ref) {
+  const endpoint = String.fromEnvironment('DVT_ARCHIVE_URL');
+  if (endpoint.isEmpty) return const UnconfiguredDvtArchiveGateway();
+  return HttpsDvtArchiveGateway(
+    endpoint: endpoint,
+    logger: ref.watch(scopedAppLoggerProvider('ARCHIVE')),
+  );
+});
 
 final deviceFileDownloadCheckpointRepositoryProvider =
     Provider<DeviceFileDownloadCheckpointRepository>((ref) {
@@ -105,4 +123,13 @@ final deviceFileDownloadCheckpointRepositoryProvider =
 final deviceConnectionHistoryRepositoryProvider =
     Provider<DeviceConnectionHistoryRepository>((ref) {
       return SharedPreferencesDeviceConnectionHistoryRepository();
+    });
+
+final unbindRecoveryStoreProvider = Provider((ref) {
+  return SharedPreferencesUnbindRecoveryStore();
+});
+
+final dvtPendingArchiveRepositoryProvider =
+    Provider<DvtPendingArchiveManifestRepository>((ref) {
+      return SharedPreferencesDvtPendingArchiveManifestRepository();
     });

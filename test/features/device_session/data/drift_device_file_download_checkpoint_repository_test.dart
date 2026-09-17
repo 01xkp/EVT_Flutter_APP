@@ -77,7 +77,7 @@ void main() {
     );
   });
 
-  test('treats legacy non-EVT phase rows as resumable downloads', () async {
+  test('preserves a DVT ready-for-archive checkpoint phase', () async {
     final checkpoint = _checkpoint(
       deviceId: 'device-1',
       nameSlot: const [1, 0],
@@ -94,11 +94,12 @@ void main() {
     final active = await repository.allDownloading();
 
     expect(active.map((item) => item.id), [checkpoint.id]);
+    expect(active.single.phase, DeviceFileDownloadPhase.readyForArchive);
     await repository.save(active.single);
     final normalized = await (database.select(
       database.deviceFileDownloadCheckpoints,
     )..where((table) => table.id.equals(checkpoint.id))).getSingle();
-    expect(normalized.phase, 'downloading');
+    expect(normalized.phase, 'readyForArchive');
   });
 
   test(

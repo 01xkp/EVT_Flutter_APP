@@ -25,6 +25,7 @@ void main() {
     expect(waveform, findsOneWidget);
     expect(find.descendant(of: waveform, matching: progress), findsNothing);
 
+    await tester.pump();
     await tester.tap(find.byTooltip('播放录音'));
     await tester.pump();
     player.emitPosition(const Duration(seconds: 3));
@@ -55,11 +56,15 @@ void main() {
       );
       expect(tester.widget<Slider>(progress).max, 1);
 
-      await tester.tap(find.byTooltip('播放录音'));
       await tester.pump();
 
       expect(tester.widget<Slider>(progress).max, 12000);
       expect(find.text('0:12'), findsOneWidget);
+      expect(player.loadedPaths, <String>['/recordings/recording-1.m4a']);
+      expect(player.playedPaths, isEmpty);
+
+      await tester.tap(find.byTooltip('播放录音'));
+      await tester.pump();
 
       player.emitPosition(const Duration(seconds: 3));
       await tester.pump();
@@ -67,6 +72,25 @@ void main() {
       expect(tester.widget<Slider>(progress).value, 3000);
     },
   );
+
+  testWidgets('shows a retryable decode failure before playback starts', (
+    tester,
+  ) async {
+    final player = FakeAudioPlayer()..loadError = StateError('decode failed');
+    await tester.pumpWidget(
+      MaterialApp(home: _detailPage(audioPlayerFactory: () => player)),
+    );
+    await tester.pump();
+
+    expect(find.text('录音加载失败，请点击播放重试。'), findsOneWidget);
+    expect(player.playedPaths, isEmpty);
+
+    await tester.tap(find.byTooltip('播放录音'));
+    await tester.pump();
+
+    expect(player.loadedPaths, hasLength(2));
+    expect(player.playedPaths, isEmpty);
+  });
 
   testWidgets('opens adjacent saved device recordings from skip controls', (
     tester,

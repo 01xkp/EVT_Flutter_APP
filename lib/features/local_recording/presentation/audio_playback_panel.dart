@@ -37,6 +37,9 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
   late final StreamSubscription<Duration> _positionSubscription;
   late final StreamSubscription<Duration?> _durationSubscription;
   Timer? _progressTimer;
+  bool _loading = true;
+  bool _loadFailed = false;
+  String? _loadedPath;
 
   var _playbackState = AudioPlaybackState.idle;
   var _position = Duration.zero;
@@ -65,6 +68,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
         _syncProgressTimer();
       }
     });
+    unawaited(_load());
   }
 
   @override
@@ -96,6 +100,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     final progress = maximum == 0
         ? 0.0
         : (position.inMilliseconds / maximum).clamp(0.0, 1.0);
+    final canSeek = !_loading && _duration > Duration.zero;
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Center(
@@ -109,17 +114,39 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
               isPlaying: _playbackState == AudioPlaybackState.playing,
             ),
             const SizedBox(height: 4),
+            Text(
+              _loading
+                  ? '正在读取录音…'
+                  : _loadFailed
+                  ? '录音加载失败，请点击播放重试。'
+                  : switch (_playbackState) {
+                      AudioPlaybackState.playing => '正在播放',
+                      AudioPlaybackState.paused => '已暂停',
+                      AudioPlaybackState.completed => '播放结束',
+                      AudioPlaybackState.idle => '点击播放按钮开始',
+                    },
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: _ProgressSlider(
                 progressKey: widget.progressKey,
                 maximum: maximum,
                 position: position,
-                onChanged: (value) => setState(
-                  () => _scrubPosition = Duration(milliseconds: value.round()),
-                ),
-                onChangeEnd: (value) =>
-                    unawaited(_seek(Duration(milliseconds: value.round()))),
+                onChanged: canSeek
+                    ? (value) => setState(
+                        () => _scrubPosition = Duration(
+                          milliseconds: value.round(),
+                        ),
+                      )
+                    : null,
+                onChangeEnd: canSeek
+                    ? (value) => unawaited(
+                        _seek(Duration(milliseconds: value.round())),
+                      )
+                    : null,
               ),
             ),
             const SizedBox(height: 2),
@@ -129,7 +156,14 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
                 const Spacer(),
                 SizedBox(
                   width: 42,
-                  child: Text(_format(_duration), textAlign: TextAlign.end),
+                  child: Text(
+                    _duration > Duration.zero
+                        ? _format(_duration)
+                        : _loading
+                        ? '读取中'
+                        : '未知',
+                    textAlign: TextAlign.end,
+                  ),
                 ),
               ],
             ),
@@ -137,7 +171,9 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
             _PlaybackControls(
               playbackState: _playbackState,
               onPrevious: widget.onPrevious,
-              onTogglePlayback: () => unawaited(_togglePlayback()),
+              onTogglePlayback: _loading
+                  ? null
+                  : () => unawaited(_togglePlayback()),
               onNext: widget.onNext,
             ),
           ],
@@ -146,12 +182,55 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     );
   }
 
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _loadFailed = false;
+      });
+    }
+    try {
+      final path = await widget.resolvePath();
+      if (!mounted) {
+        return;
+      }
+      final duration = await _audioPlayer.load(path);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadedPath = path;
+        if (duration != null && duration > Duration.zero) {
+          _duration = duration;
+          _position = _clamp(_position);
+        }
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _loadFailed = true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
   Future<void> _togglePlayback() async {
+    if (_loading) {
+      return;
+    }
     try {
       if (_playbackState == AudioPlaybackState.playing) {
         await _audioPlayer.pause();
         _setPlaybackState(AudioPlaybackState.paused);
         return;
+      }
+      if (_loadedPath == null) {
+        await _load();
+        if (!mounted || _loadedPath == null) {
+          return;
+        }
       }
       if (_playbackState == AudioPlaybackState.completed) {
         await _audioPlayer.seek(Duration.zero);
@@ -160,7 +239,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
         }
       }
       _setPlaybackState(AudioPlaybackState.playing);
-      await _audioPlayer.play(await widget.resolvePath());
+      await _audioPlayer.play(_loadedPath!);
     } catch (_) {
       _setPlaybackState(AudioPlaybackState.idle);
       if (mounted) {
@@ -172,6 +251,9 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
   }
 
   Future<void> _seek(Duration position) async {
+    if (_loading || _duration <= Duration.zero) {
+      return;
+    }
     final target = _clamp(position);
     setState(() {
       _position = target;
@@ -210,7 +292,8 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
   }
 
   void _syncProgressTimer() {
-    if (_playbackState != AudioPlaybackState.playing) {
+    if (_playbackState != AudioPlaybackState.playing ||
+        _duration <= Duration.zero) {
       _progressTimer?.cancel();
       _progressTimer = null;
       return;
@@ -218,9 +301,10 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     _progressTimer ??= Timer.periodic(_progressTick, (_) {
       if (!mounted ||
           _playbackState != AudioPlaybackState.playing ||
+          _duration <= Duration.zero ||
           _scrubPosition != null ||
           _position >= _duration) {
-        if (_position >= _duration) {
+        if (_duration <= Duration.zero || _position >= _duration) {
           _progressTimer?.cancel();
           _progressTimer = null;
         }
@@ -234,7 +318,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     if (value <= Duration.zero) {
       return Duration.zero;
     }
-    return value >= _duration ? _duration : value;
+    return _duration > Duration.zero && value >= _duration ? _duration : value;
   }
 
   String _format(Duration value) {
@@ -255,7 +339,7 @@ class _PlaybackControls extends StatelessWidget {
 
   final AudioPlaybackState playbackState;
   final VoidCallback? onPrevious;
-  final VoidCallback onTogglePlayback;
+  final VoidCallback? onTogglePlayback;
   final VoidCallback? onNext;
 
   @override
@@ -302,8 +386,8 @@ class _ProgressSlider extends StatelessWidget {
   final Key? progressKey;
   final double maximum;
   final Duration position;
-  final ValueChanged<double> onChanged;
-  final ValueChanged<double> onChangeEnd;
+  final ValueChanged<double>? onChanged;
+  final ValueChanged<double>? onChangeEnd;
 
   @override
   Widget build(BuildContext context) {

@@ -15,6 +15,7 @@ import 'package:aipin/features/device_session/domain/device_configuration.dart';
 import 'package:aipin/features/device_session/domain/device_capabilities.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
 import 'package:aipin/features/device_session/domain/device_file_transfer_gateway.dart';
+import 'package:aipin/features/device_session/domain/dvt_device_file_metadata_gateway.dart';
 import 'package:aipin/features/device_session/domain/device_info.dart';
 import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
 
@@ -111,8 +112,9 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
       ..u8(configuration.powerOff)
       ..u8(configuration.chargingMode)
       // V1.6 keeps AudioStream in the fixed 12-byte configuration payload.
-      // The EVT build does not support the FA18 real-time audio capability,
-      // so admission validation requires this byte to remain zero.
+      // DVT enables value 1 only after the FA18 CCC subscription is ready.
+      // That operation-level ordering is enforced by SessionController;
+      // this repository remains the protocol encoder and accepts 0/1.
       ..u8(configuration.audioStream);
     final response = await commands.execute(
       EvtCommandRequest(
@@ -677,6 +679,133 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     ];
   }
 
+  /// Builds the V1.6 DVT `0x26 / GET_META` Content payload.
+  ///
+  /// This is intentionally a codec helper only. A DVT-gated session adapter
+  /// owns the FF16 write/indicate transaction and the shared command queue
+  /// continues to serialize it with other protocol operations.
+  static List<int> encodeDvtReadFileMetadataContent(List<int> nameSlot) {
+    _validateNameSlot(nameSlot);
+    return List<int>.unmodifiable(<int>[0x01, 0x11, ...nameSlot]);
+  }
+
+  /// Builds the V1.6 DVT `0x26 / ARCHIVE_CONFIRM` Content payload.
+  ///
+  /// The last byte is fixed to `ArchiveResult=1`; callers reach this helper
+  /// only after a separate archive gateway has reported durable persistence.
+  static List<int> encodeDvtArchiveConfirmationContent(
+    DvtDeviceArchiveConfirmation confirmation,
+  ) {
+    _validateNameSlot(confirmation.nameSlot);
+    if (confirmation.fileSize < 0 || confirmation.fileSize > 0xFFFFFFFF) {
+      throw RangeError.range(confirmation.fileSize, 0, 0xFFFFFFFF, 'fileSize');
+    }
+    if (confirmation.crc32 < 0 || confirmation.crc32 > 0xFFFFFFFF) {
+      throw RangeError.range(confirmation.crc32, 0, 0xFFFFFFFF, 'crc32');
+    }
+    final data = ProtocolWriter()
+      ..addAll(confirmation.nameSlot)
+      ..u32Le(confirmation.fileSize)
+      ..u32Le(confirmation.crc32)
+      ..u8(DvtDeviceArchiveConfirmation.archiveResult);
+    return List<int>.unmodifiable(<int>[
+      0x02,
+      data.bytes.length,
+      ...data.bytes,
+    ]);
+  }
+
+  /// Decodes the V1.6 DVT `0xA6 / GET_META` success envelope.
+  ///
+  /// V1.6 removed V1.5's `DurationS`, making the Data field exactly 41 bytes.
+  static DvtDeviceFileMetadata decodeDvtFileMetadata(EvtFrame frame) {
+    final data = _readDvtSuccessData(
+      frame,
+      subCommand: 0x01,
+      expectedDataLength: 41,
+      operation: '文件元数据',
+    );
+    final reader = ProtocolReader(data);
+    final clockQuality = reader.u8(27);
+    if (clockQuality > 2) {
+      throw const FormatException('DVT 文件元数据 ClockQuality 无效。');
+    }
+    final recordingSessionId = reader.u32Le(21);
+    if (recordingSessionId == 0) {
+      throw const FormatException('DVT 文件元数据 RecordingSessionId 无效。');
+    }
+    final fileSize = reader.u32Le(32);
+    if (fileSize == 0) {
+      throw const FormatException('DVT 文件元数据 FileSize 无效。');
+    }
+    return DvtDeviceFileMetadata(
+      name: reader.asciiSlot17(0),
+      nameSlot: List<int>.unmodifiable(reader.bytes.sublist(0, 17)),
+      startUtc: DateTime.fromMillisecondsSinceEpoch(
+        reader.u32Le(17) * 1000,
+        isUtc: true,
+      ),
+      recordingSessionId: recordingSessionId,
+      segmentIndex: reader.u16Le(25),
+      clockQuality: clockQuality,
+      utcCorrectionMilliseconds: reader.s32Le(28),
+      fileSize: fileSize,
+      crc32: reader.u32Le(36),
+      state: DvtDeviceFileState.fromWireValue(reader.u8(40)),
+    );
+  }
+
+  /// Decodes a V1.6 DVT `0xA6 / ARCHIVE_CONFIRM` success envelope.
+  ///
+  /// `DEVICE_CONFIRMED (3)` was a V1.5 terminal state only and deliberately
+  /// fails here. V1.6 requires either `DELETE (6)` or `RECLAIMABLE (4)`.
+  static DvtDeviceArchiveConfirmationResult decodeDvtArchiveConfirmation(
+    EvtFrame frame,
+  ) {
+    final data = _readDvtSuccessData(
+      frame,
+      subCommand: 0x02,
+      expectedDataLength: 1,
+      operation: '文件归档确认',
+    );
+    final result = DvtDeviceArchiveConfirmationResult(
+      DvtDeviceFileState.fromWireValue(data.single),
+    );
+    if (!result.isTerminal) {
+      throw FormatException('DVT 文件归档确认状态无效：${result.state.name}。');
+    }
+    return result;
+  }
+
+  static List<int> _readDvtSuccessData(
+    EvtFrame frame, {
+    required int subCommand,
+    required int expectedDataLength,
+    required String operation,
+  }) {
+    _expectCommand(frame, 0xA6);
+    if (frame.content.length < 3 || frame.content[0] != subCommand) {
+      throw FormatException('DVT $operation响应包头无效。');
+    }
+    final result = frame.content[1];
+    final dataLength = frame.content[2];
+    if (frame.content.length != 3 + dataLength) {
+      throw FormatException('DVT $operation响应长度无效。');
+    }
+    if (result != 0) {
+      // Failed 0x26 operations normally carry no Data. Reject an unexpected
+      // success-shaped payload too, so no caller can parse stale bytes.
+      if (dataLength != 0) {
+        throw FormatException('DVT $operation失败响应不应包含数据。');
+      }
+      throw FormatException('DVT $operation被设备拒绝，Result=$result。');
+    }
+    if (dataLength != expectedDataLength) {
+      throw FormatException('DVT $operation响应数据长度无效。');
+    }
+    return List<int>.unmodifiable(frame.content.sublist(3));
+  }
+
   static bool _isFileDataTerminalFrame(EvtFrame frame) {
     if (frame.content.length < 6) {
       return false;
@@ -935,8 +1064,8 @@ class DeviceProtocolRepository implements DeviceFileTransferGateway {
     if (configuration.audioStream < 0 || configuration.audioStream > 0xFF) {
       throw RangeError.range(configuration.audioStream, 0, 0xFF, 'audioStream');
     }
-    if (configuration.audioStream != 0) {
-      throw const FormatException('AudioStream 当前 EVT 固定为 0。');
+    if (configuration.audioStream != 0 && configuration.audioStream != 1) {
+      throw const FormatException('AudioStream 必须为 0 或 1。');
     }
   }
 

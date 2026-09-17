@@ -155,6 +155,42 @@ class ReactiveBleClientTest {
     }
 
     @Test
+    fun `uses DVT-specific CCC modes for archive and audio channels`() {
+        val bothModes =
+            BluetoothGattCharacteristic.PROPERTY_NOTIFY or
+                BluetoothGattCharacteristic.PROPERTY_INDICATE
+
+        assertThat(
+            requireEvtNotificationMode(
+                UUID.fromString("0000ff16-1212-efde-1523-785feabcd123"),
+                bothModes,
+            ),
+        ).isEqualTo(EvtNotificationMode.INDICATE)
+        assertThat(
+            requireEvtNotificationMode(
+                UUID.fromString("0000fa18-1212-efde-1523-785feabcd123"),
+                bothModes,
+            ),
+        ).isEqualTo(EvtNotificationMode.NOTIFY)
+    }
+
+    @Test
+    fun `qualifies WQOTA response CCC mode by service UUID`() {
+        val wqotaResponse = UUID.fromString("00002002-0000-1000-8000-00805f9b34fb")
+        val wqotaService = UUID.fromString("00007033-0000-1000-8000-00805f9b34fb")
+        val unrelatedService = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
+
+        assertThat(evtNotificationModeFor(wqotaResponse, wqotaService))
+            .isEqualTo(EvtNotificationMode.NOTIFY)
+        assertThat(requiresEvtCccd(wqotaResponse, wqotaService)).isTrue()
+        assertThat(notificationSetupModeFor(wqotaResponse, emptyList(), wqotaService))
+            .isEqualTo(NotificationSetupMode.DEFAULT)
+
+        assertThat(evtNotificationModeFor(wqotaResponse, unrelatedService)).isNull()
+        assertThat(requiresEvtCccd(wqotaResponse, unrelatedService)).isFalse()
+    }
+
+    @Test
     fun `keeps EVT mode when Android reports an additional encryption flag`() {
         // Android exposes encryption as a characteristic permission rather
         // than a separate standard property bit. Keep the mode check tolerant
@@ -216,6 +252,8 @@ class ReactiveBleClientTest {
             "0000ff11-1212-efde-1523-785feabcd123",
             "0000ff12-1212-efde-1523-785feabcd123",
             "0000ff13-1212-efde-1523-785feabcd123",
+            "0000ff16-1212-efde-1523-785feabcd123",
+            "0000fa18-1212-efde-1523-785feabcd123",
         ).map(UUID::fromString)
 
         evtResponseCharacteristics.forEach { characteristicId ->

@@ -10,13 +10,19 @@
       "fa15": {"uuid": "0000FA15-1212-EFDE-1523-785FEABCD123", "operations": ["write", "indicate"]},
       "fa16": {"uuid": "0000FA16-1212-EFDE-1523-785FEABCD123", "operations": ["indicate", "write"]},
       "fa17": {"uuid": "0000FA17-1212-EFDE-1523-785FEABCD123", "operations": ["write", "indicate"]},
+      "fa18": {"uuid": "0000FA18-1212-EFDE-1523-785FEABCD123", "operations": ["notify"]},
       "fa19": {"uuid": "0000FA19-1212-EFDE-1523-785FEABCD123", "operations": ["write", "indicate"]}
     },
     "fb10": {"fb11": {"uuid": "0000FB11-1212-EFDE-1523-785FEABCD123", "operations": ["read", "indicate"]}},
     "ff10": {
       "ff11": {"uuid": "0000FF11-1212-EFDE-1523-785FEABCD123", "operations": ["write", "indicate"]},
       "ff12": {"uuid": "0000FF12-1212-EFDE-1523-785FEABCD123", "operations": ["write", "indicate"]},
-      "ff13": {"uuid": "0000FF13-1212-EFDE-1523-785FEABCD123", "operations": ["write", "notify"]}
+      "ff13": {"uuid": "0000FF13-1212-EFDE-1523-785FEABCD123", "operations": ["write", "notify"]},
+      "ff16": {"uuid": "0000FF16-1212-EFDE-1523-785FEABCD123", "operations": ["write", "indicate"]}
+    },
+    "wqota": {
+      "2001": {"uuid": "00002001-0000-1000-8000-00805F9B34FB", "serviceUuid": "7033", "operations": ["writeWithoutResponse"]},
+      "2002": {"uuid": "00002002-0000-1000-8000-00805F9B34FB", "serviceUuid": "7033", "operations": ["notify"]}
     }
   }
 }

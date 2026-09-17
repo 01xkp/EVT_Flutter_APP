@@ -9,6 +9,7 @@ import 'package:aipin/core/protocol/evt_command_client.dart';
 import 'package:aipin/core/protocol/evt_frame.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:aipin/features/device_session/application/session_controller.dart';
+import 'package:aipin/features/device_session/application/evt_legacy_auth_controller.dart';
 import 'package:aipin/features/device_session/domain/device_permission.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway.dart';
@@ -20,6 +21,186 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../../support/fake_ble_transport.dart';
 
 void main() {
+  for (final scenario in [
+    (action: 1, actual: 1, expected: DeviceState.recording),
+    (action: 2, actual: 2, expected: DeviceState.paused),
+    (action: 0, actual: 0, expected: DeviceState.standby),
+  ]) {
+    test(
+      'refresh recovers lost recording response for action ${scenario.action}',
+      () async {
+        final profile = _profileWithAuthoritativeStatusEndpoints();
+        final codec = EvtProtocolCodec();
+        final transport = FakeBleTransport(
+          profile: profile,
+          services: _servicesFor(profile),
+          readValuesByCharacteristicUuid: {
+            _fb11: FakeBleTransport.validBatteryFrame,
+          },
+        );
+        final controller = SessionController(transport, profile, codec);
+        addTearDown(controller.dispose);
+        await controller.connect(FakeBleTransport.matchingCandidate);
+        await _completeAuthenticatedSession(controller, transport);
+        if (scenario.action != 1) {
+          transport.emitSubscriptionBytesForCharacteristic(
+            _fa17,
+            codec.encodeRequest(0x87, const [1, 8, 7, 0, 0, 1, 2, 0]),
+          );
+          await Future<void>.delayed(Duration.zero);
+        }
+        final staleSnapshot = controller.state.latestSnapshot;
+        // Firmware changed state, but its 0x87 response never reached the App.
+        await expectLater(
+          controller.setRecordAction(scenario.action),
+          throwsA(isA<EvtCommandTimeoutException>()),
+        );
+        expect(controller.state.latestSnapshot, same(staleSnapshot));
+        final refreshed = controller.refreshDeviceDetails(const {
+          DevicePermission.status,
+        });
+        await _waitForCommand(
+          transport,
+          codec,
+          command: 0x01,
+          minimumMatchingCommandCount: 3,
+        );
+        transport.emitSubscriptionBytesForCharacteristic(
+          _fa11,
+          _deviceInfoFrame(protocolVersion: 3, recordStatus: scenario.actual),
+        );
+        await _respondToCommand(
+          transport,
+          codec,
+          command: 0x06,
+          subCommand: 0x01,
+          response: codec.encodeRequest(0x86, const [
+            0x01,
+            0,
+            5,
+            0,
+            0,
+            0,
+            1,
+            0,
+          ]),
+        );
+        await _respondToCommand(
+          transport,
+          codec,
+          command: 0x05,
+          response: codec.encodeRequest(0x85, const [0, 1, 0, 0, 128, 0, 0, 0]),
+        );
+        await refreshed;
+        expect(controller.state.latestSnapshot?.state, scenario.expected);
+        expect(controller.state.deviceInfo?.recordStatus, scenario.actual);
+        expect(
+          _writtenCommands(
+            transport,
+            codec,
+          ).where((command) => command == 0x07),
+          hasLength(1),
+        );
+      },
+    );
+  }
+
+  test('record error indication does not display idle', () async {
+    final profile = _profileWithAuthoritativeStatusEndpoints();
+    final codec = EvtProtocolCodec();
+    final transport = FakeBleTransport(
+      profile: profile,
+      services: _servicesFor(profile),
+    );
+    final controller = SessionController(transport, profile, codec);
+    addTearDown(controller.dispose);
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    await _completeAuthenticatedSession(controller, transport);
+    transport.emitSubscriptionBytesForCharacteristic(
+      _fa17,
+      codec.encodeRequest(0x87, const [0xFF, 0xFF, 0xFF]),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.state.latestSnapshot?.state, DeviceState.unknown);
+  });
+
+  test('authenticated device info error does not display idle', () async {
+    final profile = _profileWithAuthoritativeStatusEndpoints();
+    final codec = EvtProtocolCodec();
+    final transport = FakeBleTransport(
+      profile: profile,
+      services: _servicesFor(profile),
+    );
+    final controller = SessionController(transport, profile, codec);
+    addTearDown(controller.dispose);
+    await controller.connect(FakeBleTransport.matchingCandidate);
+    await _authenticateOnly(controller, transport);
+    final synchronized = controller.synchronizeAfterAuthentication(const {});
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x01,
+      response: _deviceInfoFrame(protocolVersion: 3, recordStatus: 0xFF),
+    );
+    await _respondToCommand(
+      transport,
+      codec,
+      command: 0x02,
+      response: codec.encodeRequest(0x82, const [1]),
+    );
+    await synchronized;
+    expect(controller.state.latestSnapshot?.state, DeviceState.unknown);
+  });
+
+  test(
+    'authenticated controller can dispatch normal unbind through session',
+    () async {
+      final profile = _profileWithDeviceInfo();
+      final transport = FakeBleTransport(
+        profile: profile,
+        services: _servicesFor(profile),
+      );
+      final auth = EvtLegacyAuthController();
+      final controller = SessionController(
+        transport,
+        profile,
+        EvtProtocolCodec(),
+        permissionGate: auth,
+      );
+      addTearDown(auth.dispose);
+      addTearDown(controller.dispose);
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      final authentication = auth.authenticate(
+        controller,
+        securityCode: '123456',
+      );
+      await _waitForCommand(transport, EvtProtocolCodec(), command: 0x09);
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa19,
+        EvtProtocolCodec().encodeRequest(0x89, const [1]),
+      );
+      await authentication;
+      expect(auth.isAuthenticated, isTrue);
+
+      final unbind = auth.unbind(controller, securityCode: '123456');
+      final outcome = expectLater(unbind, completes);
+      await _waitForCommand(
+        transport,
+        EvtProtocolCodec(),
+        command: 0x09,
+        minimumMatchingCommandCount: 2,
+      );
+      expect(auth.grantedPermissions, isEmpty);
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa19,
+        EvtProtocolCodec().encodeRequest(0x89, const [1]),
+      );
+      await outcome;
+      expect(auth.hasUnbindRecoveryPending, isFalse);
+      expect(auth.isAuthenticated, isFalse);
+    },
+  );
+
   for (final command in [0x22, 0x23]) {
     test(
       'late file command $command failure cannot close the new connection',
@@ -784,6 +965,13 @@ void main() {
     final synchronized = controller.synchronizeAfterAuthentication(const {
       DevicePermission.status,
     });
+    await _waitForCommand(
+      transport,
+      codec,
+      command: 0x01,
+      minimumMatchingCommandCount: 3,
+    );
+    transport.emitSubscriptionBytes(_deviceInfoFrame(protocolVersion: 3));
     await _respondToCommand(
       transport,
       codec,
@@ -1058,6 +1246,13 @@ void main() {
         command: 0x02,
         response: codec.encodeRequest(0x82, const [1]),
       );
+      await _waitForCommand(
+        transport,
+        codec,
+        command: 0x01,
+        minimumMatchingCommandCount: 3,
+      );
+      transport.emitSubscriptionBytes(_deviceInfoFrame(protocolVersion: 3));
       await _respondToCommand(
         transport,
         codec,
@@ -1336,7 +1531,7 @@ void main() {
           isA<EvtUnbindPreflightException>().having(
             (error) => error.message,
             'message',
-            contains('未同步录音文件'),
+            contains('仍有未归档录音'),
           ),
         ),
       );
@@ -1359,6 +1554,17 @@ void main() {
         command: 0x22,
         response: codec.encodeRequest(0xA2, [1, ..._fileNameSlot, 16, 0, 0, 0]),
       );
+      await _respondToCommand(
+        transport,
+        codec,
+        command: 0x26,
+        subCommand: 0x01,
+        response: _dvtFileMetadataResponse(
+          codec,
+          nameSlot: _fileNameSlot,
+          state: 1,
+        ),
+      );
 
       await expected;
       final commandFrames = transport.writes
@@ -1368,7 +1574,7 @@ void main() {
       final fileListRequest = commandFrames.singleWhere(
         (frame) => frame.command == 0x22,
       );
-      expect(fileListRequest.content, const [0, 0, 1]);
+      expect(fileListRequest.content, const [0, 0, 11]);
       expect(
         commandFrames.where(
           (frame) => frame.command == 0x09 && frame.content.first == 2,
@@ -1428,7 +1634,7 @@ void main() {
           .where((frame) => frame.command == 0x22)
           .single
           .content,
-      const [0, 0, 1],
+      const [0, 0, 11],
     );
   });
 
@@ -1492,6 +1698,111 @@ void main() {
       );
 
       expect((await status).recordConsent, isTrue);
+    },
+  );
+
+  test(
+    'status retry clears only the timed-out characteristic partial frame',
+    () async {
+      final profile = _profileWithAuthoritativeStatusEndpoints();
+      final codec = EvtProtocolCodec();
+      final transport = FakeBleTransport(
+        profile: profile,
+        deferRead: true,
+        services: _servicesFor(profile),
+      );
+      final controller = SessionController(transport, profile, codec);
+      addTearDown(controller.dispose);
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await _completeAuthenticatedSession(controller, transport);
+
+      final status = controller.readStatus();
+      final outcome = expectLater(
+        status.then((value) => value.recordConsent),
+        completion(isTrue),
+      );
+      await _waitForCommand(transport, codec, command: 0x06);
+      transport.emitSubscriptionBytesForCharacteristic(_fa16, [
+        0xED,
+        100,
+        0,
+        0x86,
+      ]);
+      // An unrelated characteristic's legitimate split event must survive.
+      final battery = codec.encodeRequest(0x91, [73, 1, 1]);
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fb11,
+        battery.sublist(0, 4),
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 2050));
+      await _waitForCommand(
+        transport,
+        codec,
+        command: 0x06,
+        minimumMatchingCommandCount: 2,
+      );
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa16,
+        codec.encodeRequest(0x86, [1, 0, 5, 0, 0, 0, 1, 0]),
+      );
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fb11,
+        battery.sublist(4),
+      );
+      await outcome;
+      expect(controller.state.deviceBattery?.percent, 73);
+      expect(
+        _writtenCommands(transport, codec).where((command) => command == 0x06),
+        hasLength(2),
+      );
+      expect(transport.disconnectedDeviceIds, isEmpty);
+    },
+  );
+
+  test(
+    'old status timeout cannot clear a reconnected characteristic partial frame',
+    () async {
+      final profile = _profileWithAuthoritativeStatusEndpoints();
+      final codec = EvtProtocolCodec();
+      final transport = _DeferredCommandWriteTransport(profile, 0x06);
+      final controller = SessionController(transport, profile, codec);
+      addTearDown(controller.dispose);
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await _completeAuthenticatedSession(controller, transport);
+      final oldStatus = controller.readStatus();
+      final oldOutcome = expectLater(oldStatus, throwsA(isA<StateError>()));
+      await transport.writeStarted.future;
+
+      await controller.disconnect();
+      await controller.connect(FakeBleTransport.matchingCandidate);
+      await _completeAuthenticatedSession(controller, transport);
+      final statusEvent = codec.encodeRequest(0x86, [
+        0x80,
+        0,
+        5,
+        0,
+        0,
+        0,
+        1,
+        0,
+      ]);
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa16,
+        statusEvent.sublist(0, 5),
+      );
+      await Future<void>.delayed(Duration.zero);
+      transport.writeCompleted.completeError(
+        TimeoutException('old native write'),
+      );
+      await oldOutcome;
+      transport.emitSubscriptionBytesForCharacteristic(
+        _fa16,
+        statusEvent.sublist(5),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.state.deviceStatus?.recordConsent, isTrue);
+      expect(controller.state.isObservable, isTrue);
     },
   );
 
@@ -1847,6 +2158,7 @@ void main() {
         _fb11,
         _ff12,
         _ff13,
+        _ff16,
         _ff11,
       ]);
     },
@@ -2475,6 +2787,11 @@ DeviceProfile _profileWithDeviceInfo() {
         characteristicUuid: _ff13,
         operations: {BleOperation.write, BleOperation.notify},
       ),
+      BleLogicalEndpoint.ff10Ff16: BleEndpoint(
+        serviceUuid: _ff10,
+        characteristicUuid: _ff16,
+        operations: {BleOperation.write, BleOperation.indicate},
+      ),
     },
   );
 }
@@ -2604,7 +2921,9 @@ List<BleService> _servicesFor(
         (profile.endpoints.containsKey(BleLogicalEndpoint.ff10Ff12) &&
             !omittedEndpoints.contains(BleLogicalEndpoint.ff10Ff12)) ||
         (profile.endpoints.containsKey(BleLogicalEndpoint.ff10Ff13) &&
-            !omittedEndpoints.contains(BleLogicalEndpoint.ff10Ff13)))
+            !omittedEndpoints.contains(BleLogicalEndpoint.ff10Ff13)) ||
+        (profile.endpoints.containsKey(BleLogicalEndpoint.ff10Ff16) &&
+            !omittedEndpoints.contains(BleLogicalEndpoint.ff10Ff16)))
       BleService(
         uuid: _ff10,
         characteristics: [
@@ -2635,6 +2954,15 @@ List<BleService> _servicesFor(
                 BleOperation.notify,
               }),
             ),
+          if (profile.endpoints.containsKey(BleLogicalEndpoint.ff10Ff16) &&
+              !omittedEndpoints.contains(BleLogicalEndpoint.ff10Ff16))
+            BleDiscoveredCharacteristic(
+              uuid: _ff16,
+              operations: operationsFor(BleLogicalEndpoint.ff10Ff16, const {
+                BleOperation.write,
+                BleOperation.indicate,
+              }),
+            ),
         ],
       ),
   ];
@@ -2653,6 +2981,7 @@ const _ff10 = '0000FF10-1212-EFDE-1523-785FEABCD123';
 const _ff11 = '0000FF11-1212-EFDE-1523-785FEABCD123';
 const _ff12 = '0000FF12-1212-EFDE-1523-785FEABCD123';
 const _ff13 = '0000FF13-1212-EFDE-1523-785FEABCD123';
+const _ff16 = '0000FF16-1212-EFDE-1523-785FEABCD123';
 
 const _fileNameSlot = <int>[
   0x36,
@@ -2841,6 +3170,21 @@ Future<void> _respondToCommand(
     subCommand: subCommand,
   );
   transport.emitSubscriptionBytes(response);
+}
+
+List<int> _dvtFileMetadataResponse(
+  EvtProtocolCodec codec, {
+  required List<int> nameSlot,
+  required int state,
+}) {
+  final data = List<int>.filled(41, 0)..setRange(0, 17, nameSlot);
+  // V1.6 GET_META requires a non-zero recording-session identifier and file
+  // size. The remaining zero-valued metadata fields are valid for this
+  // focused unbind-preflight fixture.
+  data[21] = 1;
+  data[32] = 16;
+  data[40] = state;
+  return codec.encodeRequest(0xA6, <int>[0x01, 0x00, 0x29, ...data]);
 }
 
 class _CapturingLogger implements SafeAppLogger {

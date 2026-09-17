@@ -27,7 +27,7 @@ class EvtPacketLogSummary {
       return '0x${normalized.toUpperCase()}';
     }
     final evtMatch = RegExp(
-      r'^0000(FA11|FA12|FA15|FA16|FA17|FA19|FB11|FF11|FF12|FF13)1212EFDE1523785FEABCD123$',
+      r'^0000(FA11|FA12|FA15|FA16|FA17|FA18|FA19|FB11|FF11|FF12|FF13|FF16)1212EFDE1523785FEABCD123$',
       caseSensitive: false,
     ).firstMatch(normalized);
     if (evtMatch != null) {

@@ -9,6 +9,43 @@ import 'package:aipin/features/device_session/domain/evt_legacy_security_gateway
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('unbind waits for durable intent and clears only after reply', () async {
+    final saved = Completer<void>();
+    final writes = <bool>[];
+    final gateway = _DeferredUnbindGateway();
+    final controller = EvtLegacyAuthController(
+      persistUnbindIntent: (pending) async {
+        writes.add(pending);
+        if (pending) await saved.future;
+      },
+    );
+    addTearDown(controller.dispose);
+    final operation = controller.unbind(gateway, securityCode: '123456');
+    await Future<void>.delayed(Duration.zero);
+    expect(writes, [true]);
+    expect(gateway.requests, isEmpty);
+    saved.complete();
+    await Future<void>.delayed(Duration.zero);
+    expect(gateway.requests, hasLength(1));
+    gateway.result.complete(true);
+    await operation;
+    expect(writes, [true, false]);
+    expect(controller.state, DeviceAuthState.unbound);
+  });
+
+  test('failed intent persistence prevents destructive unbind send', () async {
+    final gateway = _SecurityGateway();
+    final controller = EvtLegacyAuthController(
+      persistUnbindIntent: (_) async => throw StateError('disk unavailable'),
+    );
+    addTearDown(controller.dispose);
+    await expectLater(
+      controller.unbind(gateway, securityCode: '123456'),
+      throwsStateError,
+    );
+    expect(gateway.requests, isEmpty);
+  });
+
   for (final lateSuccess in [false, true]) {
     test(
       'ignores old authentication result after reauthentication: $lateSuccess',
@@ -167,6 +204,45 @@ void main() {
       ],
     );
   });
+
+  test('normal unbind admission expires on connection loss', () async {
+    final controller = EvtLegacyAuthController();
+    addTearDown(controller.dispose);
+    await controller.authenticate(_SecurityGateway(), securityCode: '123456');
+    final gateway = _DeferredUnbindGateway();
+
+    final unbind = controller.unbind(gateway, securityCode: '123456');
+    final outcome = expectLater(unbind, throwsA(isA<StateError>()));
+    await gateway.started.future;
+    expect(controller.allowsPendingUnbind, isTrue);
+    expect(controller.grantedPermissions, isEmpty);
+
+    controller.revokeForConnectionLoss();
+    expect(controller.allowsPendingUnbind, isFalse);
+    gateway.result.complete(true);
+    await outcome;
+    expect(controller.hasUnbindRecoveryPending, isTrue);
+  });
+
+  test(
+    'invalid local unbind code does not invent a pending device clear',
+    () async {
+      final controller = EvtLegacyAuthController();
+      addTearDown(controller.dispose);
+      final gateway = _SecurityGateway();
+      await controller.authenticate(gateway, securityCode: '123456');
+
+      await expectLater(
+        controller.unbind(gateway, securityCode: 'invalid'),
+        throwsA(isA<FormatException>()),
+      );
+
+      expect(gateway.requests, hasLength(1));
+      expect(controller.isAuthenticated, isTrue);
+      expect(controller.hasUnbindRecoveryPending, isFalse);
+      expect(controller.allowsPendingUnbind, isFalse);
+    },
+  );
 
   test(
     'bind switches its transient action to AUTH after device confirmation',
@@ -349,11 +425,13 @@ class _DeferredSecurityGateway implements EvtLegacySecurityGateway {
 }
 
 class _DeferredUnbindGateway implements EvtLegacySecurityGateway {
+  final requests = <EvtLegacySecurityRequest>[];
   final started = Completer<void>();
   final result = Completer<bool>();
 
   @override
   Future<bool> executeEvtLegacySecurity(EvtLegacySecurityRequest request) {
+    requests.add(request);
     if (!started.isCompleted) {
       started.complete();
     }

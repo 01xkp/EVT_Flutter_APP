@@ -11,6 +11,9 @@ abstract interface class AudioPlayerPort {
   /// authoritative source once the local file has been opened.
   Stream<Duration?> get durations;
 
+  /// Opens a local file and reads its duration without starting playback.
+  Future<Duration?> load(String absolutePath);
+
   Future<void> play(String absolutePath);
   Future<void> pause();
   Future<void> seek(Duration position);

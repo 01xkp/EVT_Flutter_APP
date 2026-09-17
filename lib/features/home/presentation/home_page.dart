@@ -1,5 +1,7 @@
 import 'package:aipin/core/design_system/evt_theme.dart';
+import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
+import 'package:aipin/core/design_system/widgets/app_text_action.dart';
 import 'package:flutter/material.dart';
 
 enum DeviceSummaryStatus {
@@ -75,25 +77,25 @@ class HomePage extends StatelessWidget {
     required this.onConnectDevice,
     required this.onOpenSettings,
     this.onOpenDevice,
+    this.onOpenFiles,
+    this.onOpenSavedRecordings,
+    this.onOpenLogs,
   });
 
   final DeviceSummary device;
   final VoidCallback onConnectDevice;
   final VoidCallback onOpenSettings;
   final VoidCallback? onOpenDevice;
+  final VoidCallback? onOpenFiles;
+  final VoidCallback? onOpenSavedRecordings;
+  final VoidCallback? onOpenLogs;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('首页'),
-        actions: [
-          IconButton(
-            tooltip: '设置',
-            onPressed: onOpenSettings,
-            icon: const Icon(Icons.settings_outlined),
-          ),
-        ],
+        actions: [AppTextAction(label: '设置', onPressed: onOpenSettings)],
       ),
       body: SafeArea(
         top: false,
@@ -106,6 +108,8 @@ class HomePage extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
+                  const Text('连接设备 → 输入安全码 → 录音 → 下载 → 播放'),
+                  const SizedBox(height: 12),
                   AppSurfaceCard(
                     onTap: onOpenDevice ?? onConnectDevice,
                     child: AnimatedSwitcher(
@@ -118,6 +122,22 @@ class HomePage extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 28),
+                  if (onOpenFiles != null) ...[
+                    AppButton.primary(label: '设备录音文件', onPressed: onOpenFiles),
+                    const SizedBox(height: 8),
+                  ],
+                  if (onOpenSavedRecordings != null) ...[
+                    AppButton.secondary(
+                      label: '已保存录音',
+                      onPressed: onOpenSavedRecordings,
+                    ),
+                    const Text('查看手机里的录音，未连接设备也能播放。'),
+                    const SizedBox(height: 8),
+                  ],
+                  if (onOpenLogs != null) ...[
+                    AppButton.secondary(label: '实时日志', onPressed: onOpenLogs),
+                    const SizedBox(height: 20),
+                  ],
                   Text('设备状态', style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 12),
                   AppSurfaceCard(

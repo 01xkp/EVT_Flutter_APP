@@ -90,27 +90,43 @@ void main() {
       expect(find.text('设备录音'), findsOneWidget);
       expect(find.text('暂停录音'), findsOneWidget);
       expect(find.text('结束录音'), findsOneWidget);
-      final pauseRecording = find.text('暂停录音');
-      await tester.drag(find.byType(Scrollable), const Offset(0, -160));
-      await tester.pumpAndSettle();
-      await tester.tap(pauseRecording);
+      await tester.tap(find.widgetWithText(AppButton, '暂停录音'));
       expect(action, 2);
     },
   );
 
-  testWidgets('detail omits deferred DVT and PVT controls in EVT', (
+  testWidgets('detail opens DVT audio and OTA validation entry points', (
     tester,
   ) async {
+    var openedAudio = false;
+    var openedOta = false;
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
         home: DeviceDetailPage(
-          state: SessionState(phase: SessionPhase.observable),
+          state: const SessionState(phase: SessionPhase.observable),
+          onOpenDvtAudio: () => openedAudio = true,
+          onOpenDvtOta: () => openedOta = true,
         ),
       ),
     );
 
-    expect(find.text('实时音频'), findsNothing);
-    expect(find.text('固件升级'), findsNothing);
+    final audioAction = find.widgetWithText(AppButton, 'DVT 实时音频验证');
+    await tester.scrollUntilVisible(
+      audioAction,
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+    await tester.tap(audioAction);
+    expect(openedAudio, isTrue);
+
+    final otaAction = find.widgetWithText(AppButton, 'DVT 固件升级');
+    await tester.scrollUntilVisible(
+      otaAction,
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+    await tester.tap(otaAction);
+    expect(openedOta, isTrue);
     expect(find.text('确认清除设备'), findsNothing);
   });
 
@@ -149,6 +165,11 @@ void main() {
         ),
       );
 
+      await tester.scrollUntilVisible(
+        find.text('设备状态'),
+        200,
+        scrollable: find.byType(Scrollable),
+      );
       expect(find.text('设备状态'), findsOneWidget);
       expect(find.text('80%（充电中）'), findsOneWidget);
       expect(find.text('剩余 128 / 256 MB'), findsOneWidget);
@@ -161,7 +182,7 @@ void main() {
         200,
         scrollable: find.byType(Scrollable),
       );
-      await tester.drag(find.byType(Scrollable), const Offset(0, -240));
+      await tester.ensureVisible(consentSwitch);
       await tester.pumpAndSettle();
       await tester.tap(consentSwitch);
       expect(recordConsent, isFalse);
@@ -170,7 +191,7 @@ void main() {
   );
 
   testWidgets(
-    'detail disables protected status refresh without a status grant',
+    'detail disables the text status refresh action without a status grant',
     (tester) async {
       var refreshCount = 0;
       await tester.pumpWidget(
@@ -182,18 +203,44 @@ void main() {
         ),
       );
 
-      final refreshButton = tester.widget<IconButton>(
-        find.ancestor(
-          of: find.byIcon(Icons.refresh_outlined),
-          matching: find.byType(IconButton),
-        ),
+      await tester.scrollUntilVisible(
+        find.text('刷新状态'),
+        200,
+        scrollable: find.byType(Scrollable),
+      );
+      final refreshButton = tester.widget<TextButton>(
+        find.ancestor(of: find.text('刷新状态'), matching: find.byType(TextButton)),
       );
       expect(refreshButton.onPressed, isNull);
 
-      await tester.tap(find.byIcon(Icons.refresh_outlined));
+      await tester.tap(find.text('刷新状态'));
       expect(refreshCount, 0);
     },
   );
+
+  testWidgets('detail invokes the text status refresh action when granted', (
+    tester,
+  ) async {
+    var refreshCount = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceDetailPage(
+          state: const SessionState(phase: SessionPhase.observable),
+          canRefreshDeviceDetails: true,
+          onRefreshDeviceDetails: () => refreshCount += 1,
+        ),
+      ),
+    );
+
+    await tester.scrollUntilVisible(
+      find.text('刷新状态'),
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+    await tester.tap(find.text('刷新状态'));
+
+    expect(refreshCount, 1);
+  });
 
   testWidgets(
     'detail exposes an explicit authentication command before file access',
@@ -210,47 +257,53 @@ void main() {
       );
 
       await tester.scrollUntilVisible(
-        find.text('设备认证（EVT）'),
+        find.text('设备认证（DVT）'),
         200,
         scrollable: find.byType(Scrollable),
       );
-      expect(find.text('设备认证（EVT）'), findsOneWidget);
+      expect(find.text('设备认证（DVT）'), findsOneWidget);
       await tester.tap(find.text('认证设备'));
       expect(requested, isTrue);
     },
   );
 
-  testWidgets(
-    'EVT unbind confirmation explains that device data is irrecoverable',
-    (tester) async {
-      var resetRequested = false;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: DeviceDetailPage(
-            state: const SessionState(phase: SessionPhase.observable),
-            authState: DeviceAuthState.authenticated,
-            onUnbind: () => resetRequested = true,
-          ),
+  testWidgets('DVT device management expands before unbind confirmation', (
+    tester,
+  ) async {
+    var resetRequested = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceDetailPage(
+          state: const SessionState(phase: SessionPhase.observable),
+          authState: DeviceAuthState.authenticated,
+          onUnbind: () => resetRequested = true,
         ),
-      );
+      ),
+    );
 
-      await tester.scrollUntilVisible(
-        find.text('解绑设备'),
-        200,
-        scrollable: find.byType(Scrollable),
-      );
-      await tester.tap(find.text('解绑设备'));
-      await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('设备管理'),
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byType(ExpansionTile));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设备管理'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('解绑设备'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('解绑设备'));
+    await tester.pumpAndSettle();
 
-      expect(
-        find.text('解绑会清除设备上的录音、绑定凭证和用户配置，且无法恢复。请确认已完成文件同步。'),
-        findsOneWidget,
-      );
+    expect(
+      find.text('解绑会清除设备上的录音、绑定凭证和用户配置，且无法恢复。请确认已完成设备文件归档。'),
+      findsOneWidget,
+    );
 
-      await tester.tap(find.text('继续解绑'));
-      expect(resetRequested, isTrue);
-    },
-  );
+    await tester.tap(find.text('继续解绑'));
+    expect(resetRequested, isTrue);
+  });
 
   testWidgets('EVT pending unbind exposes only the recovery action', (
     tester,
@@ -280,7 +333,7 @@ void main() {
   });
 
   testWidgets(
-    'EVT binding tells the user to confirm on the device before automatic AUTH',
+    'DVT binding tells the user to confirm on the device before automatic AUTH',
     (tester) async {
       await tester.pumpWidget(
         const MaterialApp(
@@ -292,7 +345,7 @@ void main() {
         ),
       );
 
-      expect(find.text('等待设备确认'), findsNWidgets(3));
+      expect(find.text('等待设备确认'), findsOneWidget);
       expect(
         find.text('请在 60 秒内短按设备按键确认。设备确认后，App 会自动完成当前连接认证。'),
         findsOneWidget,
@@ -300,6 +353,31 @@ void main() {
       expect(find.text('正在认证'), findsNothing);
     },
   );
+
+  testWidgets('detail has no layout exception at 360px width', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: DeviceDetailPage(
+          state: SessionState(phase: SessionPhase.observable),
+          authState: DeviceAuthState.authenticated,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.widgetWithText(AppButton, 'DVT 固件升级'),
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+
+    expect(find.text('DVT 专项验证'), findsOneWidget);
+    expect(find.widgetWithText(AppButton, 'DVT 固件升级'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 void _noOp() {}

@@ -37,6 +37,14 @@ import kotlin.collections.component2
 
 private val EVT_FILE_TRANSFER_CHARACTERISTIC_UUID: UUID =
     UUID.fromString("0000ff13-1212-efde-1523-785feabcd123")
+private val DVT_AUDIO_STREAM_CHARACTERISTIC_UUID: UUID =
+    UUID.fromString("0000fa18-1212-efde-1523-785feabcd123")
+private val DVT_ARCHIVE_CHARACTERISTIC_UUID: UUID =
+    UUID.fromString("0000ff16-1212-efde-1523-785feabcd123")
+private val DVT_WQOTA_SERVICE_UUID: UUID =
+    UUID.fromString("00007033-0000-1000-8000-00805f9b34fb")
+private val DVT_WQOTA_RESPONSE_CHARACTERISTIC_UUID: UUID =
+    UUID.fromString("00002002-0000-1000-8000-00805f9b34fb")
 private const val hexadecimalRadix = 16
 
 @VisibleForTesting
@@ -56,11 +64,13 @@ private val EVT_INDICATE_CHARACTERISTIC_UUIDS =
         UUID.fromString("0000fb11-1212-efde-1523-785feabcd123"),
         UUID.fromString("0000ff11-1212-efde-1523-785feabcd123"),
         UUID.fromString("0000ff12-1212-efde-1523-785feabcd123"),
+        DVT_ARCHIVE_CHARACTERISTIC_UUID,
     )
 
 private val EVT_NOTIFY_CHARACTERISTIC_UUIDS =
     setOf(
         EVT_FILE_TRANSFER_CHARACTERISTIC_UUID,
+        DVT_AUDIO_STREAM_CHARACTERISTIC_UUID,
     )
 
 /**
@@ -76,16 +86,39 @@ private val CLIENT_CHARACTERISTIC_CONFIGURATION_UUID: UUID =
     UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
 @VisibleForTesting
-internal fun requiresEvtCccd(characteristicId: UUID): Boolean =
-    characteristicId in EVT_CCCD_REQUIRED_CHARACTERISTIC_UUIDS
+internal fun requiresEvtCccd(
+    characteristicId: UUID,
+    serviceId: UUID? = null,
+): Boolean =
+    characteristicId in EVT_CCCD_REQUIRED_CHARACTERISTIC_UUIDS ||
+        isDvtWqotaResponseCharacteristic(characteristicId, serviceId)
 
 @VisibleForTesting
-internal fun evtNotificationModeFor(characteristicId: UUID): EvtNotificationMode? =
-    when (characteristicId) {
+internal fun evtNotificationModeFor(
+    characteristicId: UUID,
+    serviceId: UUID? = null,
+): EvtNotificationMode? {
+    if (isDvtWqotaResponseCharacteristic(characteristicId, serviceId)) {
+        return EvtNotificationMode.NOTIFY
+    }
+    return when (characteristicId) {
         in EVT_NOTIFY_CHARACTERISTIC_UUIDS -> EvtNotificationMode.NOTIFY
         in EVT_INDICATE_CHARACTERISTIC_UUIDS -> EvtNotificationMode.INDICATE
         else -> null
     }
+}
+
+/**
+ * The WQOTA UUID is a Bluetooth SIG 16-bit UUID. Scope the DVT mapping to
+ * service 0x7033 so an unrelated peripheral's 0x2002 characteristic retains
+ * the plugin's normal property-driven subscription behavior.
+ */
+private fun isDvtWqotaResponseCharacteristic(
+    characteristicId: UUID,
+    serviceId: UUID?,
+): Boolean =
+    characteristicId == DVT_WQOTA_RESPONSE_CHARACTERISTIC_UUID &&
+        serviceId == DVT_WQOTA_SERVICE_UUID
 
 /**
  * EVT channels have a protocol-defined CCC value. Do not use a characteristic
@@ -96,8 +129,9 @@ internal fun evtNotificationModeFor(characteristicId: UUID): EvtNotificationMode
 internal fun requireEvtNotificationMode(
     characteristicId: UUID,
     properties: Int,
+    serviceId: UUID? = null,
 ): EvtNotificationMode? {
-    val expectedMode = evtNotificationModeFor(characteristicId) ?: return null
+    val expectedMode = evtNotificationModeFor(characteristicId, serviceId) ?: return null
     val requiredProperty =
         if (expectedMode == EvtNotificationMode.INDICATE) {
             BluetoothGattCharacteristic.PROPERTY_INDICATE
@@ -119,8 +153,12 @@ internal fun requireEvtNotificationMode(
  * plugin callers keep the historical property-driven behavior.
  */
 @VisibleForTesting
-internal fun shouldPreferIndication(characteristicId: UUID, properties: Int): Boolean =
-    when (evtNotificationModeFor(characteristicId)) {
+internal fun shouldPreferIndication(
+    characteristicId: UUID,
+    properties: Int,
+    serviceId: UUID? = null,
+): Boolean =
+    when (evtNotificationModeFor(characteristicId, serviceId)) {
         EvtNotificationMode.INDICATE -> true
         EvtNotificationMode.NOTIFY -> false
         null -> (properties and BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
@@ -130,8 +168,9 @@ internal fun shouldPreferIndication(characteristicId: UUID, properties: Int): Bo
 internal fun notificationSetupModeFor(
     characteristicId: UUID,
     descriptorUuids: Collection<UUID>,
+    serviceId: UUID? = null,
 ): NotificationSetupMode =
-    if (requiresEvtCccd(characteristicId)) {
+    if (requiresEvtCccd(characteristicId, serviceId)) {
         NotificationSetupMode.DEFAULT
     } else if (descriptorUuids.isEmpty()) {
         NotificationSetupMode.COMPAT
@@ -479,18 +518,21 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
                         characteristicId,
                         characteristicInstanceId,
                     ).flatMapObservable { characteristic ->
+                        val serviceId = characteristic.service?.uuid
                         val descriptorUuids = characteristic.descriptors.map { it.uuid }
                         val cccdPresent =
                             descriptorUuids.any { it == CLIENT_CHARACTERISTIC_CONFIGURATION_UUID }
-                        val requiresCccd = requiresEvtCccd(characteristic.uuid)
+                        val requiresCccd = requiresEvtCccd(characteristic.uuid, serviceId)
                         val mode = notificationSetupModeFor(
                             characteristic.uuid,
                             descriptorUuids,
+                            serviceId,
                         )
                         val expectedEvtMode = try {
                             requireEvtNotificationMode(
                                 characteristic.uuid,
                                 characteristic.properties,
+                                serviceId,
                             )
                         } catch (error: IllegalStateException) {
                             NativeBleLog.error(
@@ -509,12 +551,14 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
                             (expectedEvtMode == null && shouldPreferIndication(
                                 characteristic.uuid,
                                 characteristic.properties,
+                                serviceId,
                             ))
                         NativeBleLog.debug(
                             event = "ccc_configuration_requested",
                             message = "【AIPIN原生BLE】【CCC配置】准备订阅设备响应特征",
                             fields = mapOf(
                                 "device_id" to deviceConnection.deviceId,
+                                "service_uuid" to serviceId?.toString(),
                                 "characteristic_uuid" to characteristic.uuid.toString(),
                                 "properties_hex" to "0x${characteristic.properties.toString(hexadecimalRadix)}",
                                 "response_mode" to if (indication) "indicate" else "notify",
@@ -535,6 +579,7 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
                                 message = "【AIPIN原生BLE】【CCC配置失败】EVT 特征缺少 CCCD",
                                 fields = mapOf(
                                     "device_id" to deviceConnection.deviceId,
+                                    "service_uuid" to serviceId?.toString(),
                                     "characteristic_uuid" to characteristic.uuid.toString(),
                                     "error" to (error.message ?: "unknown"),
                                 ),
@@ -560,6 +605,7 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
                                     message = "【AIPIN原生BLE】【CCC配置完成】系统已完成 EVT 响应特征订阅",
                                     fields = mapOf(
                                         "device_id" to deviceConnection.deviceId,
+                                        "service_uuid" to serviceId?.toString(),
                                         "characteristic_uuid" to characteristic.uuid.toString(),
                                         "response_mode" to if (indication) "indicate" else "notify",
                                         "expected_evt_mode" to expectedEvtMode?.name?.lowercase(),
@@ -574,6 +620,7 @@ open class ReactiveBleClient(private val context: Context) : BleClient {
                                     message = "【AIPIN原生BLE】【CCC配置异常】系统未能完成响应特征订阅",
                                     fields = mapOf(
                                         "device_id" to deviceConnection.deviceId,
+                                        "service_uuid" to serviceId?.toString(),
                                         "characteristic_uuid" to characteristic.uuid.toString(),
                                         "setup_mode" to mode.name,
                                         "error_type" to error.javaClass.simpleName,

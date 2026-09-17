@@ -1,6 +1,5 @@
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 class EvtSecurityCodeSheet extends StatefulWidget {
   const EvtSecurityCodeSheet({
@@ -40,8 +39,9 @@ class _EvtSecurityCodeSheetState extends State<EvtSecurityCodeSheet> {
   var _obscureCode = true;
 
   bool get _isComplete {
-    final value = _controller.text.trim();
-    return value.length == 12 && RegExp(r'^[0-9A-Fa-f]{12}$').hasMatch(value);
+    final value = _controller.text;
+    return (value.length == 6 && RegExp(r'^[\x21-\x7E]{6}$').hasMatch(value)) ||
+        (value.length == 12 && RegExp(r'^[0-9A-Fa-f]{12}$').hasMatch(value));
   }
 
   @override
@@ -64,6 +64,10 @@ class _EvtSecurityCodeSheetState extends State<EvtSecurityCodeSheet> {
             Text(widget.title, style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
             Text(widget.message),
+            const SizedBox(height: 8),
+            const Text(
+              '调试可输入 6 位数字、英文字母或符号（区分大小写，不含空格），例如 123456；也支持 12 位十六进制安全码。',
+            ),
             const SizedBox(height: 20),
             TextField(
               controller: _controller,
@@ -71,31 +75,27 @@ class _EvtSecurityCodeSheetState extends State<EvtSecurityCodeSheet> {
               obscureText: _obscureCode,
               enableSuggestions: false,
               autocorrect: false,
-              textCapitalization: TextCapitalization.characters,
+              textCapitalization: TextCapitalization.none,
               keyboardType: TextInputType.visiblePassword,
               textInputAction: TextInputAction.done,
               maxLength: 12,
-              inputFormatters: <TextInputFormatter>[
-                FilteringTextInputFormatter.allow(RegExp(r'[0-9A-Fa-f]')),
-                LengthLimitingTextInputFormatter(12),
-              ],
               onChanged: (_) => setState(() {}),
               onSubmitted: (_) => _submit(),
               decoration: InputDecoration(
-                labelText: '12 位十六进制安全码',
-                hintText: '例如 7A31C85E92B4',
+                labelText: '安全码（6 位文本 / 12 位十六进制）',
+                hintText: '例如 123456 或 7A31C85E92B4',
                 counterText: '',
                 errorText: _controller.text.isEmpty || _isComplete
                     ? null
-                    : '请输入恰好 12 位十六进制字符',
-                suffixIcon: IconButton(
-                  tooltip: _obscureCode ? '显示认证码' : '隐藏认证码',
-                  icon: Icon(
-                    _obscureCode
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
+                    : '请输入 6 位数字、英文或符号，或 12 位十六进制字符',
+                suffixIcon: SizedBox(
+                  width: 64,
+                  height: 48,
+                  child: TextButton(
+                    onPressed: () =>
+                        setState(() => _obscureCode = !_obscureCode),
+                    child: Text(_obscureCode ? '显示' : '隐藏'),
                   ),
-                  onPressed: () => setState(() => _obscureCode = !_obscureCode),
                 ),
               ),
             ),
@@ -127,8 +127,9 @@ class _EvtSecurityCodeSheetState extends State<EvtSecurityCodeSheet> {
     if (!_isComplete) {
       return;
     }
-    // Normalize the cloud/bench representation before handing it to the
-    // protocol gateway. The gateway converts every pair into one raw byte.
-    Navigator.of(context).pop(_controller.text.trim().toUpperCase());
+    // Preserve case for six ASCII characters: each character is one raw byte.
+    // Only the twelve-character hex representation can be case-normalized.
+    final value = _controller.text;
+    Navigator.of(context).pop(value.length == 12 ? value.toUpperCase() : value);
   }
 }

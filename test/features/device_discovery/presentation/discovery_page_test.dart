@@ -12,6 +12,38 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../../support/fake_ble_transport.dart';
 
 void main() {
+  testWidgets('shows the next scan step and exposes the settings action', (
+    tester,
+  ) async {
+    final transport = FakeBleTransport();
+    final controller = DiscoveryController(
+      transport,
+      const AdvertisementFilter(),
+    );
+    var settingsOpened = false;
+    addTearDown(() async {
+      controller.dispose();
+      await transport.dispose();
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DiscoveryPage(
+          controller: controller,
+          onSettings: () => settingsOpened = true,
+        ),
+      ),
+    );
+
+    expect(find.text('设置'), findsOneWidget);
+    await tester.tap(find.text('设置'));
+    expect(settingsOpened, isTrue);
+
+    await tester.tap(find.widgetWithText(FilledButton, '查找附近设备'));
+    await tester.pump();
+    expect(find.text('正在查找，选中设备后点击底部“连接设备”'), findsOneWidget);
+  });
+
   testWidgets('connection command stays disabled until a device is selected', (
     tester,
   ) async {

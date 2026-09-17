@@ -16,3 +16,10 @@ enum DevicePermission {
 abstract interface class DevicePermissionGate {
   bool allows(DevicePermission permission);
 }
+
+/// Authorizes only an in-flight normal UNBIND that began on an authenticated
+/// connection. Ordinary business permissions remain revoked during cleanup.
+abstract interface class DeviceUnbindPermissionGate
+    implements DevicePermissionGate {
+  bool get allowsPendingUnbind;
+}

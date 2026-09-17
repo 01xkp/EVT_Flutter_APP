@@ -104,6 +104,14 @@ class FakeBleTransport implements BleTransport {
           characteristicUuid: '0000FF13-1212-EFDE-1523-785FEABCD123',
           operations: {BleOperation.write, BleOperation.notify},
         ),
+        // V1.6 DVT makes the metadata/archive-confirmation channel part of
+        // the required GATT contract. Keep the shared ready fixture aligned
+        // with a real peripheral so unrelated session tests reach admission.
+        BleLogicalEndpoint.ff10Ff16: BleEndpoint(
+          serviceUuid: '0000FF10-1212-EFDE-1523-785FEABCD123',
+          characteristicUuid: '0000FF16-1212-EFDE-1523-785FEABCD123',
+          operations: {BleOperation.write, BleOperation.indicate},
+        ),
       },
     );
     return FakeBleTransport(
@@ -167,6 +175,10 @@ class FakeBleTransport implements BleTransport {
             BleDiscoveredCharacteristic(
               uuid: '0000FF13-1212-EFDE-1523-785FEABCD123',
               operations: {BleOperation.write, BleOperation.notify},
+            ),
+            BleDiscoveredCharacteristic(
+              uuid: '0000FF16-1212-EFDE-1523-785FEABCD123',
+              operations: {BleOperation.write, BleOperation.indicate},
             ),
           ],
         ),

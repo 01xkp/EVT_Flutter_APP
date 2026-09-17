@@ -555,7 +555,7 @@ void main() {
     await client.close();
   });
 
-  test('rejects a nonzero AudioStream value before writing in EVT', () async {
+  test('accepts DVT AudioStream enable value before writing', () async {
     final transport = FakeBleTransport();
     final client = EvtCommandClient(
       transport: transport,
@@ -570,25 +570,28 @@ void main() {
       codec: codec,
     );
 
-    await expectLater(
-      repository.writeConfiguration(
-        DeviceConfiguration(
-          systemTime: DateTime.fromMillisecondsSinceEpoch(
-            1_726_000_000_000,
-            isUtc: true,
-          ),
-          recordDurationSeconds: 1800,
-          recordMode: 1,
-          recordType: 2,
-          denoise: false,
-          powerOff: 0,
-          chargingMode: 0,
-          audioStream: 1,
+    final operation = repository.writeConfiguration(
+      DeviceConfiguration(
+        systemTime: DateTime.fromMillisecondsSinceEpoch(
+          1_726_000_000_000,
+          isUtc: true,
         ),
+        recordDurationSeconds: 1800,
+        recordMode: 1,
+        recordType: 2,
+        denoise: false,
+        powerOff: 0,
+        chargingMode: 0,
+        audioStream: 1,
       ),
-      throwsFormatException,
     );
-    expect(transport.writes, isEmpty);
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.writes, hasLength(1));
+    final written = codec.decode(transport.writes.single).value!;
+    expect(written.command, 0x02);
+    expect(written.content.last, 1);
+    transport.emitSubscriptionBytes(codec.encodeRequest(0x82, const [1]));
+    await operation;
     await client.close();
   });
 

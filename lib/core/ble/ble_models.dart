@@ -52,11 +52,15 @@ enum BleLogicalEndpoint {
   fa10Fa15,
   fa10Fa16,
   fa10Fa17,
+  fa10Fa18,
   fa10Fa19,
   fb10Fb11,
   ff10Ff11,
   ff10Ff12,
   ff10Ff13,
+  ff10Ff16,
+  wqota2001,
+  wqota2002,
 }
 
 enum BleConnectionState { connecting, connected, disconnecting, disconnected }

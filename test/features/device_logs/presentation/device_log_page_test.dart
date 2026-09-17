@@ -7,6 +7,40 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('resuming shows entries received while the view was paused', (
+    tester,
+  ) async {
+    final store = _StubLogStore();
+    addTearDown(store.dispose);
+    await tester.pumpWidget(MaterialApp(home: DeviceLogPage(store: store)));
+
+    await tester.tap(find.byTooltip('暂停跟随'));
+    store.emit('received_while_paused');
+    await tester.pump();
+    expect(find.textContaining('received_while_paused'), findsNothing);
+
+    await tester.tap(find.byTooltip('继续跟随'));
+    await tester.pump();
+    expect(find.textContaining('received_while_paused'), findsOneWidget);
+  });
+
+  testWidgets('clearing the view updates it while following is paused', (
+    tester,
+  ) async {
+    final store = _StubLogStore();
+    addTearDown(store.dispose);
+    await tester.pumpWidget(MaterialApp(home: DeviceLogPage(store: store)));
+
+    store.emit('visible_before_pause');
+    await tester.pump();
+    await tester.tap(find.byTooltip('暂停跟随'));
+    await tester.tap(find.byTooltip('清空视图'));
+    await tester.pump();
+
+    expect(find.textContaining('visible_before_pause'), findsNothing);
+    expect(find.text('暂无日志'), findsOneWidget);
+  });
+
   testWidgets('shows live entries, path and view controls', (tester) async {
     final store = _StubLogStore();
     addTearDown(store.dispose);
@@ -63,6 +97,19 @@ void main() {
     expect(path, '/app/logs/aipin-2026-09-08.log');
   });
 
+  testWidgets('export failure is visible to the person running the test', (
+    tester,
+  ) async {
+    final store = _StubLogStore(exportError: StateError('unavailable'));
+    addTearDown(store.dispose);
+    await tester.pumpWidget(MaterialApp(home: DeviceLogPage(store: store)));
+
+    await tester.tap(find.byTooltip('导出日志'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('日志导出失败，请重试。'), findsOneWidget);
+  });
+
   testWidgets(
     'disposing the store cancels its pending write debounce during teardown',
     (tester) async {
@@ -85,10 +132,12 @@ void main() {
 }
 
 class _StubLogStore extends FileAppLogStore {
-  _StubLogStore({this.mirror, this.exportPathValue}) : super(enabled: false);
+  _StubLogStore({this.mirror, this.exportPathValue, this.exportError})
+    : super(enabled: false);
 
   final PublicDiagnosticLogMirrorStatus? mirror;
   final String? exportPathValue;
+  final Object? exportError;
   final List<AppLogEntry> _liveEntries = <AppLogEntry>[];
 
   @override
@@ -106,8 +155,19 @@ class _StubLogStore extends FileAppLogStore {
   }
 
   @override
+  void clearView() {
+    _liveEntries.clear();
+    notifyListeners();
+  }
+
+  @override
   PublicDiagnosticLogMirrorStatus? get publicMirrorStatus => mirror;
 
   @override
-  Future<String?> exportPath() async => exportPathValue;
+  Future<String?> exportPath() async {
+    if (exportError case final error?) {
+      throw error;
+    }
+    return exportPathValue;
+  }
 }

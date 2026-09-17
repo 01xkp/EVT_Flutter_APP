@@ -53,13 +53,17 @@ timeout when no stream subscription is ever requested.
 ## EVT V1.6 CCC mode validation on iOS
 
 CoreBluetooth exposes one `setNotifyValue` API for both notifications and
-indications. The EVT protocol nevertheless assigns a fixed mode: FA11, FA12,
-FA15, FA16, FA17, FA19, FB11, FF11 and FF12 are Indicate; FF13 is Notify.
-The Darwin implementation rejects an EVT characteristic when the expected
-property is missing or when both Notify and Indicate are advertised, because
-iOS cannot select the required CCC value in that ambiguous case. Encryption-
-required variants of either property are reported to Dart as the corresponding
-capability. Android selects the protocol mode explicitly through RxAndroidBle.
+indications. The V1.6 DVT protocol nevertheless assigns a fixed mode: FA11,
+FA12, FA15, FA16, FA17, FA19, FB11, FF11, FF12 and FF16 are Indicate; FA18,
+FF13 and WQOTA `7033/2002` are Notify. The WQOTA mapping is qualified by its
+service UUID because `2002` is a standard 16-bit UUID and must not alter an
+unrelated peripheral. The Darwin implementation rejects a protocol
+characteristic when the expected property is missing or when both Notify and
+Indicate are advertised, because iOS cannot select the required CCC value in
+that ambiguous case. Encryption-required variants of either property are
+reported to Dart as the corresponding capability. Android selects the protocol
+mode explicitly through RxAndroidBle and requires a real CCCD write for all of
+these DVT response channels.
 
 When upgrading the plugin, retain this validation and verify that a malformed
 dual-mode EVT characteristic fails before any command is sent.

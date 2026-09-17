@@ -550,7 +550,7 @@ void main() {
       await tester.pump();
 
       expect(find.text('设备详情'), findsOneWidget);
-      expect(find.text('设备认证（EVT）'), findsOneWidget);
+      expect(find.text('设备认证（DVT）'), findsOneWidget);
       expect(find.widgetWithText(AppButton, '认证设备'), findsOneWidget);
       expect(find.widgetWithText(AppButton, '首次绑定设备'), findsOneWidget);
 
@@ -558,7 +558,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(TextField), findsOneWidget);
-      expect(find.text('12 位十六进制安全码'), findsOneWidget);
+      expect(find.text('安全码（6 位文本 / 12 位十六进制）'), findsOneWidget);
 
       final mirrorsBeforeCancel = appLogStore.publicMirrorSyncCount;
       await tester.tap(find.widgetWithText(AppButton, '取消'));

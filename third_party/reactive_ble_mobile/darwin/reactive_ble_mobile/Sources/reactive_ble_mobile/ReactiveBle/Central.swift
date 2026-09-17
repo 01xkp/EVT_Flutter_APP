@@ -32,6 +32,14 @@ private struct EvtV16NotificationModeError: Error, CustomStringConvertible {
 }
 
 private func evtV16NotificationMode(for characteristic: CBCharacteristic) -> EvtV16NotificationMode? {
+    // 0x2002 is a Bluetooth SIG UUID. It belongs to the DVT WQOTA channel
+    // only when it is published under service 0x7033; other peripherals must
+    // retain the plugin's regular property-driven behavior.
+    if characteristic.uuid == CBUUID(string: "2002"),
+       characteristic.service?.uuid == CBUUID(string: "7033") {
+        return .notify
+    }
+
     // Match the complete custom UUID rather than a short UUID. This keeps the
     // guard scoped to the EVT profile and avoids changing generic plugin use.
     switch characteristic.uuid.uuidString.uppercased() {
@@ -43,9 +51,11 @@ private func evtV16NotificationMode(for characteristic: CBCharacteristic) -> Evt
          "0000FA19-1212-EFDE-1523-785FEABCD123",
          "0000FB11-1212-EFDE-1523-785FEABCD123",
          "0000FF11-1212-EFDE-1523-785FEABCD123",
-         "0000FF12-1212-EFDE-1523-785FEABCD123":
+         "0000FF12-1212-EFDE-1523-785FEABCD123",
+         "0000FF16-1212-EFDE-1523-785FEABCD123":
         return .indicate
-    case "0000FF13-1212-EFDE-1523-785FEABCD123":
+    case "0000FA18-1212-EFDE-1523-785FEABCD123",
+         "0000FF13-1212-EFDE-1523-785FEABCD123":
         return .notify
     default:
         return nil

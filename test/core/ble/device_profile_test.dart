@@ -14,22 +14,26 @@ void main() {
     expect(profile.validationFailure!.kind, EvtFailureKind.access);
   });
 
-  test('profile is ready when all EVT V1.6 endpoints are declared', () {
-    final profile = _evtProfile();
+  test(
+    'profile is ready when all required DVT V1.6 endpoints are declared',
+    () {
+      final profile = _evtProfile();
 
-    expect(profile.isGattReady, isTrue);
-    expect(profile.validationFailure, isNull);
-  });
+      expect(profile.isGattReady, isTrue);
+      expect(profile.validationFailure, isNull);
+    },
+  );
 
-  test('compiled EVT V1.6 profile is ready and immutable for connections', () {
-    final first = DeviceProfile.evtV15();
-    final second = DeviceProfile.evtV15();
+  test('compiled DVT V1.6 profile is ready and immutable for connections', () {
+    final first = DeviceProfile.dvtV16();
+    final second = DeviceProfile.dvtV16();
 
     expect(identical(first, second), isTrue);
+    expect(identical(first, DeviceProfile.evtV16()), isTrue);
     expect(first.isGattReady, isTrue);
     expect(
       first.endpoints.keys,
-      unorderedEquals(DeviceProfile.evtV15EndpointOperations.keys),
+      unorderedEquals(DeviceProfile.dvtV16EndpointOperations.keys),
     );
     expect(
       () => first.endpoints[BleLogicalEndpoint.fa10Fa11] = const BleEndpoint(
@@ -53,7 +57,7 @@ void main() {
   });
 
   test(
-    'profile maps EVT reads and notifications to their documented services',
+    'profile maps DVT archive, audio and WQOTA capabilities to documented services',
     () {
       final profile = _evtProfile();
 
@@ -61,9 +65,30 @@ void main() {
         profile.endpoint(BleLogicalEndpoint.fb10Fb11).serviceUuid,
         '0000FB10-1212-EFDE-1523-785FEABCD123',
       );
+      expect(profile.endpoint(BleLogicalEndpoint.ff10Ff16).serviceUuid, _ff10);
       expect(
-        profile.endpoint(BleLogicalEndpoint.fa10Fa16).serviceUuid,
+        profile.endpoint(BleLogicalEndpoint.ff10Ff16).operations,
+        containsAll(<BleOperation>{BleOperation.write, BleOperation.indicate}),
+      );
+      expect(
+        profile.endpoint(BleLogicalEndpoint.fa10Fa18).serviceUuid,
         '0000FA10-1212-EFDE-1523-785FEABCD123',
+      );
+      expect(
+        profile.endpoint(BleLogicalEndpoint.fa10Fa18).operations,
+        contains(BleOperation.notify),
+      );
+      expect(
+        profile.endpoint(BleLogicalEndpoint.wqota2001).serviceUuid,
+        _wqota,
+      );
+      expect(
+        profile.endpoint(BleLogicalEndpoint.wqota2001).operations,
+        contains(BleOperation.writeWithoutResponse),
+      );
+      expect(
+        profile.endpoint(BleLogicalEndpoint.wqota2002).operations,
+        contains(BleOperation.notify),
       );
     },
   );
@@ -146,7 +171,19 @@ void main() {
     expect(profile.isGattReady, isFalse);
   });
 
-  test('bundled profile declares only the EVT V1.6 endpoint set', () {
+  test('optional DVT validation endpoints do not block GATT readiness', () {
+    final requiredOnly = Map<BleLogicalEndpoint, BleEndpoint>.fromEntries(
+      _evtEndpoints.entries.where(
+        (entry) => DeviceProfile.dvtV16RequiredEndpointOperations.containsKey(
+          entry.key,
+        ),
+      ),
+    );
+
+    expect(_evtProfile(endpoints: requiredOnly).isGattReady, isTrue);
+  });
+
+  test('bundled profile declares the V1.6 DVT endpoint set', () {
     final decoded = jsonDecode(
       File('assets/config/device_profile.json').readAsStringSync(),
     );
@@ -155,13 +192,13 @@ void main() {
     expect(profile.isGattReady, isTrue);
     expect(
       profile.endpoints.keys,
-      unorderedEquals(DeviceProfile.evtV15EndpointOperations.keys),
+      unorderedEquals(DeviceProfile.dvtV16EndpointOperations.keys),
     );
     expect(
       BleLogicalEndpoint.values,
-      unorderedEquals(DeviceProfile.evtV15EndpointOperations.keys),
+      unorderedEquals(DeviceProfile.dvtV16EndpointOperations.keys),
     );
-    for (final entry in DeviceProfile.evtV15EndpointOperations.entries) {
+    for (final entry in DeviceProfile.dvtV16EndpointOperations.entries) {
       expect(
         profile.endpoints[entry.key]!.operations,
         containsAll(entry.value),
@@ -204,6 +241,9 @@ const _fb11 = '0000FB11-1212-EFDE-1523-785FEABCD123';
 const _ff11 = '0000FF11-1212-EFDE-1523-785FEABCD123';
 const _ff12 = '0000FF12-1212-EFDE-1523-785FEABCD123';
 const _ff13 = '0000FF13-1212-EFDE-1523-785FEABCD123';
+const _ff16 = '0000FF16-1212-EFDE-1523-785FEABCD123';
+const _fa18 = '0000FA18-1212-EFDE-1523-785FEABCD123';
+const _wqota = '00007033-0000-1000-8000-00805F9B34FB';
 
 final _evtEndpoints = <BleLogicalEndpoint, BleEndpoint>{
   BleLogicalEndpoint.fa10Fa11: const BleEndpoint(
@@ -231,6 +271,11 @@ final _evtEndpoints = <BleLogicalEndpoint, BleEndpoint>{
     characteristicUuid: _fa17,
     operations: {BleOperation.write, BleOperation.indicate},
   ),
+  BleLogicalEndpoint.fa10Fa18: const BleEndpoint(
+    serviceUuid: _fa10,
+    characteristicUuid: _fa18,
+    operations: {BleOperation.notify},
+  ),
   BleLogicalEndpoint.fa10Fa19: const BleEndpoint(
     serviceUuid: _fa10,
     characteristicUuid: _fa19,
@@ -255,6 +300,21 @@ final _evtEndpoints = <BleLogicalEndpoint, BleEndpoint>{
     serviceUuid: _ff10,
     characteristicUuid: _ff13,
     operations: {BleOperation.write, BleOperation.notify},
+  ),
+  BleLogicalEndpoint.ff10Ff16: const BleEndpoint(
+    serviceUuid: _ff10,
+    characteristicUuid: _ff16,
+    operations: {BleOperation.write, BleOperation.indicate},
+  ),
+  BleLogicalEndpoint.wqota2001: const BleEndpoint(
+    serviceUuid: _wqota,
+    characteristicUuid: '00002001-0000-1000-8000-00805F9B34FB',
+    operations: {BleOperation.writeWithoutResponse},
+  ),
+  BleLogicalEndpoint.wqota2002: const BleEndpoint(
+    serviceUuid: _wqota,
+    characteristicUuid: '00002002-0000-1000-8000-00805F9B34FB',
+    operations: {BleOperation.notify},
   ),
 };
 

@@ -13,9 +13,6 @@ class DriftDeviceFileDownloadCheckpointRepository
 
   @override
   Future<List<DeviceFileDownloadCheckpoint>> allDownloading() async {
-    // `phase` is a historical database column from an earlier archive
-    // prototype. The V1.6 EVT path has only an interruptible download, so any
-    // stored value is treated as resumable.
     final rows = await _database
         .select(_database.deviceFileDownloadCheckpoints)
         .get();
@@ -68,6 +65,7 @@ class DriftDeviceFileDownloadCheckpointRepository
       expectedCrc32: int.parse(row.expectedCrc32),
       receivedBytes: row.receivedBytes,
       updatedAt: row.updatedAt,
+      phase: DeviceFileDownloadPhase.fromStorageValue(row.phase),
     );
   }
 
@@ -82,9 +80,10 @@ class DriftDeviceFileDownloadCheckpointRepository
       expectedLength: checkpoint.expectedLength.toString(),
       expectedCrc32: checkpoint.expectedCrc32.toString(),
       receivedBytes: checkpoint.receivedBytes,
-      // Normalize the historical phase column when this checkpoint is next
-      // saved; V1.6 EVT always resumes through the download path.
-      phase: const Value('downloading'),
+      // This column already existed before the DVT archive layer. EVT keeps
+      // writing `downloading`; DVT uses `readyForArchive` after local CRC
+      // validation and before cloud persistence / device deletion.
+      phase: Value(checkpoint.phase.name),
       updatedAt: checkpoint.updatedAt,
     );
   }
