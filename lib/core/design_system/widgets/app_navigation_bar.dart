@@ -13,8 +13,9 @@ class AppNavigationBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Material(
-      color: Theme.of(context).colorScheme.surface,
+      color: colorScheme.surface,
       child: SafeArea(
         top: false,
         child: Padding(
@@ -28,8 +29,11 @@ class AppNavigationBar extends StatelessWidget {
                     child: TextButton(
                       style: TextButton.styleFrom(
                         minimumSize: const Size(0, 48),
+                        foregroundColor: selected == destination
+                            ? colorScheme.onPrimaryContainer
+                            : colorScheme.secondary,
                         backgroundColor: selected == destination
-                            ? Theme.of(context).colorScheme.primaryContainer
+                            ? colorScheme.primaryContainer
                             : null,
                       ),
                       onPressed: () => onSelected(destination),

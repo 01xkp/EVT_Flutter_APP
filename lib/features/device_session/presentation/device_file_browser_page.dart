@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
 import 'package:aipin/core/design_system/widgets/app_text_action.dart';
+import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
 import 'package:aipin/features/device_session/domain/device_file_import_progress.dart';
 import 'package:aipin/features/local_recording/domain/local_recording.dart';
@@ -167,9 +168,7 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
       return true;
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('手机录音暂时不可读取，请重试')));
+        AppToast.show(context, message: '手机录音暂时不可读取，请重试');
       }
       return false;
     }
@@ -234,15 +233,11 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
       );
       if (mounted) {
         setState(() => _saved[file.name] = saved);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('设备录音已保存到 App')));
+        AppToast.show(context, message: '设备录音已保存到 App');
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('设备文件导入失败，请重试')));
+        AppToast.show(context, message: '设备文件导入失败，请重试');
       }
     } finally {
       if (mounted) {

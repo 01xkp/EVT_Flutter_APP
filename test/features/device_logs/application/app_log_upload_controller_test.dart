@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:aipin/core/diagnostics/diagnostic_trace.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
@@ -14,9 +15,10 @@ void main() {
   test(
     'creates a private snapshot then uploads it with safe diagnostics',
     () async {
-      final store = _FakeLogStore(
-        snapshotPath: '/private/aipin-2026-09-16-10-00-00.log',
-      );
+      final snapshot = await File(
+        '${Directory.systemTemp.path}${Platform.pathSeparator}evt-upload-success-${DateTime.now().microsecondsSinceEpoch}.log',
+      ).create();
+      final store = _FakeLogStore(snapshotPath: snapshot.path);
       final uploader = _FakeUploader();
       final logger = _CapturingLogger();
       final controller = AppLogUploadController(
@@ -28,7 +30,8 @@ void main() {
       final receipt = await controller.uploadLatest();
 
       expect(store.snapshotRequests, 1);
-      expect(uploader.paths, ['/private/aipin-2026-09-16-10-00-00.log']);
+      expect(uploader.paths, [snapshot.path]);
+      expect(await snapshot.exists(), isFalse);
       expect(receipt.bytes, 42);
       expect(logger.events, contains('app_log_upload_requested'));
       expect(logger.events, contains('app_log_upload_succeeded'));
@@ -36,10 +39,30 @@ void main() {
         logger.fields.expand(
           (fields) => fields.values.map((value) => '$value'),
         ),
-        isNot(contains('/private/aipin-2026-09-16-10-00-00.log')),
+        isNot(contains(snapshot.path)),
       );
     },
   );
+
+  test('removes a private snapshot when the upload fails', () async {
+    final snapshot = await File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}evt-upload-failure-${DateTime.now().microsecondsSinceEpoch}.log',
+    ).create();
+    final controller = AppLogUploadController(
+      store: _FakeLogStore(snapshotPath: snapshot.path),
+      uploader: _FakeUploader(
+        failure: const AppLogUploadFailure(AppLogUploadFailureCode.connection),
+      ),
+      logger: _CapturingLogger(),
+    );
+
+    await expectLater(
+      controller.uploadLatest(),
+      throwsA(isA<AppLogUploadFailure>()),
+    );
+
+    expect(await snapshot.exists(), isFalse);
+  });
 
   test('does not create a snapshot when uploading is not configured', () async {
     final store = _FakeLogStore(

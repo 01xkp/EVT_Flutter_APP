@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/features/local_recording/domain/audio_player_port.dart';
 import 'package:flutter/material.dart';
 
@@ -216,9 +217,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     } catch (_) {
       _setPlaybackState(AudioPlaybackState.idle);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(widget.playbackErrorMessage)));
+        AppToast.show(context, message: widget.playbackErrorMessage);
       }
     }
   }
@@ -234,9 +233,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
       await _audioPlayer.seek(target);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('无法调整录音播放进度。')));
+        AppToast.show(context, message: '无法调整录音播放进度。');
       }
     }
   }

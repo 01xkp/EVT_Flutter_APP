@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:aipin/core/design_system/widgets/app_confirmation_sheet.dart';
 import 'package:aipin/core/design_system/widgets/app_text_action.dart';
+import 'package:aipin/core/design_system/widgets/app_toast.dart';
 
 import '../data/file_app_log_store.dart';
 import '../domain/app_log_entry.dart';
@@ -136,11 +137,7 @@ class _DeviceLogPageState extends State<DeviceLogPage> {
       if (path == null) throw StateError('No log file');
       await widget.onExport?.call(path);
     } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('日志导出失败，请重试。')));
-      }
+      if (mounted) AppToast.show(context, message: '日志导出失败，请重试。');
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
@@ -159,20 +156,14 @@ class _DeviceLogPageState extends State<DeviceLogPage> {
     try {
       final receipt = await widget.onUpload!();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('日志已上报（${_formatBytes(receipt.bytes)}）')),
-      );
+      AppToast.show(context, message: '日志已上报（${_formatBytes(receipt.bytes)}）');
     } on AppLogUploadFailure catch (failure) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(failure.userMessage)));
+        AppToast.show(context, message: failure.userMessage);
       }
     } on Object {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('日志上报失败，请重试。')));
+        AppToast.show(context, message: '日志上报失败，请重试。');
       }
     } finally {
       if (mounted) setState(() => _uploading = false);

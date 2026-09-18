@@ -106,6 +106,22 @@ void main() {
     expect(find.text('0:20'), findsOneWidget);
     expect(player.playedPaths, ['/recordings/example.ogg']);
   });
+
+  testWidgets('playback failure uses a toast instead of a SnackBar', (
+    tester,
+  ) async {
+    final player = FakeAudioPlayer()
+      ..playDuration = const Duration(seconds: 20)
+      ..playError = StateError('decoder unavailable');
+    await _open(tester, player);
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('播放录音'));
+    await tester.pump();
+
+    expect(find.text('设备录音暂时无法播放。'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+  });
 }
 
 Future<void> _open(WidgetTester tester, FakeAudioPlayer player) =>

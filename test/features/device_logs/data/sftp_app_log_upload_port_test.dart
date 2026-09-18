@@ -38,12 +38,9 @@ void main() {
     expect(session.localPath, snapshot.path);
     expect(
       session.temporaryRemotePath,
-      '/files/.aipin-2026-09-16-10-00-00-a1b2c3d4.log.part',
+      '/files/.aipin-2026-09-16-10-00-00.log.a1b2c3d4.part',
     );
-    expect(
-      session.finalRemotePath,
-      '/files/aipin-2026-09-16-10-00-00-a1b2c3d4.log',
-    );
+    expect(session.finalRemotePath, '/files/aipin-2026-09-16-10-00-00.log');
     expect(session.closed, isTrue);
   });
 

@@ -330,7 +330,9 @@ class DiagnosticSanitizer {
       'request_bytes',
       'response_bytes',
     },
-    'DEVICE_API': {'host'},
+    // Host names are transport/configuration data and must never enter the
+    // persisted or uploaded diagnostic contract.
+    'DEVICE_API': <String>{},
     'FILE': {'chunk_length', 'total_bytes'},
     'RECONNECT': {'phase', 'failure_category', 'cycle'},
     'SESSION': {'mode', 'utc_seconds'},

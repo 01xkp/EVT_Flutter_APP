@@ -80,6 +80,29 @@ void main() {
     expect(path, '/app/logs/aipin-2026-09-08.log');
   });
 
+  testWidgets('export failure uses a toast instead of a SnackBar', (
+    tester,
+  ) async {
+    final store = _StubLogStore(
+      exportPathValue: '/app/logs/aipin-2026-09-08.log',
+    );
+    addTearDown(store.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceLogPage(
+          store: store,
+          onExport: (_) async => throw StateError('share unavailable'),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('导出日志'));
+    await tester.pump();
+
+    expect(find.text('日志导出失败，请重试。'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+  });
+
   testWidgets('upload action confirms and blocks duplicate taps while active', (
     tester,
   ) async {
@@ -112,6 +135,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.textContaining('日志已上报（2.0 KB）'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
   });
 
   testWidgets(

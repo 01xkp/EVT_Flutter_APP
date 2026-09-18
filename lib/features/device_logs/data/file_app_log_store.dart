@@ -349,7 +349,8 @@ class FileAppLogStore extends ChangeNotifier
     final snapshot = File(
       '${directory.path}${Platform.pathSeparator}$stem$suffix.log',
     );
-    await _writeRedactedSnapshot(_currentFile!, snapshot);
+    final canonicalFiles = await _retainedCanonicalLogFiles();
+    await _writeRedactedSnapshots(canonicalFiles, snapshot);
     // Upload copies have their own retention budget and never enter MediaStore.
     files.sort(
       (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
@@ -367,15 +368,24 @@ class FileAppLogStore extends ChangeNotifier
   /// Outside the app-private Debug log, raw BLE bytes must never travel to
   /// public storage, user exports, or the upload transport.
   Future<void> _writeRedactedSnapshot(File source, File destination) async {
+    await _writeRedactedSnapshots(<File>[source], destination);
+  }
+
+  Future<void> _writeRedactedSnapshots(
+    Iterable<File> sources,
+    File destination,
+  ) async {
     var completed = false;
     final output = destination.openWrite(encoding: utf8);
     try {
-      await for (final line
-          in source
-              .openRead()
-              .transform(utf8.decoder)
-              .transform(const LineSplitter())) {
-        output.writeln(_sanitizeExternalLine(line));
+      for (final source in sources) {
+        await for (final line
+            in source
+                .openRead()
+                .transform(utf8.decoder)
+                .transform(const LineSplitter())) {
+          output.writeln(_sanitizeExternalLine(line));
+        }
       }
       await output.flush();
       completed = true;
@@ -389,6 +399,51 @@ class FileAppLogStore extends ChangeNotifier
         }
       }
     }
+  }
+
+  Future<List<File>> _retainedCanonicalLogFiles() async {
+    final directory = _logDirectory;
+    if (directory == null) {
+      return const <File>[];
+    }
+    final files = <File>[];
+    await for (final entry in directory.list()) {
+      if (entry is File &&
+          _logFilenamePattern.hasMatch(entry.uri.pathSegments.last)) {
+        files.add(entry);
+      }
+    }
+
+    // Keep the upload bounded by the same retention policy as canonical log
+    // storage, then order the selected files oldest-to-newest. A larger
+    // rotation suffix is older than `.1`, while the unsuffixed file is current.
+    files.sort(
+      (left, right) =>
+          right.statSync().modified.compareTo(left.statSync().modified),
+    );
+    final retained = files
+        .take(keepFiles < 1 ? 1 : keepFiles)
+        .toList(growable: false);
+    return retained..sort(_compareCanonicalLogFiles);
+  }
+
+  int _compareCanonicalLogFiles(File left, File right) {
+    final leftName = left.uri.pathSegments.last;
+    final rightName = right.uri.pathSegments.last;
+    final leftBase = leftName.replaceFirst(RegExp(r'\.log\.\d+$'), '.log');
+    final rightBase = rightName.replaceFirst(RegExp(r'\.log\.\d+$'), '.log');
+    final baseOrder = leftBase.compareTo(rightBase);
+    if (baseOrder != 0) {
+      return baseOrder;
+    }
+    final leftRotation = _rotationIndex(leftName);
+    final rightRotation = _rotationIndex(rightName);
+    return rightRotation.compareTo(leftRotation);
+  }
+
+  int _rotationIndex(String name) {
+    final match = RegExp(r'\.log\.(\d+)$').firstMatch(name);
+    return int.tryParse(match?.group(1) ?? '') ?? 0;
   }
 
   String _sanitizeExternalLine(String line) {

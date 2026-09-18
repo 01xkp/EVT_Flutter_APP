@@ -52,6 +52,7 @@ void main() {
             .every((button) => button.onPressed != null),
         isTrue,
       );
+      expect(find.byType(SnackBar), findsNothing);
     },
   );
 
@@ -121,6 +122,7 @@ void main() {
 
     expect(imported, isTrue);
     expect(find.text('设备录音已保存到 App'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
     expect(find.text('已保存到手机'), findsOneWidget);
     expect(find.text('保存到 App'), findsNothing);
     await tester.tap(find.text('播放'));

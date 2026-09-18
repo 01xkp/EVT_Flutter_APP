@@ -152,12 +152,14 @@ class SftpAppLogUploadPort implements AppLogUploadPort {
     if (!RegExp(r'^[a-f0-9]{8,32}$').hasMatch(requestId)) {
       throw const AppLogUploadFailure(AppLogUploadFailureCode.invalidSnapshot);
     }
-    final remoteFilename =
-        '${filename.substring(0, filename.length - '.log'.length)}-$requestId.log';
+    // Keep the published filename readable and timestamp-based. The request
+    // id is retained only on the hidden temporary path so concurrent uploads
+    // cannot collide before the final rename.
+    final remoteFilename = filename;
     final finalRemotePath =
         '${configuration.normalizedRemoteDirectory}/$remoteFilename';
     final temporaryRemotePath =
-        '${configuration.normalizedRemoteDirectory}/.$remoteFilename.part';
+        '${configuration.normalizedRemoteDirectory}/.$remoteFilename.$requestId.part';
 
     SftpLogUploadSession? session;
     try {

@@ -507,6 +507,18 @@ void main() {
     });
   });
 
+  test('does not persist device API host values', () {
+    final fields = const DiagnosticSanitizer().sanitize(
+      scope: 'DEVICE_API',
+      fields: const <String, Object?>{
+        'host': 'api.example.test',
+        'http_status': 200,
+      },
+    );
+
+    expect(fields, <String, Object?>{'http_status': 200});
+  });
+
   test('preserves safe current and generated semantic event identifiers', () {
     const cases = <String, String>{
       'service discovery start': 'service_discovery_start',

@@ -12,7 +12,8 @@ import 'package:aipin/features/device_logs/application/app_log_logger.dart';
 import 'package:aipin/features/device_logs/application/app_log_upload_controller.dart';
 import 'package:aipin/features/device_logs/data/file_app_log_store.dart';
 import 'package:aipin/features/device_logs/data/platform_public_diagnostic_log_sink.dart';
-import 'package:aipin/features/device_logs/data/sftp_app_log_upload_port.dart';
+import 'package:aipin/features/device_logs/data/https_app_log_upload_port.dart';
+import 'package:aipin/features/device_logs/data/unconfigured_app_log_upload_port.dart';
 import 'package:aipin/features/device_logs/domain/app_log_upload_port.dart';
 import 'package:aipin/features/device_session/data/drift_device_file_download_checkpoint_repository.dart';
 import 'package:aipin/features/device_session/domain/device_file_download_checkpoint_repository.dart';
@@ -53,8 +54,12 @@ final scopedAppLoggerProvider = Provider.family<SafeAppLogger, String>((
 });
 
 final appLogUploadPortProvider = Provider<AppLogUploadPort>((ref) {
-  return SftpAppLogUploadPort(
-    configuration: SftpLogUploadConfiguration.fromEnvironment(),
+  final configuration = EvtLogUploadServiceConfiguration.uploadConfiguration();
+  if (configuration == null) {
+    return const UnconfiguredAppLogUploadPort();
+  }
+  return HttpsAppLogUploadPort(
+    configuration: configuration,
     snapshotValidator: ref.watch(appLogStoreProvider),
   );
 });

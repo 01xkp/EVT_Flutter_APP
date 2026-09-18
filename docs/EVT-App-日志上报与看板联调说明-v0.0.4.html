@@ -157,9 +157,9 @@
       <tbody>
         <tr><td>实时日志页 → 上传日志</td><td>打开确认框，不立即传输。</td><td>用户可取消；取消后不会创建快照或发送网络请求。</td></tr>
         <tr><td>确认上传</td><td>生成应用私有目录中的不可变脱敏快照，再开始传输。</td><td>按钮显示“正在上传”，导出和再次上传暂时不可点击。</td></tr>
-        <tr><td>上传成功</td><td>服务端完成临时文件改名后返回成功。</td><td>显示“日志已上报（大小）”，可继续导出或再次上传。</td></tr>
-        <tr><td>网络、超时、认证或主机指纹失败</td><td>App 只记录稳定错误码，不显示服务器路径、账号、私钥或底层异常。</td><td>显示可执行的中文提示，用户可以重新点击上传。</td></tr>
-        <tr><td>Release/Profile 包</td><td>不持久化 Debug 运行日志，也不会启用 SFTP 上报配置。</td><td>显示“日志上报尚未配置，请联系联调人员。”</td></tr>
+        <tr><td>上传成功</td><td>服务端以 App 生成的时间文件名接收快照，并用不透明存储键安全保存后返回成功。</td><td>显示“日志已上报（大小）”，可继续导出或再次上传。</td></tr>
+        <tr><td>网络、超时或认证失败</td><td>App 只记录稳定错误码，不显示服务器路径、账号、token 或底层异常。</td><td>显示可执行的中文提示，用户可以重新点击上传。</td></tr>
+        <tr><td>Release/Profile 包</td><td>不持久化 Debug 运行日志，也不会启用日志上报配置。</td><td>显示“日志上报尚未配置，请联系联调人员。”</td></tr>
       </tbody>
     </table>
 
@@ -167,8 +167,8 @@
     <div class="flow">
       <div class="step"><strong>1. 实时日志</strong>用户进入设备详情的“实时日志”。</div><div class="arrow">→</div>
       <div class="step"><strong>2. 脱敏快照</strong>移除原始协议字节和敏感字段。</div><div class="arrow">→</div>
-      <div class="step"><strong>3. SFTP 上传</strong>固定主机指纹，先写 <code>.part</code>。</div><div class="arrow">→</div>
-      <div class="step"><strong>4. 完成文件</strong>同目录原子改名为 <code>.log</code>。</div><div class="arrow">→</div>
+      <div class="step"><strong>3. HTTPS 上传</strong>使用 Bearer token 发送时间命名的脱敏快照。</div><div class="arrow">→</div>
+      <div class="step"><strong>4. 服务端保存</strong>服务端以唯一 <code>storage_key</code> 原子保存，来源文件名保持可读。</div><div class="arrow">→</div>
       <div class="step"><strong>5. 看板读取</strong>服务端解析并经 HTTPS 提供给 Vue 看板。</div>
     </div>
 
@@ -178,20 +178,20 @@
       <table>
         <thead><tr><th>日志文件 / 功能节点</th><th>结果</th><th>关键数据</th><th>看板动作</th></tr></thead>
         <tbody>
-          <tr><td><strong>aipin-2026-09-17-11-24-09-a1b2c3d4.log</strong><br><span class="subtle">App 0.0.4+5 · Android · 2.0 KB</span></td><td><span class="status good">已解析</span></td><td>3 个成功节点，0 个失败节点</td><td>展开、查看详情、导出脱敏日志</td></tr>
+          <tr><td><strong>aipin-2026-09-17-11-24-09.log</strong><br><span class="subtle">App 0.0.4+5 · Android · 2.0 KB</span></td><td><span class="status good">已解析</span></td><td>3 个成功节点，0 个失败节点</td><td>展开、查看详情、导出脱敏日志</td></tr>
           <tr><td>&nbsp;&nbsp;└ 认证与订阅</td><td><span class="status good">联调成功</span></td><td>FA19 · 0x09 / 0x89 · 12 ms</td><td>查看 App 下发摘要与设备回包摘要</td></tr>
           <tr><td>&nbsp;&nbsp;└ 设备文件下载</td><td><span class="status warn">需要复核</span></td><td>收到分片，未见完成事件</td><td>查看缺失事件与同时间段固件日志</td></tr>
-          <tr><td>&nbsp;&nbsp;└ 运行日志上报</td><td><span class="status good">联调成功</span></td><td>2048 B · 临时文件已改名</td><td>查看上传耗时与服务端接收时间</td></tr>
+          <tr><td>&nbsp;&nbsp;└ 运行日志上报</td><td><span class="status good">联调成功</span></td><td>2048 B · 时间文件名已保存</td><td>查看上传耗时与服务端接收时间</td></tr>
         </tbody>
       </table>
     </section>
 
     <h2>联调配置和权限</h2>
     <ul>
-      <li>当前 App 直连 SFTP 只限受控 Debug 包。构建参数中的主机、端口、账号、目录、主机指纹和私钥不能提交到仓库或发送到聊天记录。</li>
-      <li>App 上传账号只需要创建、写入、同目录改名和删除临时文件；不需要列目录或下载权限。</li>
+      <li>当前 App 通过 HTTPS API 上传，仅限受控 Debug 包。上传 token 不能提交到仓库或发送到聊天记录。</li>
+      <li>服务端上传接口只接受合法的时间文件名，并使用唯一 <code>storage_key</code> 避免同名覆盖；App 不需要访问服务器目录。</li>
       <li>日志接入服务或看板后端使用独立的读取账号，并通过 HTTPS 给浏览器提供列表、详情和下载接口。</li>
-      <li>真实端到端联调前，服务器需要提供专用账号、公钥授权、主机 SHA-256 指纹、上传目录、网络可达性和 20 MiB 文件限制确认。</li>
+      <li>真实端到端联调前，服务器需要提供 HTTPS 入口、上传 token、看板读取认证、网络可达性和 20 MiB 文件限制确认。</li>
     </ul>
 
     <p><a href="qa/evt-log-upload-configuration.md">查看 App 受控构建配置</a> · <a href="qa/evt-log-service-dashboard-requirements.md">查看服务端与接口契约</a> · <a href="prototypes/evt-log-dashboard-prototype.html">打开可交互日志看板原型</a> · <a href="EVT-App-功能使用说明-v0.0.4.html">返回设备 BLE 功能图解</a></p>

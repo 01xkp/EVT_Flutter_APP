@@ -1,4 +1,5 @@
 import 'package:aipin/core/design_system/widgets/app_button.dart';
+import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/core/design_system/widgets/status_label.dart';
 import 'package:aipin/core/protocol/device_event.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
@@ -175,9 +176,7 @@ class _ObservationPageState extends State<ObservationPage> {
     } catch (_) {
       if (mounted) {
         setState(() => _isSaving = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('保存失败，请重试。')));
+        AppToast.show(context, message: '保存失败，请重试。');
       }
     }
   }

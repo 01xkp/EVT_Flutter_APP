@@ -1,4 +1,6 @@
 import 'package:aipin/app/app_destination.dart';
+import 'package:aipin/core/design_system/evt_colors.dart';
+import 'package:aipin/core/design_system/evt_theme.dart';
 import 'package:aipin/core/design_system/widgets/app_navigation_bar.dart';
 import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
 import 'package:flutter/material.dart';
@@ -25,6 +27,56 @@ void main() {
       AppDestination.home,
       AppDestination.records,
     ]);
+  });
+
+  testWidgets('selected tab uses a readable foreground in both theme modes', (
+    tester,
+  ) async {
+    for (final theme in [EvtTheme.light(), EvtTheme.dark()]) {
+      for (final selected in AppDestination.values) {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Theme(
+              data: theme,
+              child: Scaffold(
+                bottomNavigationBar: AppNavigationBar(
+                  selected: selected,
+                  onSelected: (_) {},
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final selectedLabel = selected == AppDestination.home ? '首页' : '检查记录';
+        final unselectedLabel = selected == AppDestination.home ? '检查记录' : '首页';
+        final selectedButton = tester.widget<TextButton>(
+          find.widgetWithText(TextButton, selectedLabel),
+        );
+        final unselectedButton = tester.widget<TextButton>(
+          find.widgetWithText(TextButton, unselectedLabel),
+        );
+        final expectedForeground = theme.brightness == Brightness.light
+            ? EvtLightColors.primaryText
+            : EvtDarkColors.primaryText;
+        final expectedBackground = theme.brightness == Brightness.light
+            ? EvtLightColors.subtle
+            : EvtDarkColors.subtle;
+
+        expect(
+          selectedButton.style?.foregroundColor?.resolve(<WidgetState>{}),
+          expectedForeground,
+        );
+        expect(
+          selectedButton.style?.backgroundColor?.resolve(<WidgetState>{}),
+          expectedBackground,
+        );
+        expect(
+          unselectedButton.style?.foregroundColor?.resolve(<WidgetState>{}),
+          theme.colorScheme.secondary,
+        );
+      }
+    }
   });
 
   testWidgets('surface card exposes an accessible tap target', (tester) async {

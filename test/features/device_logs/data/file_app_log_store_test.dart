@@ -272,6 +272,77 @@ void main() {
   );
 
   test(
+    'upload snapshot merges retained rotated segments oldest to current',
+    () async {
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        maxFileBytes: 1,
+        keepFiles: 3,
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
+      addTearDown(() async {
+        await store.close();
+        store.dispose();
+      });
+
+      store.info(
+        'first_segment',
+        scope: 'BLE',
+        fields: const {'raw_packet_hex': 'ED 04 00 89 01 2E AC'},
+      );
+      await store.flush();
+      store.info('second_segment', scope: 'CMD');
+      await store.flush();
+      store.info('third_segment', scope: 'SESSION');
+      await store.flush();
+
+      final path = await store.createUploadSnapshot();
+      expect(path, endsWith('aipin-2026-09-01-12-00-00.log'));
+      expect(
+        path,
+        contains('${Platform.pathSeparator}uploads${Platform.pathSeparator}'),
+      );
+      expect(await store.isTrustedSnapshot(path!), isTrue);
+      final content = await File(path).readAsString();
+      final first = content.indexOf('first_segment');
+      final second = content.indexOf('second_segment');
+      final third = content.indexOf('third_segment');
+      expect(first, greaterThanOrEqualTo(0));
+      expect(second, greaterThan(first));
+      expect(third, greaterThan(second));
+      expect(content, contains('raw_packet_hex=omitted'));
+      expect(content, isNot(contains('ED 04 00 89 01 2E AC')));
+    },
+  );
+
+  test(
+    'names repeated upload snapshots by time and same-second sequence',
+    () async {
+      final store = FileAppLogStore(
+        supportDirectoryProvider: () async => root,
+        enabled: true,
+        clock: () => DateTime.utc(2026, 9, 1, 12),
+      );
+      addTearDown(() async {
+        await store.close();
+        store.dispose();
+      });
+
+      store.info('upload_name_check');
+      await store.flush();
+
+      final first = await store.createUploadSnapshot();
+      final second = await store.createUploadSnapshot();
+
+      expect(first, endsWith('aipin-2026-09-01-12-00-00.log'));
+      expect(second, endsWith('aipin-2026-09-01-12-00-00-01.log'));
+      expect(await store.isTrustedSnapshot(first!), isTrue);
+      expect(await store.isTrustedSnapshot(second!), isTrue);
+    },
+  );
+
+  test(
     'switches to a new daily file when a running session crosses midnight',
     () async {
       var now = DateTime.utc(2026, 9, 1, 23, 59, 59);

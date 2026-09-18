@@ -35,5 +35,6 @@ ios/Flutter/.last_build_id
 .idea/
 android/hs_err_pid*.log
 
-# Local SFTP upload credentials. Keep the private key outside Git.
+# Local log upload credentials. Keep tokens outside Git.
+tool/log-upload.local.env
 tool/log-upload.local.json

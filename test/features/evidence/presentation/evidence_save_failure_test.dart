@@ -41,6 +41,7 @@ void main() {
         await tester.tap(save);
         await tester.pumpAndSettle();
         expect(find.text('保存失败，请重试。'), findsOneWidget);
+        expect(find.byType(SnackBar), findsNothing);
         expect(find.text('已保存'), findsNothing);
         if (manual) expect(find.text('按键反馈正常'), findsOneWidget);
         repository.shouldFail = false;

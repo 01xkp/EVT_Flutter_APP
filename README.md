@@ -65,7 +65,7 @@ Download/AIPIN/logs/aipin-YYYY-MM-DD.log.txt
 
 Android 6–9 仅在用户导出且需要权限时请求存储权限；应用私有日志不受该权限影响。当前 EVT Debug 包会在私有 canonical 日志的 `raw_packet_hex` 中保留 App 到设备和设备到 App 的完整原始字节，因此其中可能包含认证码、文件名和音频数据，仅可用于受控联调，不得对外分享。手动导出、副本镜像和上传快照都会移除该字段；结构化字段仍只保留脱敏设备引用，不写入完整 MAC 或 CoreBluetooth UUID；Release/Profile 构建不会持久化该日志。
 
-实时日志页的“上传日志”仅由用户手动触发。它会从当前私有日志生成独立脱敏快照后再上传，不会触发 Android 公共目录镜像或存储权限申请。SFTP 连接参数、服务器主机指纹和私钥仅能通过受控 Debug 构建注入；详细配置见[日志上报配置](docs/qa/evt-log-upload-configuration.md)，服务端和看板边界见[日志服务与看板服务端需求](docs/qa/evt-log-service-dashboard-requirements.md)。
+实时日志页的“上传日志”仅由用户手动触发。它会从当前私有日志生成独立脱敏快照后通过 HTTPS API 上传，不会触发 Android 公共目录镜像或存储权限申请。上传 token 仅能通过受控 Debug 构建注入；详细配置见[日志上报配置](docs/qa/evt-log-upload-configuration.md)，服务端和看板边界见[日志服务与看板服务端需求](docs/qa/evt-log-service-dashboard-requirements.md)。
 
 ## 验证
 

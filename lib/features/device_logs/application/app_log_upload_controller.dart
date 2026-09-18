@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_logs/domain/app_log_store.dart';
 import 'package:aipin/features/device_logs/domain/app_log_upload_port.dart';
@@ -75,6 +77,15 @@ class AppLogUploadController {
       const failure = AppLogUploadFailure(AppLogUploadFailureCode.transfer);
       _logFailure(failure);
       throw failure;
+    } finally {
+      // The store creates these private snapshots, but they are immutable
+      // transport inputs rather than user-visible exports. Remove each one
+      // after the attempt; cleanup must never mask the upload result/code.
+      try {
+        await File(snapshotPath).delete();
+      } on Object {
+        // A failed cleanup is recoverable and must not hide the upload result.
+      }
     }
   }
 

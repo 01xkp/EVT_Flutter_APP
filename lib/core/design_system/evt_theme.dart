@@ -66,6 +66,8 @@ abstract final class EvtTheme {
       onPrimary: brightness == Brightness.light
           ? EvtLightColors.surface
           : EvtDarkColors.canvas,
+      primaryContainer: subtle,
+      onPrimaryContainer: primaryText,
       secondary: secondaryText,
       onSecondary: canvas,
       error: danger,
