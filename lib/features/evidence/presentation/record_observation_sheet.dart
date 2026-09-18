@@ -1,5 +1,6 @@
 import 'package:aipin/core/protocol/device_event.dart';
 import 'package:aipin/core/design_system/widgets/app_button.dart';
+import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/core/design_system/widgets/status_label.dart';
 import 'package:aipin/features/device_session/domain/device_snapshot.dart';
 import 'package:aipin/features/evidence/domain/evidence_bundle.dart';
@@ -160,6 +161,7 @@ class _RecordObservationSheetState extends State<RecordObservationSheet> {
     } catch (_) {
       if (mounted) {
         setState(() => _isSaving = false);
+        AppToast.show(context, message: '保存失败，请重试。');
       }
     }
   }

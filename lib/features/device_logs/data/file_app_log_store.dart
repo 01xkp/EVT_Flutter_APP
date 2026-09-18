@@ -8,9 +8,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:aipin/core/diagnostics/diagnostic_event.dart';
 import '../domain/app_log_entry.dart';
 import '../domain/app_log_store.dart';
+import '../domain/app_log_upload_port.dart';
 import '../domain/public_diagnostic_log_sink.dart';
 
-class FileAppLogStore extends ChangeNotifier implements AppLogStore {
+class FileAppLogStore extends ChangeNotifier
+    implements AppLogStore, AppLogUploadSnapshotValidator {
   static const _mirrorFailureLogInterval = Duration(minutes: 5);
   static const _defaultWriteDebounce = Duration(milliseconds: 200);
   static const _defaultMirrorDebounce = Duration(seconds: 10);
@@ -21,6 +23,17 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   );
   static final _mirrorSnapshotFilenamePattern = RegExp(
     r'^aipin-\d{4}-\d{2}-\d{2}\.log(?:\.\d+)?\.mirror-\d+-\d+$',
+  );
+  static final _exportFilenamePattern = RegExp(
+    r'^aipin-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d+)?\.log$',
+  );
+  static final _rawPacketHexFieldPattern = RegExp(
+    r'raw_packet_hex=(?:empty|[0-9A-F]{2}(?: [0-9A-F]{2})*)',
+    caseSensitive: false,
+  );
+  static final _rawPacketHexJsonFieldPattern = RegExp(
+    r'"raw_packet_hex":"(?:empty|[0-9A-F]{2}(?: [0-9A-F]{2})*)"',
+    caseSensitive: false,
   );
 
   FileAppLogStore({
@@ -58,6 +71,7 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
       StreamController<AppLogEntry>.broadcast();
   Future<void> _writeQueue = Future<void>.value();
   Future<void> _mirrorQueue = Future<void>.value();
+  Future<void> _exportQueue = Future<void>.value();
   final StringBuffer _pendingLines = StringBuffer();
   Directory? _logDirectory;
   File? _currentFile;
@@ -171,20 +185,278 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   }
 
   @override
-  Future<String?> exportPath() async {
-    await initialize();
-    await flush();
-    await _flushPublicMirror(requestPermission: true);
-    // Mirroring can add one bounded STORAGE diagnostic. Persist it before the
-    // caller receives the canonical path.
-    await flush();
-    return currentFilePath;
+  Future<String?> exportPath() {
+    final export = _exportQueue.then((_) => _exportSnapshot());
+    _exportQueue = export.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return export;
   }
 
-  /// Mirrors the current Debug log without opening a storage permission
-  /// dialog. Security-operation terminal states use this so an Android 10+
-  /// device exposes the complete BLE exchange in Download/AIPIN/logs while
-  /// Android 6-9 continues to keep the canonical log privately until export.
+  @override
+  Future<String?> createUploadSnapshot() {
+    final snapshot = _exportQueue.then((_) => _uploadSnapshot());
+    _exportQueue = snapshot.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return snapshot;
+  }
+
+  @override
+  Future<bool> isTrustedSnapshot(String snapshotPath) async {
+    await initialize();
+    final logDirectory = _logDirectory;
+    if (logDirectory == null) {
+      return false;
+    }
+    final snapshot = File(snapshotPath);
+    if (!_exportFilenamePattern.hasMatch(snapshot.uri.pathSegments.last)) {
+      return false;
+    }
+    final uploadDirectory = Directory(
+      '${logDirectory.path}${Platform.pathSeparator}uploads',
+    );
+    try {
+      final resolvedUploadDirectory = await uploadDirectory
+          .resolveSymbolicLinks();
+      final resolvedSnapshot = await snapshot.resolveSymbolicLinks();
+      return File(resolvedSnapshot).parent.path == resolvedUploadDirectory;
+    } on FileSystemException {
+      return false;
+    }
+  }
+
+  Future<String?> _exportSnapshot() async {
+    await initialize();
+    await flush();
+    if (_currentFile == null) {
+      return null;
+    }
+    // Serialize the copy with appends and rotation so each export is immutable.
+    final copy = _writeQueue.then((_) => _createExportSnapshot());
+    _writeQueue = copy.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    final snapshot = await copy;
+    await _flushPublicMirror(requestPermission: true, exportFile: snapshot);
+    // Keep any storage diagnostic in the canonical log for the next export.
+    await flush();
+    return snapshot.path;
+  }
+
+  Future<String?> _uploadSnapshot() async {
+    await initialize();
+    await flush();
+    if (_currentFile == null) {
+      return null;
+    }
+    // Use the same write queue as exports so the uploaded file cannot include
+    // a partial append or rotation. This path intentionally avoids MediaStore.
+    final snapshot = _writeQueue.then((_) => _createUploadSnapshot());
+    _writeQueue = snapshot.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return (await snapshot).path;
+  }
+
+  Future<File> _createExportSnapshot() async {
+    final now = _clock();
+    final date = _dailyLogFilename(now).replaceFirst('.log', '');
+    final time = [
+      now.hour,
+      now.minute,
+      now.second,
+    ].map((part) => part.toString().padLeft(2, '0')).join('-');
+    final stem = '$date-$time';
+    final directory = Directory(
+      '${_logDirectory!.path}${Platform.pathSeparator}exports',
+    );
+    await directory.create(recursive: true);
+    final files = await directory
+        .list()
+        .where(
+          (entry) =>
+              entry is File &&
+              _exportFilenamePattern.hasMatch(entry.uri.pathSegments.last),
+        )
+        .cast<File>()
+        .toList();
+    final sameSecond = RegExp('^${RegExp.escape(stem)}(?:-([0-9]+))?\\.log\$');
+    var sequence = 0;
+    for (final file in files) {
+      final match = sameSecond.firstMatch(file.uri.pathSegments.last);
+      if (match != null) {
+        final next = (int.tryParse(match.group(1) ?? '0') ?? 0) + 1;
+        if (next > sequence) sequence = next;
+      }
+    }
+    final suffix = sequence == 0
+        ? ''
+        : '-${sequence.toString().padLeft(2, '0')}';
+    final snapshot = File(
+      '${directory.path}${Platform.pathSeparator}$stem$suffix.log',
+    );
+    await _writeRedactedSnapshot(_currentFile!, snapshot);
+    // Export copies have their own retention budget, independent of daily logs.
+    files.sort(
+      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+    );
+    for (final file in files.skip(keepFiles > 0 ? keepFiles - 1 : 0)) {
+      try {
+        await file.delete();
+      } on FileSystemException {
+        // A locked old export must not prevent delivering the new snapshot.
+      }
+    }
+    return snapshot;
+  }
+
+  Future<File> _createUploadSnapshot() async {
+    final now = _clock();
+    final date = _dailyLogFilename(now).replaceFirst('.log', '');
+    final time = [
+      now.hour,
+      now.minute,
+      now.second,
+    ].map((part) => part.toString().padLeft(2, '0')).join('-');
+    final stem = '$date-$time';
+    final directory = Directory(
+      '${_logDirectory!.path}${Platform.pathSeparator}uploads',
+    );
+    await directory.create(recursive: true);
+    final files = await directory
+        .list()
+        .where(
+          (entry) =>
+              entry is File &&
+              _exportFilenamePattern.hasMatch(entry.uri.pathSegments.last),
+        )
+        .cast<File>()
+        .toList();
+    final sameSecond = RegExp('^${RegExp.escape(stem)}(?:-([0-9]+))?\\.log\$');
+    var sequence = 0;
+    for (final file in files) {
+      final match = sameSecond.firstMatch(file.uri.pathSegments.last);
+      if (match != null) {
+        final next = (int.tryParse(match.group(1) ?? '0') ?? 0) + 1;
+        if (next > sequence) sequence = next;
+      }
+    }
+    final suffix = sequence == 0
+        ? ''
+        : '-${sequence.toString().padLeft(2, '0')}';
+    final snapshot = File(
+      '${directory.path}${Platform.pathSeparator}$stem$suffix.log',
+    );
+    final canonicalFiles = await _retainedCanonicalLogFiles();
+    await _writeRedactedSnapshots(canonicalFiles, snapshot);
+    // Upload copies have their own retention budget and never enter MediaStore.
+    files.sort(
+      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+    );
+    for (final file in files.skip(keepFiles > 0 ? keepFiles - 1 : 0)) {
+      try {
+        await file.delete();
+      } on FileSystemException {
+        // A locked old snapshot must not prevent the current upload attempt.
+      }
+    }
+    return snapshot;
+  }
+
+  /// Outside the app-private Debug log, raw BLE bytes must never travel to
+  /// public storage, user exports, or the upload transport.
+  Future<void> _writeRedactedSnapshot(File source, File destination) async {
+    await _writeRedactedSnapshots(<File>[source], destination);
+  }
+
+  Future<void> _writeRedactedSnapshots(
+    Iterable<File> sources,
+    File destination,
+  ) async {
+    var completed = false;
+    final output = destination.openWrite(encoding: utf8);
+    try {
+      for (final source in sources) {
+        await for (final line
+            in source
+                .openRead()
+                .transform(utf8.decoder)
+                .transform(const LineSplitter())) {
+          output.writeln(_sanitizeExternalLine(line));
+        }
+      }
+      await output.flush();
+      completed = true;
+    } finally {
+      await output.close();
+      if (!completed && await destination.exists()) {
+        try {
+          await destination.delete();
+        } on Object {
+          // A failed cleanup does not expose the source file publicly.
+        }
+      }
+    }
+  }
+
+  Future<List<File>> _retainedCanonicalLogFiles() async {
+    final directory = _logDirectory;
+    if (directory == null) {
+      return const <File>[];
+    }
+    final files = <File>[];
+    await for (final entry in directory.list()) {
+      if (entry is File &&
+          _logFilenamePattern.hasMatch(entry.uri.pathSegments.last)) {
+        files.add(entry);
+      }
+    }
+
+    // Keep the upload bounded by the same retention policy as canonical log
+    // storage, then order the selected files oldest-to-newest. A larger
+    // rotation suffix is older than `.1`, while the unsuffixed file is current.
+    files.sort(
+      (left, right) =>
+          right.statSync().modified.compareTo(left.statSync().modified),
+    );
+    final retained = files
+        .take(keepFiles < 1 ? 1 : keepFiles)
+        .toList(growable: false);
+    return retained..sort(_compareCanonicalLogFiles);
+  }
+
+  int _compareCanonicalLogFiles(File left, File right) {
+    final leftName = left.uri.pathSegments.last;
+    final rightName = right.uri.pathSegments.last;
+    final leftBase = leftName.replaceFirst(RegExp(r'\.log\.\d+$'), '.log');
+    final rightBase = rightName.replaceFirst(RegExp(r'\.log\.\d+$'), '.log');
+    final baseOrder = leftBase.compareTo(rightBase);
+    if (baseOrder != 0) {
+      return baseOrder;
+    }
+    final leftRotation = _rotationIndex(leftName);
+    final rightRotation = _rotationIndex(rightName);
+    return rightRotation.compareTo(leftRotation);
+  }
+
+  int _rotationIndex(String name) {
+    final match = RegExp(r'\.log\.(\d+)$').firstMatch(name);
+    return int.tryParse(match?.group(1) ?? '') ?? 0;
+  }
+
+  String _sanitizeExternalLine(String line) {
+    return line
+        .replaceAll(_rawPacketHexFieldPattern, 'raw_packet_hex=omitted')
+        .replaceAll(
+          _rawPacketHexJsonFieldPattern,
+          '"raw_packet_hex":"omitted"',
+        );
+  }
+
+  /// Mirrors redacted Debug diagnostics without opening a storage permission
+  /// dialog. The app-private canonical file remains the only raw-packet log.
   Future<void> syncPublicMirror() async {
     await flush();
     await _flushPublicMirror(requestPermission: false);
@@ -345,7 +617,8 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
       '${file.path}.mirror-${_clock().microsecondsSinceEpoch}-${_mirrorSnapshotSequence++}',
     );
     try {
-      return await file.copy(snapshot.path);
+      await _writeRedactedSnapshot(file, snapshot);
+      return snapshot;
     } on Object {
       return null;
     }
@@ -394,32 +667,42 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
   void _queuePendingMirror({
     required bool force,
     required bool requestPermission,
+    File? exportFile,
   }) {
     _mirrorQueue = _mirrorQueue.then(
       (_) => _mirrorPendingFile(
         force: force,
         requestPermission: requestPermission,
+        exportFile: exportFile,
       ),
     );
   }
 
-  Future<void> _flushPublicMirror({required bool requestPermission}) async {
+  Future<void> _flushPublicMirror({
+    required bool requestPermission,
+    File? exportFile,
+  }) async {
     _mirrorTimer?.cancel();
     _mirrorTimer = null;
-    _queuePendingMirror(force: true, requestPermission: requestPermission);
+    _queuePendingMirror(
+      force: true,
+      requestPermission: requestPermission,
+      exportFile: exportFile,
+    );
     await _mirrorQueue;
   }
 
   Future<void> _mirrorPendingFile({
     required bool force,
     required bool requestPermission,
+    File? exportFile,
   }) async {
     if (!_mirrorPending && !force) {
       return;
     }
     _mirrorPending = false;
     final sink = _publicDiagnosticLogSink;
-    final file = _currentFile;
+    final file = exportFile ?? _currentFile;
     if (!_enabled || sink == null || file == null) {
       return;
     }
@@ -434,17 +717,30 @@ class FileAppLogStore extends ChangeNotifier implements AppLogStore {
     }
     _lastMirrorAttemptAt = now;
     final previousFailureCode = _lastMirrorFailureCode;
-    try {
-      _publicMirrorStatus = await _mirrorWithTimeout(
-        sink,
-        sourcePath: file.path,
-        filename: file.uri.pathSegments.last,
-        requestPermission: requestPermission,
-      );
-    } on Object {
+    final snapshot = await _createMirrorSnapshot(file);
+    if (snapshot == null) {
       _publicMirrorStatus = PublicDiagnosticLogMirrorStatus.failure(
         'storage_error',
       );
+    } else {
+      try {
+        _publicMirrorStatus = await _mirrorWithTimeout(
+          sink,
+          sourcePath: snapshot.path,
+          filename: file.uri.pathSegments.last,
+          requestPermission: requestPermission,
+        );
+      } on Object {
+        _publicMirrorStatus = PublicDiagnosticLogMirrorStatus.failure(
+          'storage_error',
+        );
+      } finally {
+        try {
+          await snapshot.delete();
+        } on Object {
+          // Stale redacted snapshots are cleaned on the next app start.
+        }
+      }
     }
     if (_closedStream) {
       return;

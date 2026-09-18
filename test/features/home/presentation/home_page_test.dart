@@ -19,12 +19,10 @@ void main() {
         ),
       ),
     );
-
     for (final label in ['设备录音文件', '已保存录音', '实时日志']) {
       await tester.ensureVisible(find.text(label));
       await tester.tap(find.text(label));
     }
-
     expect(opened, ['device', 'local', 'logs']);
   });
 
@@ -41,7 +39,6 @@ void main() {
         ),
       ),
     );
-
     await tester.tap(find.text('设置'));
 
     expect(opened, isTrue);

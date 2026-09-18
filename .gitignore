@@ -34,3 +34,7 @@ ios/Flutter/.last_build_id
 # Local tooling and crash reports
 .idea/
 android/hs_err_pid*.log
+
+# Local log upload credentials. Keep tokens outside Git.
+tool/log-upload.local.env
+tool/log-upload.local.json

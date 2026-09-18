@@ -41,6 +41,7 @@ class DeviceRecordingDetailPage extends StatelessWidget {
               ),
             )
           : AudioPlaybackPanel(
+              key: ValueKey(recording.id),
               duration: duration,
               resolvePath: () => files.absolutePathFor(recording.relativePath),
               audioPlayerFactory: audioPlayerFactory,

@@ -236,6 +236,18 @@ class _AppShellState extends ConsumerState<AppShell>
                 onOpenLogs: _openDeviceLogs,
                 onOpenSavedRecordings: () =>
                     unawaited(_openSavedDeviceRecordings()),
+                onOpenFiles: () {
+                  if (session == null) {
+                    _openConnectionJourney();
+                  } else if (_deviceAuthController?.allows(
+                        DevicePermission.files,
+                      ) !=
+                      true) {
+                    _openSessionDashboard(session);
+                  } else {
+                    unawaited(_openDeviceFiles(session));
+                  }
+                },
                 onOpenDevice: session == null
                     ? null
                     : () => _openSessionDashboard(session),
@@ -1157,6 +1169,7 @@ class _AppShellState extends ConsumerState<AppShell>
 
   Future<void> _openDeviceLogs() async {
     final store = ref.read(appLogStoreProvider);
+    final uploadController = ref.read(appLogUploadControllerProvider);
     await store.initialize();
     if (!mounted) {
       return;
@@ -1166,6 +1179,7 @@ class _AppShellState extends ConsumerState<AppShell>
         builder: (_) => DeviceLogPage(
           store: store,
           onExport: (_) => _showLogExportResult(store),
+          onUpload: uploadController.uploadLatest,
         ),
       ),
     );
@@ -1180,7 +1194,7 @@ class _AppShellState extends ConsumerState<AppShell>
         : null;
     AppToast.show(
       context,
-      message: publicPath == null ? '日志已刷新到应用内部存储' : '日志已更新到 $publicPath',
+      message: publicPath == null ? '脱敏日志已导出到应用内部存储' : '脱敏日志已更新到 $publicPath',
     );
   }
 
@@ -1211,7 +1225,9 @@ class _AppShellState extends ConsumerState<AppShell>
       return;
     }
     try {
-      await session.refreshDeviceDetails(const {DevicePermission.status});
+      await session.refreshDeviceDetails(
+        _deviceAuthController!.grantedPermissions,
+      );
     } catch (_) {
       if (mounted) {
         AppToast.show(context, message: '设备状态刷新失败，请重试');

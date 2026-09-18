@@ -15,7 +15,6 @@ void main() {
     final controller = EvidenceHistoryController(repository);
     addTearDown(controller.dispose);
     await controller.load();
-
     await tester.pumpWidget(
       MaterialApp(home: RecordsPage(evidenceController: controller)),
     );
@@ -52,7 +51,6 @@ void main() {
     );
     addTearDown(controller.dispose);
     await controller.load();
-
     await tester.pumpWidget(
       MaterialApp(home: RecordsPage(evidenceController: controller)),
     );
@@ -62,7 +60,6 @@ void main() {
     expect(find.textContaining('未收到停止录音响应'), findsOneWidget);
     expect(find.textContaining('缺少设备状态'), findsOneWidget);
   });
-
   testWidgets('shows device activity without a local recording tab', (
     tester,
   ) async {
@@ -92,7 +89,6 @@ void main() {
 
 class _FailingHistoryRepository extends FakeEvidenceRepository {
   bool shouldFail = true;
-
   @override
   Future<List<EvidenceBundle>> all() async {
     if (shouldFail) {

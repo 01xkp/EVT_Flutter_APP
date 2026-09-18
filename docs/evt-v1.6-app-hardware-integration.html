@@ -615,7 +615,7 @@ CRC = 对 CMD + Content 计算 CRC-16/CCITT-FALSE
           <thead><tr><th>平台场景</th><th>当前 App 处理</th><th>联调时应确认</th></tr></thead>
           <tbody>
             <tr><td>Android 6 - 11 扫描</td><td>按系统版本请求位置权限，并检查系统定位服务状态。</td><td>授权后能扫描到 Legacy 广播和 Scan Response；拒绝权限时页面给出明确提示。</td></tr>
-            <tr><td>Android 12 及以上</td><td>请求 <code>BLUETOOTH_SCAN</code> 和 <code>BLUETOOTH_CONNECT</code> 附近设备权限。Manifest 移除了依赖可能加入的 <code>neverForLocation</code> 标记，以保留完整扫描结果。</td><td>首次授权、关闭蓝牙、重新打开蓝牙、已配对/未配对设备都能走正确提示和连接流程。</td></tr>
+            <tr><td>Android 12 及以上</td><td>请求 <code>BLUETOOTH_SCAN</code> 和 <code>BLUETOOTH_CONNECT</code> 附近设备权限。Manifest 保留 <code>neverForLocation</code>，与不申请定位权限的运行时策略保持一致；否则底层扫描库还会要求精确定位权限并返回未授权。</td><td>首次授权、关闭蓝牙、重新打开蓝牙、已配对/未配对设备都能走正确提示和连接流程；使用真机确认主广播和 Scan Response 可被接收。</td></tr>
             <tr><td>Android 连接 ID</td><td>通常可见 MAC，但 App 不假定所有设备或 Android 版本都永久稳定；回连优先使用广播物理地址。</td><td>同一设备重启或 App 重启后，回连仍能匹配到相同硬件。</td></tr>
             <tr><td>iOS 蓝牙权限</td><td>Info.plist 声明蓝牙使用说明，使用 CoreBluetooth 授权和扫描。</td><td>首次授权、拒绝授权、系统蓝牙关闭与再次开启后，用户可重新扫描。</td></tr>
             <tr><td>iOS 打开蓝牙</td><td>App 不能直接开启系统蓝牙；只能引导用户在系统设置或控制中心开启后返回 App。</td><td>不要把 iOS 的系统限制误认为固件或 App BLE 写入失败。</td></tr>

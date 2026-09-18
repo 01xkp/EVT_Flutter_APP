@@ -186,13 +186,6 @@ class _DeviceSummaryContent extends StatelessWidget {
         const SizedBox(height: 12),
         Row(
           children: [
-            Icon(switch (device.status) {
-              DeviceSummaryStatus.connected => Icons.bluetooth_connected,
-              DeviceSummaryStatus.reconnecting => Icons.bluetooth_searching,
-              DeviceSummaryStatus.reconnectFailed => Icons.bluetooth_disabled,
-              _ => Icons.bluetooth_outlined,
-            }),
-            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -210,8 +203,6 @@ class _DeviceSummaryContent extends StatelessWidget {
               ),
             ),
             Text(actionLabel, style: Theme.of(context).textTheme.labelLarge),
-            const SizedBox(width: 4),
-            const Icon(Icons.arrow_forward, size: 18),
           ],
         ),
       ],
@@ -234,8 +225,6 @@ class _ActionRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon),
-        const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

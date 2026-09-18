@@ -13,22 +13,40 @@ class AppNavigationBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return NavigationBar(
-      selectedIndex: selected.index,
-      onDestinationSelected: (index) =>
-          onSelected(AppDestination.values[index]),
-      destinations: const [
-        NavigationDestination(
-          icon: Icon(Icons.home_outlined),
-          selectedIcon: Icon(Icons.home),
-          label: '首页',
+    final colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: colorScheme.surface,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              for (final destination in AppDestination.values)
+                Expanded(
+                  child: Semantics(
+                    selected: selected == destination,
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(0, 48),
+                        foregroundColor: selected == destination
+                            ? colorScheme.onPrimaryContainer
+                            : colorScheme.secondary,
+                        backgroundColor: selected == destination
+                            ? colorScheme.primaryContainer
+                            : null,
+                      ),
+                      onPressed: () => onSelected(destination),
+                      child: Text(
+                        destination == AppDestination.home ? '首页' : '检查记录',
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
-        NavigationDestination(
-          icon: Icon(Icons.fact_check_outlined),
-          selectedIcon: Icon(Icons.fact_check),
-          label: '设备活动',
-        ),
-      ],
+      ),
     );
   }
 }

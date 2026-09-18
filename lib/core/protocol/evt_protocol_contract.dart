@@ -18,8 +18,10 @@ abstract final class EvtProtocolContract {
   static const protocolVersion = evtV16ProtocolVersion;
   static const legacySecurityCodeBytes = 6;
 
-  /// 480B file data + offset(4) + length(2) + command(1) + CRC(2).
-  /// Includes the smaller DVT audio and archive response frames.
+  /// Largest response in the enabled EVT subset: 0xA3 carries up to 480B
+  /// FileData plus FileOffset (4B), DataLength (2B), CMD (1B), CRC (2B).
+  /// File lists are at most 424B and device information at most 130B.
+  /// This limit also safely contains the smaller DVT audio and archive frames.
   static const maxResponseLengthField = 489;
 
   static const businessCommands = <int>{

@@ -65,7 +65,7 @@ import UIKit
       sourcePath: String,
       filename: String
     ) -> [String: Any] {
-      guard isValidDailyLogFilename(filename) else {
+      guard isValidLogFilename(filename) else {
         return mirrorFailure("invalid_filename")
       }
 
@@ -84,7 +84,7 @@ import UIKit
         let source = canonicalURL(URL(fileURLWithPath: sourcePath))
         guard
           isDescendant(source, of: canonicalApplicationSupportDirectory),
-          source.lastPathComponent == filename
+          isValidLogSourceName(source.lastPathComponent, for: filename)
         else {
           return mirrorFailure("invalid_source")
         }
@@ -139,9 +139,21 @@ import UIKit
       }
     }
 
-    private static func isValidDailyLogFilename(_ filename: String) -> Bool {
+    private static func isValidLogFilename(_ filename: String) -> Bool {
       filename.range(
-          of: "^aipin-[0-9]{4}-[0-9]{2}-[0-9]{2}\\.log(?:\\.[0-9]+)?$",
+          of: "^aipin-[0-9]{4}-[0-9]{2}-[0-9]{2}(?:-[0-9]{2}-[0-9]{2}-[0-9]{2}(?:-[0-9]+)?)?\\.log(?:\\.[0-9]+)?$",
+        options: .regularExpression
+      ) != nil
+    }
+
+    private static func isValidLogSourceName(_ sourceName: String, for filename: String) -> Bool {
+      if sourceName == filename { return true }
+      // Rotation copies are immutable while queued for mirroring. Their source
+      // slot may differ from the destination slot after the next rotation.
+      let stem = filename.components(separatedBy: ".log")[0]
+      let escapedStem = NSRegularExpression.escapedPattern(for: stem)
+      return sourceName.range(
+        of: "^\(escapedStem)\\.log(?:\\.[0-9]+)?\\.mirror-[0-9]+-[0-9]+$",
         options: .regularExpression
       ) != nil
     }

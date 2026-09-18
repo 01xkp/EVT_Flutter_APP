@@ -18,14 +18,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-
     expect(find.text('需要开启'), findsOneWidget);
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     permissions.state = AppPermissionState.granted;
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
-
     expect(find.text('已开启'), findsOneWidget);
     expect(find.text('需要开启'), findsNothing);
   });
@@ -42,7 +40,6 @@ void main() {
 
 class _MutablePermissions implements AppPermissionGateway {
   AppPermissionState state = AppPermissionState.denied;
-
   @override
   Future<AppPermissionState> nearbyDevices() async => state;
 

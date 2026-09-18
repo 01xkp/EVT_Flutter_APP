@@ -1,0 +1,2094 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>AIPIN EVT 日志联调看板原型</title>
+    <style>
+      :root {
+        --canvas: #f5f7fa;
+        --surface: #ffffff;
+        --surface-soft: #f8fafc;
+        --ink: #172033;
+        --muted: #667085;
+        --line: #dce3eb;
+        --line-strong: #bac6d5;
+        --brand: #0f766e;
+        --brand-soft: #e8f6f3;
+        --success: #147a55;
+        --success-soft: #eaf7ef;
+        --warning: #a86100;
+        --warning-soft: #fff6e8;
+        --danger: #bd2c2c;
+        --danger-soft: #fff0f0;
+        --info: #3867a8;
+        --info-soft: #edf4ff;
+        --shadow: 0 10px 28px rgba(30, 41, 59, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-width: 320px;
+        margin: 0;
+        background: var(--canvas);
+        color: var(--ink);
+        font-family: Inter, "Microsoft YaHei", "PingFang SC", sans-serif;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .topbar {
+        min-height: 58px;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+      }
+
+      .topbar-inner,
+      .page {
+        width: min(1480px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .topbar-inner {
+        display: flex;
+        min-height: 58px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .brand {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .brand img {
+        width: 32px;
+        height: 32px;
+        border-radius: 7px;
+        object-fit: cover;
+      }
+
+      .brand-title {
+        color: var(--ink);
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .brand-subtitle {
+        margin-top: 1px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .topbar-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--success);
+      }
+
+      .page {
+        padding: 24px 0 42px;
+      }
+
+      .page-heading {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 20px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .page-description {
+        max-width: 700px;
+        margin: 7px 0 0;
+        color: var(--muted);
+      }
+
+      .file-count {
+        color: var(--muted);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .summary-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        overflow: hidden;
+        margin-bottom: 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .summary-item {
+        min-height: 76px;
+        padding: 14px 18px;
+        border-right: 1px solid var(--line);
+      }
+
+      .summary-item:last-child {
+        border-right: 0;
+      }
+
+      .summary-label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .summary-value {
+        margin-top: 4px;
+        color: var(--ink);
+        font-size: 21px;
+        font-weight: 700;
+      }
+
+      .summary-note {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px 8px 0 0;
+        background: var(--surface);
+      }
+
+      .field {
+        display: grid;
+        gap: 5px;
+      }
+
+      .field label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .control {
+        height: 34px;
+        border: 1px solid var(--line-strong);
+        border-radius: 5px;
+        background: var(--surface);
+        color: var(--ink);
+        outline: none;
+      }
+
+      .control:focus {
+        border-color: var(--brand);
+        box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+      }
+
+      select.control {
+        min-width: 128px;
+        padding: 0 28px 0 10px;
+      }
+
+      input.control {
+        width: 260px;
+        padding: 0 10px;
+      }
+
+      .toolbar-spacer {
+        flex: 1 1 16px;
+      }
+
+      .button {
+        display: inline-flex;
+        height: 34px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 12px;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        background: var(--brand);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .button:hover {
+        background: #0b625c;
+      }
+
+      .button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      .button.secondary {
+        border-color: var(--line-strong);
+        background: var(--surface);
+        color: var(--ink);
+      }
+
+      .button.secondary:hover {
+        border-color: var(--brand);
+        background: var(--brand-soft);
+      }
+
+      .hidden-input {
+        display: none;
+      }
+
+      .table-shell {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-top: 0;
+        border-radius: 0 0 8px 8px;
+        background: var(--surface);
+      }
+
+      table {
+        width: 100%;
+        min-width: 1090px;
+        border-collapse: collapse;
+      }
+
+      th {
+        height: 42px;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--line);
+        background: #f8fafc;
+        color: #475467;
+        font-size: 12px;
+        font-weight: 600;
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      td {
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+
+      tbody > tr:last-child > td {
+        border-bottom: 0;
+      }
+
+      .parent-row:hover > td {
+        background: #fbfdfd;
+      }
+
+      .file-cell {
+        display: flex;
+        min-width: 270px;
+        align-items: flex-start;
+        gap: 9px;
+      }
+
+      .file-cell > div,
+      .drawer-header > div:first-child {
+        min-width: 0;
+      }
+
+      .expander {
+        display: inline-grid;
+        width: 24px;
+        height: 24px;
+        flex: 0 0 24px;
+        place-items: center;
+        padding: 0;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1;
+      }
+
+      .expander:hover {
+        border-color: var(--brand);
+        color: var(--brand);
+      }
+
+      .file-name {
+        overflow: hidden;
+        color: var(--ink);
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .file-meta {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric {
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .metric-subtle {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status {
+        display: inline-flex;
+        min-height: 25px;
+        align-items: center;
+        padding: 0 8px;
+        border: 1px solid transparent;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .status.success {
+        border-color: #bfe7d0;
+        background: var(--success-soft);
+        color: var(--success);
+      }
+
+      .status.waiting {
+        border-color: #f0d19c;
+        background: var(--warning-soft);
+        color: var(--warning);
+      }
+
+      .status.failure {
+        border-color: #f2c6c6;
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      .status.grouped {
+        border-color: #c9d9ee;
+        background: var(--info-soft);
+        color: var(--info);
+      }
+
+      .status.muted {
+        border-color: var(--line);
+        background: var(--surface-soft);
+        color: var(--muted);
+      }
+
+      .row-action {
+        min-width: 70px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--brand);
+        font-weight: 650;
+      }
+
+      .row-action:hover {
+        text-decoration: underline;
+      }
+
+      .row-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .expanded-cell {
+        padding: 0;
+        background: var(--surface-soft);
+      }
+
+      .flow-table {
+        min-width: 0;
+        border-collapse: separate;
+        border-spacing: 0;
+      }
+
+      .flow-table th {
+        height: 34px;
+        background: #eef4f7;
+        color: #536271;
+        font-size: 11px;
+      }
+
+      .flow-table td {
+        padding: 10px 14px;
+        background: var(--surface-soft);
+      }
+
+      .flow-table tbody tr:hover td {
+        background: #f0f8f7;
+      }
+
+      .flow-title {
+        color: var(--ink);
+        font-weight: 650;
+      }
+
+      .flow-note {
+        max-width: 390px;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .direction-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+
+      .direction {
+        display: inline-flex;
+        min-height: 23px;
+        align-items: center;
+        padding: 0 7px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+        color: #44546a;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .direction.app {
+        border-color: #bed8f8;
+        background: #eff7ff;
+        color: #2466a5;
+      }
+
+      .direction.device {
+        border-color: #bfe6d2;
+        background: #effaf4;
+        color: #187650;
+      }
+
+      .direction.system {
+        border-color: #d5dce5;
+        background: #fafbfd;
+        color: #64748b;
+      }
+
+      .empty-state {
+        padding: 42px 24px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .drawer-backdrop {
+        position: fixed;
+        z-index: 10;
+        inset: 0;
+        display: none;
+        background: rgba(15, 23, 42, 0.35);
+      }
+
+      .drawer-backdrop.visible {
+        display: block;
+      }
+
+      .drawer {
+        position: fixed;
+        z-index: 11;
+        top: 0;
+        right: 0;
+        display: flex;
+        width: min(560px, 100vw);
+        height: 100vh;
+        flex-direction: column;
+        border-left: 1px solid var(--line);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        transform: translateX(100%);
+        transition: transform 180ms ease;
+      }
+
+      .drawer.open {
+        transform: translateX(0);
+      }
+
+      .drawer-header {
+        display: flex;
+        min-height: 68px;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 17px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .drawer-title {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .drawer-subtitle {
+        margin: 4px 0 0;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .drawer-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .close-button {
+        display: grid;
+        width: 30px;
+        height: 30px;
+        flex: 0 0 30px;
+        place-items: center;
+        padding: 0;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 18px;
+      }
+
+      .close-button:hover {
+        border-color: var(--brand);
+        color: var(--brand);
+      }
+
+      .drawer-body {
+        overflow-y: auto;
+        padding: 20px;
+      }
+
+      .export-notice {
+        position: fixed;
+        z-index: 20;
+        right: 20px;
+        bottom: 20px;
+        max-width: min(360px, calc(100vw - 40px));
+        padding: 10px 13px;
+        border: 1px solid #bfe7d0;
+        border-radius: 6px;
+        background: var(--success-soft);
+        box-shadow: 0 8px 22px rgba(30, 41, 59, 0.14);
+        color: var(--success);
+        font-size: 13px;
+        font-weight: 600;
+        opacity: 0;
+        overflow-wrap: anywhere;
+        pointer-events: none;
+        transform: translateY(8px);
+        transition: opacity 160ms ease, transform 160ms ease;
+      }
+
+      .export-notice.warning {
+        border-color: #f0d19c;
+        background: var(--warning-soft);
+        color: var(--warning);
+      }
+
+      .export-notice.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--line);
+      }
+
+      .detail-metric {
+        min-height: 62px;
+        padding: 10px 12px;
+        background: var(--surface);
+      }
+
+      .detail-metric-label {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .detail-metric-value {
+        margin-top: 4px;
+        font-weight: 700;
+      }
+
+      .detail-section {
+        margin-top: 22px;
+      }
+
+      .detail-section h3 {
+        margin: 0 0 10px;
+        color: #344054;
+        font-size: 13px;
+      }
+
+      .conclusion {
+        padding: 12px 13px;
+        border-left: 3px solid var(--brand);
+        background: #f0f8f7;
+        color: #28414a;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 8px;
+      }
+
+      .timeline-event {
+        display: grid;
+        grid-template-columns: 69px 1fr;
+        gap: 10px;
+      }
+
+      .event-time {
+        padding-top: 4px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        text-align: right;
+      }
+
+      .event-card {
+        min-width: 0;
+        padding: 10px 11px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .event-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .event-name {
+        overflow: hidden;
+        color: var(--ink);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .event-reason {
+        margin: 7px 0 0;
+        color: #475467;
+        font-size: 12px;
+      }
+
+      .event-fields {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 8px;
+      }
+
+      .field-chip {
+        max-width: 100%;
+        overflow: hidden;
+        padding: 2px 5px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: #f8fafc;
+        color: #536271;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .raw-detail {
+        overflow-x: auto;
+        margin: 0;
+        padding: 11px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #0f172a;
+        color: #dbeafe;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 760px) {
+        .topbar-inner,
+        .page {
+          width: min(100% - 24px, 1480px);
+        }
+
+        .topbar-status {
+          display: none;
+        }
+
+        .page-heading {
+          display: block;
+        }
+
+        .file-count {
+          display: block;
+          margin-top: 7px;
+          white-space: normal;
+        }
+
+        h1 {
+          font-size: 21px;
+        }
+
+        .summary-strip {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .summary-item:nth-child(2) {
+          border-right: 0;
+        }
+
+        .summary-item:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--line);
+        }
+
+        input.control {
+          width: min(100%, 260px);
+        }
+
+        .toolbar-spacer {
+          display: none;
+        }
+
+        .table-shell > table {
+          min-width: 100%;
+        }
+
+        .table-shell > table > thead > tr > th:nth-child(2),
+        .table-shell > table > thead > tr > th:nth-child(3),
+        .table-shell > table > thead > tr > th:nth-child(5),
+        .table-shell > table > tbody > .parent-row > td:nth-child(2),
+        .table-shell > table > tbody > .parent-row > td:nth-child(3),
+        .table-shell > table > tbody > .parent-row > td:nth-child(5),
+        .flow-table th:nth-child(3),
+        .flow-table th:nth-child(4),
+        .flow-table td:nth-child(3),
+        .flow-table td:nth-child(4) {
+          display: none;
+        }
+
+        .table-shell > table > tbody > .parent-row > td {
+          padding: 11px 8px;
+        }
+
+        .file-cell {
+          min-width: 165px;
+        }
+
+        .row-action {
+          min-width: auto;
+        }
+
+        .flow-table th,
+        .flow-table td {
+          padding: 9px 8px;
+        }
+
+        .flow-note {
+          max-width: 220px;
+        }
+
+        .drawer {
+          width: 100vw;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar" id="dashboardHeader">
+      <div class="topbar-inner">
+        <div class="brand">
+          <img src="../../assets/branding/aipin_voice_page_icon.png" alt="AIPIN" />
+          <div>
+            <div class="brand-title">AIPIN EVT 日志联调看板</div>
+            <div class="brand-subtitle">文件 → 功能链路 → 协议证据</div>
+          </div>
+        </div>
+        <div class="topbar-status"><span class="status-dot"></span> 本地原型 · 脱敏展示</div>
+      </div>
+    </header>
+
+    <main class="page" id="dashboardMain">
+      <section class="page-heading" aria-labelledby="page-title">
+        <div>
+          <h1 id="page-title">日志联调结果</h1>
+          <p class="page-description">每个日志文件是一段独立联调会话。可同时载入多份日志，展开后按功能链路查看 App 下发、设备回包、状态依据与详细数据。</p>
+        </div>
+        <div class="file-count" id="fileCount">1 个日志文件</div>
+      </section>
+
+      <section class="summary-strip" aria-label="联调汇总">
+        <div class="summary-item">
+          <div class="summary-label">日志文件</div>
+          <div class="summary-value" id="summaryFiles">1</div>
+          <div class="summary-note">当前筛选结果</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">功能链路</div>
+          <div class="summary-value" id="summaryFlows">5</div>
+          <div class="summary-note">按联调功能聚合</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">已完成链路</div>
+          <div class="summary-value" id="summarySuccess">3</div>
+          <div class="summary-note">存在明确成功证据</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">待处理链路</div>
+          <div class="summary-value" id="summaryAttention">1</div>
+          <div class="summary-note">等待回包或联调异常</div>
+        </div>
+      </section>
+
+      <section aria-label="日志文件列表">
+        <div class="toolbar">
+          <div class="field">
+            <label for="statusFilter">联调状态</label>
+            <select class="control" id="statusFilter">
+              <option value="all">全部状态</option>
+              <option value="success">联调成功</option>
+              <option value="waiting">等待回包</option>
+              <option value="failure">联调失败</option>
+              <option value="cancelled">已取消</option>
+              <option value="grouped">已聚合</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="keywordFilter">文件或功能</label>
+            <input class="control" id="keywordFilter" type="search" placeholder="输入文件名、功能或事件" />
+          </div>
+          <div class="toolbar-spacer"></div>
+            <input class="hidden-input" id="fileInput" type="file" accept=".log,.txt,text/plain" multiple />
+            <button class="button secondary" id="exportVisibleButton" type="button">导出当前筛选结果</button>
+            <button class="button secondary" id="expandAllButton" type="button">展开全部</button>
+            <button class="button secondary" id="collapseAllButton" type="button">收起全部</button>
+            <button class="button secondary" id="resetButton" type="button">清空导入，恢复样例</button>
+            <button class="button" id="chooseFileButton" type="button">导入日志（可多选）</button>
+        </div>
+        <div class="table-shell">
+          <table>
+            <thead>
+              <tr>
+                <th>日志文件</th>
+                <th>会话时间</th>
+                <th>设备引用</th>
+                <th>功能链路</th>
+                <th>App 下发 / 设备回包</th>
+                <th>联调状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="logTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <aside class="drawer" id="detailDrawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" aria-hidden="true" inert>
+      <div class="drawer-header">
+        <div>
+          <h2 class="drawer-title" id="drawerTitle">功能链路详情</h2>
+          <p class="drawer-subtitle" id="drawerSubtitle"></p>
+        </div>
+        <div class="drawer-actions">
+          <button class="row-action" id="exportNodeButton" type="button">导出本链路</button>
+          <button class="close-button" id="closeDrawerButton" type="button" aria-label="关闭详情">×</button>
+        </div>
+      </div>
+      <div class="drawer-body" id="drawerBody"></div>
+    </aside>
+    <div class="export-notice" id="exportNotice" role="status" aria-live="polite"></div>
+
+    <script>
+      const statusMeta = {
+        success: { label: '联调成功', className: 'success' },
+        waiting: { label: '等待回包', className: 'waiting' },
+        failure: { label: '联调失败', className: 'failure' },
+        cancelled: { label: '已取消', className: 'muted' },
+        grouped: { label: '已聚合', className: 'grouped' },
+        muted: { label: '未出现', className: 'muted' },
+      };
+
+      const categoryMeta = {
+        scan: { title: '扫描与目标选择', order: 1 },
+        gatt: { title: 'GATT 建立与服务发现', order: 2 },
+        subscribe: { title: 'EVT 响应通道订阅', order: 3 },
+        auth: { title: '安全码认证', order: 4 },
+        record: { title: '设备录音控制', order: 5 },
+        file: { title: '设备文件下载', order: 6 },
+        config: { title: '设备配置与隐私', order: 7 },
+        playback: { title: '本地音频播放', order: 8 },
+        protocol: { title: 'EVT 协议交互', order: 9 },
+        upload: { title: '运行日志上报', order: 10 },
+        reconnect: { title: '自动回连', order: 11 },
+        other: { title: '应用运行环境', order: 12 },
+      };
+
+      const sampleFile = {
+        id: 'sample-20260910',
+        source: 'sample',
+        name: 'aipin-2026-09-10.log (1).txt',
+        size: 954313,
+        lineCount: 2328,
+        startedAt: '2026-09-10T01:49:57.811991Z',
+        endedAt: '2026-09-10T01:50:18.154452Z',
+        deviceRef: '...0AA3',
+        expanded: true,
+        nodes: [
+          {
+            id: 'sample-scan',
+            category: 'scan',
+            title: '扫描与目标选择',
+            status: 'success',
+            durationMs: 10152,
+            sent: 1,
+            replied: 13,
+            system: 128,
+            summary: '已收到有效广播并选中目标设备，随后交由连接流程接管。',
+            conclusion: '扫描结果中已选中一个可连接设备。扫描过滤和自动回连候选事件数量较多，已归并为本节点，避免淹没后续 GATT 联调证据。',
+            events: [
+              {
+                time: '01:49:57.812',
+                direction: 'system',
+                event: 'scan_start_requested',
+                result: 'pending',
+                reason: 'App 发起附近设备扫描。',
+                fields: { action: 'start', platform: 'android' },
+              },
+              {
+                time: '01:50:06.914',
+                direction: 'device',
+                event: 'scan_result_accepted',
+                result: 'accepted',
+                reason: '已将符合条件的广播加入扫描结果。',
+                fields: { device_suffix: '...0AA3', rssi: '-58', service_count: '6' },
+              },
+              {
+                time: '01:50:07.960',
+                direction: 'app',
+                event: 'scan_candidate_selected',
+                result: 'accepted',
+                reason: '用户选择目标设备，连接流程开始。',
+                fields: { device_suffix: '...0AA3' },
+              },
+            ],
+          },
+          {
+            id: 'sample-gatt',
+            category: 'gatt',
+            title: 'GATT 建立与服务发现',
+            status: 'success',
+            durationMs: 1620,
+            sent: 2,
+            replied: 5,
+            system: 6,
+            summary: '系统 GATT 已连接，服务发现完成，EVT 契约校验通过。',
+            conclusion: '设备连接、服务发现和 EVT GATT 契约均有明确成功事件。该链路可以判定为联调成功。',
+            events: [
+              {
+                time: '01:50:07.987',
+                direction: 'app',
+                event: 'gatt_connection_stream_requested',
+                result: 'pending',
+                reason: 'App 请求建立 GATT 连接。',
+                fields: { connection_attempt: '1', timeout_ms: '15000', device_suffix: '...0AA3' },
+              },
+              {
+                time: '01:50:08.604',
+                direction: 'device',
+                event: 'connection_state',
+                result: 'success',
+                reason: '系统报告 GATT 已连接，继续服务发现。',
+                fields: { state: 'connected', elapsed_ms: '621' },
+              },
+              {
+                time: '01:50:09.601',
+                direction: 'device',
+                event: 'gatt_service_discovery_completed',
+                result: 'success',
+                reason: '服务发现完成，开始校验 EVT 特征能力。',
+                fields: { service_count: '6', characteristic_count: '18', elapsed_ms: '1619' },
+              },
+              {
+                time: '01:50:09.602',
+                direction: 'system',
+                event: 'evt_gatt_contract_checked',
+                result: 'success',
+                reason: 'EVT GATT 契约校验通过。',
+                fields: { gatt_ready: 'true', missing_count: '0', characteristic_count: '18' },
+              },
+            ],
+          },
+          {
+            id: 'sample-subscribe',
+            category: 'subscribe',
+            title: 'EVT 响应通道订阅',
+            status: 'success',
+            durationMs: 1328,
+            sent: 10,
+            replied: 10,
+            system: 20,
+            summary: '所需响应特征已完成 CCC 配置并确认订阅。',
+            conclusion: '日志包含每个响应通道的请求、CCC 配置和订阅确认。没有发现订阅失败或超时事件，可判定订阅链路正常。',
+            events: [
+              {
+                time: '01:50:09.604',
+                direction: 'app',
+                event: 'evt_subscription_setup_requested',
+                result: 'pending',
+                reason: '开始按 EVT 顺序建立响应订阅。',
+                fields: { timeout_ms: '8000', connection_attempt: '1' },
+              },
+              {
+                time: '01:50:09.626',
+                direction: 'app',
+                event: 'ccc_configuration_requested',
+                result: 'success',
+                reason: '请求设备响应特征的 CCC 配置。',
+                fields: { characteristic: '0xFA19', requested_mode: 'indicate', required: 'true' },
+              },
+              {
+                time: '01:50:10.932',
+                direction: 'device',
+                event: 'notification_subscription_confirmed',
+                result: 'success',
+                reason: '系统确认 CCC 配置，响应通道可安全接收。',
+                fields: { subscription_count: '10', state: 'os_ack' },
+              },
+            ],
+          },
+          {
+            id: 'sample-auth',
+            category: 'auth',
+            title: '安全码认证（绑定）',
+            status: 'waiting',
+            durationMs: 0,
+            sent: 1,
+            replied: 0,
+            system: 5,
+            summary: 'App 已下发认证命令，当前日志在设备认证回包前结束。',
+            conclusion: '只能确认 App 已发送认证请求，不能确认设备认证成功或失败。看板应标记为等待回包，而不是“联调成功”。',
+            events: [
+              {
+                time: '01:50:18.145',
+                direction: 'app',
+                event: 'evt_command_queued',
+                result: 'pending',
+                reason: '认证命令已进入 EVT 命令队列。',
+                fields: { characteristic: '0xFA19', command: '0x09', content_length: '7', expected_command: '0x89' },
+              },
+              {
+                time: '01:50:18.151',
+                direction: 'app',
+                event: 'evt_command_transmit_started',
+                result: 'pending',
+                reason: 'App 向设备发送认证请求。',
+                fields: { command: '0x09', expected_command: '0x89', frame_summary: 'evt_authentication security_code=redacted' },
+              },
+              {
+                time: '01:50:18.154',
+                direction: 'app',
+                event: 'evt_command_transmit_completed',
+                result: 'success',
+                reason: '系统已完成认证请求写入，等待设备回包。',
+                fields: { command: '0x09', expected_command: '0x89', wire_summary: '[已脱敏]' },
+              },
+            ],
+          },
+          {
+            id: 'sample-reconnect',
+            category: 'reconnect',
+            title: '自动回连候选过滤',
+            status: 'grouped',
+            durationMs: 0,
+            sent: 0,
+            replied: 0,
+            system: 1790,
+            summary: '候选广播与回连过滤日志已聚合，不作为一次失败联调。',
+            conclusion: '该文件中大量候选设备被忽略或取消，属于扫描噪音和回连过滤，不应逐条占用功能链路列表。展开详情时保留统计和关键原因。',
+            events: [
+              {
+                time: '01:49:58.104',
+                direction: 'system',
+                event: 'reconnect_candidate_received',
+                result: 'pending',
+                reason: '收到自动回连候选广播。',
+                fields: { count: '895' },
+              },
+              {
+                time: '01:49:58.105',
+                direction: 'system',
+                event: 'reconnect_candidate_ignored',
+                result: 'cancelled',
+                reason: '候选设备不匹配当前回连目标，已聚合。',
+                fields: { count: '895', reason: 'not_target' },
+              },
+            ],
+          },
+        ],
+      };
+
+      const state = {
+        files: [sampleFile],
+        status: 'all',
+        keyword: '',
+        isImporting: false,
+        selectedNode: sampleFile.nodes[1],
+        selectedFile: sampleFile,
+      };
+      const maxImportBytes = 20 * 1024 * 1024;
+      let importSequence = 0;
+      let noticeTimer = null;
+      let drawerReturnFocus = null;
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#039;');
+      }
+
+      function redactSensitive(value) {
+        return String(value ?? '')
+          .replace(/raw_packet_hex=(?:empty|[0-9A-F]{2}(?:\s+[0-9A-F]{2})*)/gi, 'raw_packet_hex=omitted')
+          .replace(/"raw_packet_hex":"(?:empty|[0-9A-F]{2}(?:\s+[0-9A-F]{2})*)"/gi, '"raw_packet_hex":"omitted"')
+          .replace(/\b(raw_packet_hex|packet_hex|payload_hex|wire|tx_hex|rx_hex)=(?:[0-9A-F*]{2}(?:\s+|$))+/gi, '$1=[已脱敏]')
+          .replace(/\b(security_code|securitycode|passcode|verification_code|password|private_key|authorization|token|secret|credential|pin|api[_-]?key)=([^\s|]+)/gi, '$1=[已隐藏]')
+          .replace(/"(security_code|securitycode|passcode|verification_code|password|private_key|authorization|token|secret|credential|pin|api[_-]?key)"\s*:\s*"[^"]*"/gi, '"$1":"[已隐藏]"')
+          .replace(/(安全码|验证码|口令|密码|私钥|令牌|密钥)\s*[:=：]?\s*[^\s|，,。;；]+/gi, '$1=[已隐藏]')
+          .replace(/\bwire_summary=[^|\n]+/gi, 'wire_summary=[已脱敏]')
+          .replace(/(?:[0-9a-f]{2}:){5}[0-9a-f]{2}/gi, '[设备地址已隐藏]');
+      }
+
+      function showNotice(message, tone = 'success') {
+        const notice = document.getElementById('exportNotice');
+        notice.textContent = message;
+        notice.classList.toggle('warning', tone === 'warning');
+        notice.classList.add('visible');
+        window.clearTimeout(noticeTimer);
+        noticeTimer = window.setTimeout(() => notice.classList.remove('visible'), 4600);
+      }
+
+      function formatSize(bytes) {
+        if (!Number.isFinite(bytes)) return '-';
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+      }
+
+      function formatDuration(milliseconds) {
+        if (!milliseconds) return '-';
+        if (milliseconds < 1000) return `${milliseconds} ms`;
+        return `${(milliseconds / 1000).toFixed(2)} s`;
+      }
+
+      function formatRange(file) {
+        const start = new Date(file.startedAt);
+        const end = new Date(file.endedAt);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return '-';
+        const date = new Intl.DateTimeFormat('zh-CN', {
+          month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        });
+        const duration = Math.max(0, end.getTime() - start.getTime());
+        return `${date.format(start)} - ${date.format(end)} · ${formatDuration(duration)}`;
+      }
+
+      function formatEventTime(time) {
+        if (!time) return '-';
+        if (/^\d{2}:\d{2}:\d{2}/.test(time)) return time;
+        const date = new Date(time);
+        if (Number.isNaN(date.getTime())) return time;
+        return new Intl.DateTimeFormat('zh-CN', {
+          hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3, hour12: false,
+        }).format(date);
+      }
+
+      function statusBadge(status) {
+        const meta = statusMeta[status] ?? statusMeta.muted;
+        return `<span class="status ${meta.className}">${meta.label}</span>`;
+      }
+
+      function directionBadge(direction, count) {
+        const meta = {
+          app: ['App 下发', 'app'],
+          device: ['设备回包', 'device'],
+          system: ['本机处理', 'system'],
+        }[direction] ?? ['其他', 'system'];
+        return `<span class="direction ${meta[1]}">${meta[0]} ${count}</span>`;
+      }
+
+      function aggregateNodeStatus(nodes) {
+        if (nodes.some((node) => node.status === 'failure')) return 'failure';
+        if (nodes.some((node) => node.status === 'waiting')) return 'waiting';
+        if (nodes.some((node) => node.status === 'success')) return 'success';
+        if (nodes.some((node) => node.status === 'cancelled')) return 'cancelled';
+        return 'grouped';
+      }
+
+      function totalDirections(nodes) {
+        return nodes.reduce(
+          (totals, node) => ({
+            sent: totals.sent + node.sent,
+            replied: totals.replied + node.replied,
+            system: totals.system + node.system,
+          }),
+          { sent: 0, replied: 0, system: 0 },
+        );
+      }
+
+      function statusSummary(nodes) {
+        const counts = nodes.reduce((summary, node) => {
+          summary[node.status] = (summary[node.status] ?? 0) + 1;
+          return summary;
+        }, {});
+        const attention = (counts.waiting ?? 0) + (counts.failure ?? 0);
+        const parts = [];
+        if (counts.success) parts.push(`成功 ${counts.success}`);
+        if (attention) parts.push(`待处理 ${attention}`);
+        if (counts.cancelled) parts.push(`已取消 ${counts.cancelled}`);
+        if (counts.grouped) parts.push(`已聚合 ${counts.grouped}`);
+        return parts.join(' · ') || '未识别';
+      }
+
+      function fileMatches(file) {
+        const keyword = state.keyword.trim().toLowerCase();
+        const fileText = `${file.name} ${file.deviceRef}`.toLowerCase();
+        const fileMatchesKeyword = !keyword || fileText.includes(keyword);
+        const matchingNodes = file.nodes.filter((node) => {
+          const nodeText = `${node.title} ${node.summary} ${node.events.map((event) => event.event).join(' ')}`.toLowerCase();
+          const statusMatches = state.status === 'all' || node.status === state.status;
+          return statusMatches && (fileMatchesKeyword || nodeText.includes(keyword));
+        });
+        return {
+          ...file,
+          displayNodes: matchingNodes,
+          matches: matchingNodes.length > 0,
+        };
+      }
+
+      function renderTable() {
+        const tableBody = document.getElementById('logTableBody');
+        const files = state.files.map(fileMatches).filter((file) => file.matches && file.displayNodes.length > 0);
+        const isFiltered = files.length !== state.files.length;
+        document.getElementById('fileCount').textContent = isFiltered
+          ? `已载入 ${state.files.length} 个，显示 ${files.length} 个`
+          : `${files.length} 个日志文件`;
+        document.getElementById('exportVisibleButton').disabled = state.isImporting || files.length === 0;
+        document.getElementById('expandAllButton').disabled = state.isImporting || state.files.length === 0;
+        document.getElementById('collapseAllButton').disabled = state.isImporting || state.files.length === 0;
+        document.getElementById('resetButton').disabled = state.isImporting;
+        const chooseFileButton = document.getElementById('chooseFileButton');
+        chooseFileButton.disabled = state.isImporting;
+        chooseFileButton.setAttribute('aria-busy', String(state.isImporting));
+        chooseFileButton.textContent = state.isImporting ? '正在解析日志...' : '导入日志（可多选）';
+
+        if (!files.length) {
+          tableBody.innerHTML = `<tr><td colspan="7"><div class="empty-state">没有匹配的日志文件或功能链路</div></td></tr>`;
+          renderSummary([]);
+          return;
+        }
+
+        tableBody.innerHTML = files.map((file) => {
+          const aggregateStatus = aggregateNodeStatus(file.displayNodes);
+          const directions = totalDirections(file.displayNodes);
+          const expandedRows = file.expanded ? renderFlowRows(file, file.displayNodes) : '';
+          return `
+            <tr class="parent-row">
+              <td>
+                <div class="file-cell">
+                  <button class="expander" type="button" data-action="toggle" data-file-id="${escapeHtml(file.id)}" aria-expanded="${file.expanded}" aria-label="${file.expanded ? '收起' : '展开'}日志功能链路">${file.expanded ? '−' : '+'}</button>
+                  <div>
+                    <div class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
+                    <div class="file-meta">${file.lineCount.toLocaleString('zh-CN')} 行 · ${formatSize(file.size)}</div>
+                  </div>
+                </div>
+              </td>
+              <td><span class="metric">${escapeHtml(formatRange(file))}</span></td>
+              <td><span class="metric">${escapeHtml(file.deviceRef || '未识别')}</span></td>
+              <td><span class="metric">${file.displayNodes.length} 条</span><span class="metric-subtle">按功能归并</span></td>
+              <td><div class="direction-summary">${directionBadge('app', directions.sent)}${directionBadge('device', directions.replied)}</div></td>
+              <td>${statusBadge(aggregateStatus)}<span class="metric-subtle">${escapeHtml(statusSummary(file.displayNodes))}</span></td>
+              <td>
+                <div class="row-actions">
+                  <button class="row-action" type="button" data-action="open-file" data-file-id="${escapeHtml(file.id)}">${file.expanded ? '收起链路' : '展开链路'}</button>
+                  <button class="row-action" type="button" data-action="export-file" data-file-id="${escapeHtml(file.id)}">导出本文件</button>
+                  <button class="row-action" type="button" data-action="remove-file" data-file-id="${escapeHtml(file.id)}">移除</button>
+                </div>
+              </td>
+            </tr>
+            ${expandedRows}
+          `;
+        }).join('');
+        renderSummary(files);
+      }
+
+      function renderFlowRows(file, nodes) {
+        return `
+          <tr>
+            <td class="expanded-cell" colspan="7">
+              <table class="flow-table" aria-label="${escapeHtml(file.name)}功能链路">
+                <thead>
+                  <tr>
+                    <th>功能链路</th>
+                    <th>App 下发 / 设备回包</th>
+                    <th>状态依据</th>
+                    <th>用时</th>
+                    <th>联调状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${nodes.map((node) => `
+                    <tr>
+                      <td>
+                        <div class="flow-title">${escapeHtml(node.title)}</div>
+                        <div class="flow-note">${escapeHtml(node.summary)}</div>
+                      </td>
+                      <td><div class="direction-summary">${directionBadge('app', node.sent)}${directionBadge('device', node.replied)}${node.system ? directionBadge('system', node.system) : ''}</div></td>
+                      <td><span class="flow-note">${escapeHtml(node.conclusion)}</span></td>
+                      <td><span class="metric">${formatDuration(node.durationMs)}</span></td>
+                      <td>${statusBadge(node.status)}</td>
+                      <td><button class="row-action" type="button" data-action="open-node" data-file-id="${escapeHtml(file.id)}" data-node-id="${escapeHtml(node.id)}">查看明细</button></td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </td>
+          </tr>
+        `;
+      }
+
+      function renderSummary(files) {
+        const nodes = files.flatMap((file) => file.displayNodes);
+        const success = nodes.filter((node) => node.status === 'success').length;
+        const attention = nodes.filter((node) => node.status === 'waiting' || node.status === 'failure').length;
+        document.getElementById('summaryFiles').textContent = files.length;
+        document.getElementById('summaryFlows').textContent = nodes.length;
+        document.getElementById('summarySuccess').textContent = success;
+        document.getElementById('summaryAttention').textContent = attention;
+      }
+
+      function openNode(file, node, trigger) {
+        state.selectedFile = file;
+        state.selectedNode = node;
+        drawerReturnFocus = trigger ?? document.activeElement;
+        document.getElementById('drawerTitle').textContent = node.title;
+        document.getElementById('drawerSubtitle').textContent = `${file.name} · ${statusMeta[node.status].label}`;
+        document.getElementById('drawerBody').innerHTML = `
+          <div class="detail-grid">
+            <div class="detail-metric"><div class="detail-metric-label">App 下发</div><div class="detail-metric-value">${node.sent} 条</div></div>
+            <div class="detail-metric"><div class="detail-metric-label">设备回包</div><div class="detail-metric-value">${node.replied} 条</div></div>
+            <div class="detail-metric"><div class="detail-metric-label">本机处理</div><div class="detail-metric-value">${node.system} 条</div></div>
+            <div class="detail-metric"><div class="detail-metric-label">链路用时</div><div class="detail-metric-value">${formatDuration(node.durationMs)}</div></div>
+          </div>
+          <section class="detail-section">
+            <h3>联调结论</h3>
+            <div class="conclusion">${escapeHtml(node.conclusion)}</div>
+          </section>
+          <section class="detail-section">
+            <h3>交互序列</h3>
+            <div class="timeline">
+              ${node.events.map((event) => renderEvent(event)).join('')}
+            </div>
+          </section>
+          <section class="detail-section">
+            <h3>解析依据</h3>
+            <pre class="raw-detail">${escapeHtml(buildNodeEvidence(node))}</pre>
+          </section>
+        `;
+        const drawer = document.getElementById('detailDrawer');
+        document.getElementById('dashboardHeader').setAttribute('inert', '');
+        document.getElementById('dashboardMain').setAttribute('inert', '');
+        document.getElementById('drawerBackdrop').classList.add('visible');
+        drawer.removeAttribute('inert');
+        drawer.classList.add('open');
+        drawer.setAttribute('aria-hidden', 'false');
+        window.setTimeout(() => document.getElementById('closeDrawerButton').focus?.(), 0);
+      }
+
+      function renderEvent(event) {
+        const direction = event.direction || 'system';
+        const fields = Object.entries(event.fields || {})
+          .map(([key, value]) => `<span class="field-chip">${escapeHtml(`${key}=${redactSensitive(value)}`)}</span>`)
+          .join('');
+        return `
+          <div class="timeline-event">
+            <div class="event-time">${escapeHtml(formatEventTime(event.time))}</div>
+            <div class="event-card">
+              <div class="event-head">
+                <span class="event-name">${escapeHtml(event.event)}</span>
+                ${directionBadge(direction, 1)}
+              </div>
+              <p class="event-reason">${escapeHtml(redactSensitive(event.reason || ''))}</p>
+              ${fields ? `<div class="event-fields">${fields}</div>` : ''}
+            </div>
+          </div>
+        `;
+      }
+
+      function buildNodeEvidence(node) {
+        return node.events.map((event) => {
+          const fields = Object.entries(event.fields || {})
+            .map(([key, value]) => `${key}=${redactSensitive(value)}`)
+            .join(' ');
+          return `${formatEventTime(event.time)} | ${event.direction} | ${event.event} | ${event.result || '-'}${fields ? ` | ${fields}` : ''}`;
+        }).join('\n');
+      }
+
+      function closeDrawer({ restoreFocus = true } = {}) {
+        const drawer = document.getElementById('detailDrawer');
+        const wasOpen = drawer.classList.contains('open');
+        document.getElementById('drawerBackdrop').classList.remove('visible');
+        drawer.classList.remove('open');
+        drawer.setAttribute('aria-hidden', 'true');
+        drawer.setAttribute('inert', '');
+        document.getElementById('dashboardHeader').removeAttribute('inert');
+        document.getElementById('dashboardMain').removeAttribute('inert');
+        const returnFocus = drawerReturnFocus;
+        drawerReturnFocus = null;
+        if (wasOpen && restoreFocus) {
+          window.setTimeout(() => returnFocus?.focus?.(), 0);
+        }
+      }
+
+      function safeReason(value) {
+        const raw = String(value ?? '').trim();
+        if (!raw) return null;
+        if (/[\r\n|]/.test(raw)) return '该条说明包含未允许内容，已隐藏。';
+        if (/(?:https?|sftp|file|content):(?:\/\/)?|[a-z]:[\\/]|(?:^|[\s"'=])\/(?:[^\s/]+\/)+|\b(?:raw_|packet_|payload|wire|tx_hex|rx_hex|security_code|passcode|token|secret|password|credential|pin|api[_-]?key|private[_-]?key)\b|(?:安全码|验证码|口令|密码|私钥|令牌|密钥)\s*[:=：]?\s*[^\s|，,。;；]+|\b[0-9a-f]{12,}\b|\b[0-9a-f]{2}(?:\s+[0-9a-f]{2}){5,}\b/i.test(raw)) {
+          return '该条说明包含未允许内容，已隐藏。';
+        }
+        const text = redactSensitive(raw).trim();
+        if (!text) return null;
+        if (text.length > 280) return '该条说明过长，已隐藏。';
+        return text;
+      }
+
+      function parseFields(text) {
+        const safe = redactSensitive(text);
+        const fields = {};
+        const keys = ['action', 'actual_command', 'attempt', 'bytes', 'characteristic', 'command', 'connection_attempt', 'content_length', 'device_suffix', 'duration_ms', 'elapsed_ms', 'endpoint', 'error_code', 'error_type', 'expected_command', 'failure_kind', 'frame_summary', 'gatt_ready', 'gatt_status', 'idle_ms', 'missing_count', 'platform', 'reason', 'record_mode', 'record_status', 'record_type', 'remaining_ms', 'response_command', 'response_count', 'result', 'rssi', 'service_count', 'state', 'status', 'sub_command', 'timeout_ms', 'wait_id', 'wire_summary'];
+        for (const key of keys) {
+          const match = safe.match(new RegExp(`\\b${key}=([^|\\n]+?)(?=\\s+[a-z_]+=|$|\\s*\\|)`, 'i'));
+          if (match) fields[key] = match[1].trim();
+        }
+        return fields;
+      }
+
+      function inferDirection(prefix, scope, event) {
+        if (prefix.includes('发送：') || prefix.includes('读取：')) return 'app';
+        if (prefix.includes('接收：')) return 'device';
+        if (scope === 'CMD' && /^evt_(?:stream_)?command_(queued|admitted|transmit_)/.test(event)) return 'app';
+        if (/^(evt_command_response|evt_command_frame|notification_received|indication_received)/.test(event)) return 'device';
+        return 'system';
+      }
+
+      function parseLine(line, index) {
+        const timestampMatch = line.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/);
+        if (!timestampMatch || timestampMatch.index === undefined) return null;
+        const prefix = line.slice(0, timestampMatch.index);
+        const parts = line.slice(timestampMatch.index).split(/\s+\|\s+/).map((part) => part.trim());
+        if (parts.length < 8) return null;
+        const [time, level, scope, traceId, operation, stage, event, result, elapsed, ...rest] = parts;
+        const detail = redactSensitive(rest.join(' | '));
+        const direction = inferDirection(prefix, scope, event);
+        return { index, time, level, scope, traceId, operation, stage, event, result, elapsed, detail, fields: parseFields(detail), direction };
+      }
+
+      function hasToken(value, token) {
+        return new RegExp(`(?:^|[\\s_])${token}(?=$|[\\s_])`).test(value);
+      }
+
+      function hasAnyToken(value, tokens) {
+        return tokens.some((token) => hasToken(value, token));
+      }
+
+      function isAuthRecord(record) {
+        const endpoint = String(record.fields.endpoint ?? record.fields.characteristic ?? '').toLowerCase();
+        const command = String(record.fields.command ?? '').toLowerCase();
+        const expected = String(record.fields.expected_command ?? '').toLowerCase();
+        return record.scope === 'AUTH'
+          || ['device_bind', 'device_authenticate'].includes(record.operation)
+          || record.stage === 'fa19_write'
+          || expected === '0x89'
+          || (command === '0x09' && /^evt_command_|^write_/.test(record.event))
+          || (endpoint === '0xfa19' && /^write_/.test(record.event));
+      }
+
+      function classifyRecord(record) {
+        const haystack = `${record.scope} ${record.operation} ${record.stage} ${record.event}`.toLowerCase();
+        if (record.scope === 'RECONNECT' || record.operation === 'device_reconnect') return 'reconnect';
+        if (record.stage === 'upload' || /^app_log_upload_/.test(record.event)) return 'upload';
+        if (isAuthRecord(record)) return 'auth';
+        if (['evt_command_client_opened', 'evt_response_channel_initialized', 'characteristic_stream_listening', 'session_authentication_ready'].includes(record.event)) return 'subscribe';
+        if (hasAnyToken(haystack, ['notification', 'subscription', 'ccc']) || /^characteristic_subscription/.test(record.event)) return 'subscribe';
+        if (record.operation === 'device_scan' || hasAnyToken(haystack, ['scan', 'candidate'])) return 'scan';
+        if (record.operation === 'audio_playback' || hasAnyToken(haystack, ['playback', 'player', 'audio'])) return 'playback';
+        if (hasAnyToken(haystack, ['record', 'recording'])) return 'record';
+        if (hasAnyToken(haystack, ['file', 'download', 'import', 'archive'])) return 'file';
+        if (hasAnyToken(haystack, ['privacy', 'configuration', 'config'])) return 'config';
+        if (record.event === 'native_log_stream_listening') return 'other';
+        if (record.operation === 'device_connect' || record.scope === 'SESSION_FLOW' || hasAnyToken(haystack, ['gatt', 'service', 'discovery', 'connection'])) return 'gatt';
+        if (record.scope === 'CMD' || hasAnyToken(haystack, ['evt', 'protocol', 'response'])) return 'protocol';
+        return 'other';
+      }
+
+      function groupKey(category, record) {
+        const base = category === 'auth'
+          ? (record.operation === 'device_authenticate' ? 'auth:device_authenticate' : 'auth:device_bind')
+          : category;
+        const trace = String(record.traceId ?? '').trim().toLowerCase();
+        return /^[a-f0-9]{6,32}$/.test(trace) ? `${base}:trace:${trace}` : base;
+      }
+
+      function nodeTitle(category, key) {
+        if (key.startsWith('auth:device_bind')) return '安全码认证（绑定）';
+        return (categoryMeta[category] ?? categoryMeta.other).title;
+      }
+
+      function hasFailure(records) {
+        return records.some((record) => /^(failed|timeout|error|rejected)$/i.test(record.result) || /failed|timeout|error|rejected/i.test(record.event));
+      }
+
+      function hasCancellation(records) {
+        return records.some((record) => /cancelled/i.test(record.result) || /cancelled|revoked/i.test(record.event));
+      }
+
+      function hasGenericSuccess(records) {
+        return records.some((record) => /^(success|completed|accepted|ready|confirmed)$/i.test(record.result));
+      }
+
+      function authRequest(records) {
+        return [...records].reverse().find((record) => {
+          const expected = String(record.fields.expected_command ?? '').toLowerCase();
+          return expected === '0x89'
+            || record.direction === 'app'
+            || /legacy_security_exchange_dispatching|evt_command_(queued|admitted|transmit_)|write_(requested|native_invoked|completed)/.test(record.event);
+        });
+      }
+
+      function authResponseAfter(records, request) {
+        if (!request) return null;
+        const expected = String(request.fields.expected_command ?? '0x89').toLowerCase();
+        return records.find((record) => record.index > request.index
+          && record.direction === 'device'
+          && [record.fields.command, record.fields.actual_command, record.fields.response_command]
+            .some((value) => String(value ?? '').toLowerCase() === expected));
+      }
+
+      function hasAuthTerminalSuccess(records, response) {
+        if (!response) return false;
+        return records.some((record) => record.index >= response.index
+          && /^(legacy_authentication_completed|legacy_security_exchange_completed|evt_command_completed)$/.test(record.event)
+          && /^(success|completed|accepted)$/i.test(record.result));
+      }
+
+      function resultStatus(records, category) {
+        if (category === 'reconnect' || category === 'other') return 'grouped';
+        if (hasFailure(records)) return 'failure';
+        if (category === 'auth') {
+          const request = authRequest(records);
+          const response = authResponseAfter(records, request);
+          if (hasAuthTerminalSuccess(records, response)) return 'success';
+          if (hasCancellation(records) && !request) return 'cancelled';
+          return request ? 'waiting' : 'grouped';
+        }
+        if (hasGenericSuccess(records)) return 'success';
+        if (hasCancellation(records)) return 'cancelled';
+        return 'grouped';
+      }
+
+      function deriveSummary(category, status, records, title) {
+        if (category === 'auth' && status === 'waiting') {
+          const request = authRequest(records);
+          const command = safeCommand(request?.fields.command) || '认证命令';
+          const expected = safeCommand(request?.fields.expected_command) || '匹配响应';
+          return `App 已下发 ${command}，等待设备 ${expected} 回包。`;
+        }
+        if (category === 'auth' && status === 'cancelled') return '该认证因连接状态变化被取消，不计为联调失败。';
+        if (category === 'scan' && status === 'success') return '目标设备已选中；扫描被手动连接接管后正常结束。';
+        if (category === 'gatt' && status === 'success') return 'GATT 已连接，服务发现与 EVT 契约校验完成。';
+        if (category === 'subscribe' && status === 'success') return 'EVT 响应特征的 CCC 配置和订阅已就绪。';
+        if (category === 'reconnect') return `${records.length.toLocaleString('zh-CN')} 条候选与过滤事件已聚合。`;
+        if (category === 'other') return `${records.length.toLocaleString('zh-CN')} 条应用生命周期或辅助事件已聚合。`;
+        return `${records.length.toLocaleString('zh-CN')} 条事件已归并到${title}。`;
+      }
+
+      function deriveConclusion(category, status, records, title) {
+        if (status === 'failure') return `${title}出现失败、超时或拒绝事件，请查看交互序列和稳定错误码。`;
+        if (status === 'cancelled') return `${title}因用户操作或连接状态变化结束，不能作为联调失败或成功结论。`;
+        if (category === 'auth' && status === 'waiting') {
+          const request = authRequest(records);
+          const expected = safeCommand(request?.fields.expected_command) || '期望响应';
+          return `只能确认 App 已写入认证请求；当前文件结束前未见设备 ${expected} 回包及认证业务终态。写入成功不等于认证联调成功。`;
+        }
+        if (category === 'scan' && status === 'success' && records.some((record) => record.event === 'scan_stream_closed' && /cancelled/i.test(record.result))) {
+          return '扫描由手动连接流程接管后正常关闭。这里的 cancelled 表示扫描订阅停止，不是设备联调失败。';
+        }
+        if (status === 'waiting') return `${title}已出现 App 下发，但当前文件中没有匹配的设备回包或业务终态事件。`;
+        if (status === 'grouped') return `${title}以统计方式展示重复或辅助事件，避免淹没联调主链路。`;
+        return `${title}存在完整的成功或完成事件，可作为当前日志中的联调成功证据。`;
+      }
+
+      function durationForNode(category, records) {
+        const first = records[0];
+        const scanStart = category === 'scan' ? records.find((record) => record.event === 'scan_start_requested') : null;
+        const scanEnd = scanStart ? records.find((record) => record.index > scanStart.index && /^(scan_stream_closed|scan_stopped)$/.test(record.event)) : null;
+        const start = scanStart ?? first;
+        const end = scanEnd ?? records[records.length - 1];
+        const startTime = new Date(start.time).getTime();
+        const endTime = new Date(end.time).getTime();
+        return Number.isFinite(startTime) && Number.isFinite(endTime) ? Math.max(0, endTime - startTime) : 0;
+      }
+
+      function buildNodes(records) {
+        const groups = new Map();
+        for (const record of records) {
+          const category = classifyRecord(record);
+          const key = groupKey(category, record);
+          if (!groups.has(key)) groups.set(key, { category, records: [] });
+          groups.get(key).records.push(record);
+        }
+        const nodes = [...groups.entries()]
+          .map(([key, entry]) => {
+            const { category, records: group } = entry;
+            const first = group[0];
+            const sent = group.filter((record) => record.direction === 'app').length;
+            const replied = group.filter((record) => record.direction === 'device').length;
+            const system = group.length - sent - replied;
+            const status = resultStatus(group, category);
+            const title = nodeTitle(category, key);
+            return {
+              id: `${key}-${first.index}`,
+              category,
+              title,
+              status,
+              durationMs: durationForNode(category, group),
+              sent,
+              replied,
+              system,
+              summary: deriveSummary(category, status, group, title),
+              conclusion: deriveConclusion(category, status, group, title),
+              events: compactEvents(group),
+            };
+          })
+          .sort((left, right) => (categoryMeta[left.category]?.order ?? 99) - (categoryMeta[right.category]?.order ?? 99));
+        const titleCounts = nodes.reduce((counts, node) => {
+          counts[node.title] = (counts[node.title] ?? 0) + 1;
+          return counts;
+        }, {});
+        const titleIndices = {};
+        return nodes.map((node) => {
+          if (titleCounts[node.title] < 2) return node;
+          titleIndices[node.title] = (titleIndices[node.title] ?? 0) + 1;
+          return { ...node, title: `${node.title}（第 ${titleIndices[node.title]} 次）` };
+        });
+      }
+
+      function compactEvents(records) {
+        const max = 12;
+        if (records.length <= max) return records.map(recordToEvent);
+        const head = records.slice(0, 6).map(recordToEvent);
+        const tail = records.slice(-6).map(recordToEvent);
+        return [...head, {
+          time: '', direction: 'system', event: 'events_aggregated', result: 'grouped',
+          reason: `中间 ${records.length - 12} 条同类事件已聚合。`, fields: { count: String(records.length - 12) },
+        }, ...tail];
+      }
+
+      function recordToEvent(record) {
+        return {
+          time: record.time,
+          direction: safeDirection(record.direction),
+          event: safeEventName(record.event),
+          result: safeEnum(record.result, exportResults) ?? '-',
+          reason: safeEventNarrative(record),
+          fields: safeExportFieldMap({ scope: record.scope, operation: record.operation, stage: record.stage, ...record.fields }),
+        };
+      }
+
+      const exportScopes = new Set(['AI', 'APP', 'APP_LIFECYCLE', 'AUDIO', 'AUTH', 'BLE', 'CMD', 'DEVICE_API', 'EXPORT', 'FILE', 'RECONNECT', 'SESSION', 'SESSION_FLOW', 'STORAGE', 'UI']);
+      const exportOperations = new Set(['ai_summary', 'ai_transcription', 'audio_playback', 'device_authenticate', 'device_bind', 'device_connect', 'device_file_import', 'device_reconnect', 'device_scan', 'device_unbind', 'local_recording']);
+      const exportStages = new Set(['archive', 'pre_authentication', 'preflight', 'challenge', 'connect', 'download', 'export', 'fa19_write', 'import', 'initialization', 'playback', 'read', 'request', 'response', 'sync', 'ticket_request', 'upload', 'validation', 'write', 'idle', 'scanning', 'connecting', 'waiting_to_retry', 'connected', 'exhausted', 'suppressed']);
+      const exportResults = new Set(['accepted', 'cancelled', 'completed', 'failed', 'pending', 'retrying', 'succeeded', 'success', 'unconfigured', 'grouped']);
+      const exportStates = new Set(['authenticating', 'connected', 'connecting', 'disconnected', 'duration_unknown', 'idle', 'os_ack', 'os_setup_pending', 'paused', 'playing', 'ready', 'scanning', 'unbound']);
+      const exportStatuses = new Set(['accepted', 'cancelled', 'completed', 'failed', 'pending', 'ready', 'success', 'unconfigured']);
+      const exportNumericFields = new Set(['attempt', 'bytes', 'connection_attempt', 'content_length', 'duration_ms', 'elapsed_ms', 'gatt_status', 'idle_ms', 'missing_count', 'record_mode', 'record_type', 'remaining_ms', 'response_count', 'rssi', 'service_count', 'timeout_ms', 'wait_id']);
+      const exportCommandFields = new Set(['actual_command', 'command', 'expected_command', 'response_command', 'sub_command']);
+
+      function exportFileName(scope) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        return `evt-脱敏联调报告-${scope}-${timestamp}.txt`;
+      }
+
+      function safeEnum(value, allowed) {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        return allowed.has(normalized) ? normalized : null;
+      }
+
+      function safeInteger(value) {
+        const text = String(value ?? '').trim();
+        if (!/^-?\d{1,8}$/.test(text)) return null;
+        const number = Number(text);
+        return Number.isSafeInteger(number) ? String(number) : null;
+      }
+
+      function safeCommand(value) {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        return /^0x[0-9a-f]{2}$/.test(normalized) ? normalized : null;
+      }
+
+      function safeCharacteristic(value) {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        return /^0x(?:fa|fb|ff)[0-9a-f]{2}$/.test(normalized) ? normalized : null;
+      }
+
+      function safeEndpoint(value) {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        return /^(?:fa10fa(?:11|12|15|16|17|19)|fb10fb11|ff10ff(?:11|12|13))$/.test(normalized) ? normalized : null;
+      }
+
+      function safeDeviceRef(value) {
+        const normalized = String(value ?? '').trim().toUpperCase();
+        return /^\.\.\.[A-F0-9]{4}$/.test(normalized) ? normalized : null;
+      }
+
+      function safeEventName(value) {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        return /^[a-z][a-z0-9_]{0,80}$/.test(normalized)
+          && !/(authorization|nonce|payload|proof|token|secret|password)/.test(normalized)
+          ? normalized
+          : 'redacted_event';
+      }
+
+      function safeDirection(value) {
+        return ['app', 'device', 'system'].includes(value) ? value : 'system';
+      }
+
+      function safeEventNarrative(record) {
+        const reason = safeReason(record.fields.reason);
+        if (reason) return reason;
+        if (record.direction === 'app') return 'App 已发起该协议步骤。';
+        if (record.direction === 'device') return '已收到设备到 App 的协议步骤。';
+        if (record.scope === 'BLE') return 'Android BLE 已记录该系统回调。';
+        return 'App 已记录该流程步骤。';
+      }
+
+      function safeExportField(key, value) {
+        if (key === 'scope') {
+          const normalized = String(value ?? '').trim().toUpperCase();
+          return exportScopes.has(normalized) ? normalized : null;
+        }
+        if (key === 'operation') return safeEnum(value, exportOperations);
+        if (key === 'stage') return safeEnum(value, exportStages);
+        if (key === 'result') return safeEnum(value, exportResults);
+        if (key === 'state') return safeEnum(value, exportStates);
+        if (key === 'status') return safeEnum(value, exportStatuses);
+        if (key === 'platform') return safeEnum(value, new Set(['android', 'ios']));
+        if (key === 'gatt_ready') return /^(true|false)$/i.test(String(value ?? '').trim()) ? String(value).trim().toLowerCase() : null;
+        if (exportNumericFields.has(key)) return safeInteger(value);
+        if (exportCommandFields.has(key)) return safeCommand(value);
+        if (key === 'record_status') {
+          return safeCommand(value) ?? safeInteger(value);
+        }
+        if (key === 'characteristic') return safeCharacteristic(value);
+        if (key === 'endpoint') return safeEndpoint(value);
+        if (key === 'device_suffix') return safeDeviceRef(value);
+        if (key === 'error_code' || key === 'error_type' || key === 'failure_kind') {
+          const normalized = String(value ?? '').trim().toLowerCase();
+          return /^[a-z][a-z0-9_]{0,63}$/.test(normalized) ? normalized : null;
+        }
+        return null;
+      }
+
+      function safeExportFieldMap(fields) {
+        const output = {};
+        for (const [key, value] of Object.entries(fields ?? {})) {
+          const safeValue = safeExportField(key, value);
+          if (safeValue !== null) output[key] = safeValue;
+        }
+        return output;
+      }
+
+      function exportFields(fields) {
+        return Object.entries(safeExportFieldMap(fields))
+          .map(([key, value]) => `${key}=${value}`)
+          .join(' ');
+      }
+
+      function buildEvidenceExport(file, nodes = file.nodes) {
+        const lines = [
+          '# AIPIN EVT 脱敏联调日志导出',
+          'export_format=allowlisted_structured_evidence',
+          `source=${file.source === 'sample' ? 'sample' : 'imported'}`,
+          `time_range=${formatRange(file)}`,
+          `device_ref=${safeDeviceRef(file.deviceRef) ?? '未识别'}`,
+          `flow_count=${nodes.length}`,
+          '',
+        ];
+        for (const node of nodes) {
+          lines.push(`[功能链路] ${node.title}`);
+          lines.push(`status=${statusMeta[node.status]?.label ?? '未识别'}`);
+          lines.push(`conclusion=${redactSensitive(node.conclusion)}`);
+          lines.push(`app_to_device=${node.sent} device_to_app=${node.replied} app_processing=${node.system}`);
+          for (const event of node.events) {
+            const fields = exportFields(event.fields);
+            const eventName = safeEventName(event.event);
+            const direction = safeDirection(event.direction);
+            const result = safeEnum(event.result, exportResults) ?? '-';
+            lines.push(`${formatEventTime(event.time)} | ${direction} | ${eventName} | ${result}${fields ? ` | ${fields}` : ''}`);
+          }
+          lines.push('');
+        }
+        return lines.join('\n');
+      }
+
+      function downloadText(filename, content) {
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+
+      function exportFileLog(file) {
+        downloadText(exportFileName('本文件'), buildEvidenceExport(file));
+      }
+
+      function exportNodeReport(file, node) {
+        downloadText(exportFileName('本链路'), buildEvidenceExport(file, [node]));
+      }
+
+      function currentVisibleFiles() {
+        return state.files
+          .map(fileMatches)
+          .filter((file) => file.matches && file.displayNodes.length > 0);
+      }
+
+      function exportVisibleResults() {
+        const files = currentVisibleFiles();
+        if (!files.length) return;
+        const content = files.map((file) => buildEvidenceExport(file, file.displayNodes)).join('\n\n====================\n\n');
+        downloadText(exportFileName('当前结果'), content);
+      }
+
+      function skippedFileSummary(skipped) {
+        const limit = 3;
+        const shown = skipped.slice(0, limit)
+          .map((item) => `${item.name}（${item.reason}）`)
+          .join('、');
+        const more = skipped.length > limit ? `等 ${skipped.length} 份` : '';
+        return [shown, more].filter(Boolean).join('；');
+      }
+
+      function validDeviceRef(value) {
+        return safeDeviceRef(value) !== null;
+      }
+
+      async function parseFiles(fileList) {
+        const parsed = [];
+        const skipped = [];
+        for (const [fileIndex, file] of Array.from(fileList).entries()) {
+          try {
+            if (file.size === 0) {
+              skipped.push({ name: file.name, reason: '文件为空' });
+              continue;
+            }
+            if (file.size > maxImportBytes) {
+              skipped.push({ name: file.name, reason: '超过 20 MiB 上限' });
+              continue;
+            }
+            const content = await file.text();
+            const lines = content.split(/\r?\n/).filter(Boolean);
+            const records = lines.map(parseLine).filter(Boolean);
+            if (!records.length) {
+              skipped.push({ name: file.name, reason: '未识别 EVT 结构化日志' });
+              continue;
+            }
+            const nodes = buildNodes(records);
+            const deviceRecord = records.find((record) => validDeviceRef(record.fields.device_suffix)
+              && record.event === 'connection_state_received'
+              && record.fields.state === 'connected')
+              ?? records.find((record) => validDeviceRef(record.fields.device_suffix)
+                && /session_open_requested|connect_start|gatt_connection_stream_requested|service_discovery/.test(record.event))
+              ?? records.find((record) => validDeviceRef(record.fields.device_suffix));
+            importSequence += 1;
+            parsed.push({
+              id: `import-${file.lastModified}-${file.size}-${fileIndex}-${importSequence}`,
+              source: 'imported',
+              name: file.name,
+              size: file.size,
+              lineCount: lines.length,
+              startedAt: records[0].time,
+              endedAt: records[records.length - 1].time,
+              deviceRef: deviceRecord?.fields.device_suffix || '未识别',
+              expanded: false,
+              nodes,
+            });
+          } catch (_) {
+            skipped.push({ name: file.name, reason: '读取失败' });
+          }
+        }
+        return { parsed, skipped };
+      }
+
+      function bindEvents() {
+        document.getElementById('statusFilter').addEventListener('change', (event) => {
+          state.status = event.target.value;
+          renderTable();
+        });
+        document.getElementById('keywordFilter').addEventListener('input', (event) => {
+          state.keyword = event.target.value;
+          renderTable();
+        });
+        document.getElementById('chooseFileButton').addEventListener('click', () => document.getElementById('fileInput').click());
+        document.getElementById('fileInput').addEventListener('change', async (event) => {
+          if (!event.target.files?.length) return;
+          state.isImporting = true;
+          renderTable();
+          try {
+            const { parsed, skipped } = await parseFiles(event.target.files);
+            if (parsed.length) {
+              closeDrawer({ restoreFocus: false });
+              const importedFiles = state.files.filter((file) => file.source === 'imported');
+              state.files = [...importedFiles, ...parsed];
+              state.selectedFile = parsed[0];
+              state.selectedNode = parsed[0].nodes[0] || null;
+            }
+            if (parsed.length || skipped.length) {
+              const loaded = parsed.length ? `已载入 ${parsed.length} 份日志` : '没有可载入的日志';
+              const omitted = skipped.length ? `；${skipped.length} 份未展示（${skippedFileSummary(skipped)}）` : '';
+              showNotice(`${loaded}${omitted}`, skipped.length ? 'warning' : 'success');
+            }
+          } finally {
+            state.isImporting = false;
+            renderTable();
+          }
+          event.target.value = '';
+        });
+        document.getElementById('resetButton').addEventListener('click', () => {
+          state.files = [{ ...sampleFile, expanded: true }];
+          state.status = 'all';
+          state.keyword = '';
+          document.getElementById('statusFilter').value = 'all';
+          document.getElementById('keywordFilter').value = '';
+          state.selectedFile = state.files[0];
+          state.selectedNode = state.files[0].nodes[0] || null;
+          closeDrawer({ restoreFocus: false });
+          renderTable();
+        });
+        document.getElementById('exportVisibleButton').addEventListener('click', exportVisibleResults);
+        document.getElementById('expandAllButton').addEventListener('click', () => {
+          for (const file of state.files) file.expanded = true;
+          renderTable();
+        });
+        document.getElementById('collapseAllButton').addEventListener('click', () => {
+          for (const file of state.files) file.expanded = false;
+          renderTable();
+        });
+        document.getElementById('exportNodeButton').addEventListener('click', () => {
+          if (state.selectedFile && state.selectedNode) exportNodeReport(state.selectedFile, state.selectedNode);
+        });
+        document.getElementById('logTableBody').addEventListener('click', (event) => {
+          const control = event.target.closest('[data-action]');
+          if (!control) return;
+          const file = state.files.find((item) => item.id === control.dataset.fileId);
+          if (!file) return;
+          if (control.dataset.action === 'toggle') {
+            file.expanded = !file.expanded;
+            renderTable();
+          }
+          if (control.dataset.action === 'open-file') {
+            file.expanded = !file.expanded;
+            renderTable();
+          }
+          if (control.dataset.action === 'export-file') exportFileLog(file);
+          if (control.dataset.action === 'remove-file') {
+            const removingSelection = state.selectedFile?.id === file.id;
+            state.files = state.files.filter((item) => item.id !== file.id);
+            if (removingSelection) {
+              state.selectedFile = state.files[0] ?? null;
+              state.selectedNode = state.selectedFile?.nodes[0] ?? null;
+              closeDrawer({ restoreFocus: false });
+            }
+            showNotice(`已移除 ${file.name}`);
+            renderTable();
+          }
+          if (control.dataset.action === 'open-node') {
+            const node = file.nodes.find((item) => item.id === control.dataset.nodeId);
+            if (node) openNode(file, node, control);
+          }
+        });
+        document.getElementById('closeDrawerButton').addEventListener('click', closeDrawer);
+        document.getElementById('drawerBackdrop').addEventListener('click', closeDrawer);
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') closeDrawer();
+        });
+      }
+
+      bindEvents();
+      renderTable();
+    </script>
+  </body>
+</html>

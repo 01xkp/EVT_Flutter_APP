@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/features/device_logs/data/file_app_log_store.dart';
 import 'package:aipin/features/device_logs/domain/app_log_entry.dart';
+import 'package:aipin/features/device_logs/domain/app_log_upload_port.dart';
 import 'package:aipin/features/device_logs/domain/public_diagnostic_log_sink.dart';
 import 'package:aipin/features/device_logs/presentation/device_log_page.dart';
 import 'package:flutter/material.dart';
@@ -13,17 +15,14 @@ void main() {
     final store = _StubLogStore();
     addTearDown(store.dispose);
     await tester.pumpWidget(MaterialApp(home: DeviceLogPage(store: store)));
-
     await tester.tap(find.byTooltip('暂停跟随'));
     store.emit('received_while_paused');
     await tester.pump();
     expect(find.textContaining('received_while_paused'), findsNothing);
-
     await tester.tap(find.byTooltip('继续跟随'));
     await tester.pump();
     expect(find.textContaining('received_while_paused'), findsOneWidget);
   });
-
   testWidgets('clearing the view updates it while following is paused', (
     tester,
   ) async {
@@ -49,6 +48,7 @@ void main() {
     expect(find.text('实时日志'), findsOneWidget);
     expect(find.byTooltip('暂停跟随'), findsOneWidget);
     expect(find.byTooltip('导出日志'), findsOneWidget);
+    expect(find.byTooltip('上传日志'), findsOneWidget);
     store.emit('live_event');
     await tester.pump();
     expect(find.textContaining('live_event'), findsOneWidget);
@@ -108,6 +108,64 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('日志导出失败，请重试。'), findsOneWidget);
+  });
+
+  testWidgets('export failure uses a toast instead of a SnackBar', (
+    tester,
+  ) async {
+    final store = _StubLogStore(
+      exportPathValue: '/app/logs/aipin-2026-09-08.log',
+    );
+    addTearDown(store.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceLogPage(
+          store: store,
+          onExport: (_) async => throw StateError('share unavailable'),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('导出日志'));
+    await tester.pump();
+
+    expect(find.text('日志导出失败，请重试。'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+  });
+
+  testWidgets('upload action confirms and blocks duplicate taps while active', (
+    tester,
+  ) async {
+    final store = _StubLogStore();
+    final upload = Completer<AppLogUploadReceipt>();
+    var uploads = 0;
+    addTearDown(store.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceLogPage(
+          store: store,
+          onUpload: () {
+            uploads += 1;
+            return upload.future;
+          },
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('上传日志'));
+    await tester.pumpAndSettle();
+    expect(find.text('上传运行日志'), findsOneWidget);
+    await tester.tap(find.widgetWithText(AppButton, '确认上传'));
+    await tester.pump();
+
+    expect(uploads, 1);
+    expect(find.byTooltip('正在上传'), findsOneWidget);
+
+    upload.complete(const AppLogUploadReceipt(bytes: 2048));
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('日志已上报（2.0 KB）'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
   });
 
   testWidgets(

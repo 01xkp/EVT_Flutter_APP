@@ -21,8 +21,6 @@ class DeviceCandidateRow extends StatelessWidget {
       selected: selected,
       child: Row(
         children: [
-          const Icon(Icons.bluetooth_outlined),
-          const SizedBox(width: 12),
           Expanded(
             child: Text(
               candidate.name,
@@ -30,7 +28,8 @@ class DeviceCandidateRow extends StatelessWidget {
             ),
           ),
           Text(
-            _signalLabel(candidate.rssi),
+            '${selected ? '已选中 · ' : ''}${_signalLabel(candidate.rssi)}\n${candidate.rssi} dBm',
+            textAlign: TextAlign.end,
             style: Theme.of(context).textTheme.labelLarge,
           ),
         ],

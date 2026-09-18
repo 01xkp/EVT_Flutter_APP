@@ -274,6 +274,9 @@ class _FakeAppLogStore implements AppLogStore {
   Future<String?> exportPath() async => null;
 
   @override
+  Future<String?> createUploadSnapshot() async => null;
+
+  @override
   void clearView() {}
 
   @override

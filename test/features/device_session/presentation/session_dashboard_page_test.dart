@@ -12,6 +12,59 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 
 void main() {
+  testWidgets('authenticated recording actions are visible without scrolling', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    int? action;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceDetailPage(
+          state: const SessionState(phase: SessionPhase.observable),
+          authState: DeviceAuthState.authenticated,
+          canControlRecording: true,
+          onRecordAction: (value) => action = value,
+        ),
+      ),
+    );
+    expect(find.text('开始录音').hitTestable(), findsOneWidget);
+    await tester.tap(find.text('开始录音'));
+    expect(action, 1);
+    expect(find.text('解绑设备').hitTestable(), findsNothing);
+  });
+
+  testWidgets('recording consent off disables start and explains why', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceDetailPage(
+          state: const SessionState(
+            phase: SessionPhase.observable,
+            deviceStatus: DeviceStatus(
+              privacy: false,
+              privacyRemainingMinutes: 0,
+              recordConsent: false,
+              syncState: 0,
+            ),
+          ),
+          authState: DeviceAuthState.authenticated,
+          canControlRecording: true,
+          onRecordAction: (_) {},
+        ),
+      ),
+    );
+    expect(
+      tester
+          .widget<AppButton>(find.widgetWithText(AppButton, '开始录音'))
+          .onPressed,
+      isNull,
+    );
+    expect(find.text('请先开启“允许设备录音”。'), findsOneWidget);
+  });
   testWidgets('dashboard keeps the compatibility route consumer-facing', (
     tester,
   ) async {
@@ -90,7 +143,9 @@ void main() {
       expect(find.text('设备录音'), findsOneWidget);
       expect(find.text('暂停录音'), findsOneWidget);
       expect(find.text('结束录音'), findsOneWidget);
-      await tester.tap(find.widgetWithText(AppButton, '暂停录音'));
+      final pauseRecording = find.widgetWithText(AppButton, '暂停录音');
+      await tester.ensureVisible(pauseRecording);
+      await tester.tap(pauseRecording);
       expect(action, 2);
     },
   );
@@ -209,10 +264,9 @@ void main() {
         scrollable: find.byType(Scrollable),
       );
       final refreshButton = tester.widget<TextButton>(
-        find.ancestor(of: find.text('刷新状态'), matching: find.byType(TextButton)),
+        find.widgetWithText(TextButton, '刷新状态'),
       );
       expect(refreshButton.onPressed, isNull);
-
       await tester.tap(find.text('刷新状态'));
       expect(refreshCount, 0);
     },
@@ -293,7 +347,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('解绑设备'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('解绑设备'));
+    await tester.tap(find.text('解绑设备').hitTestable());
     await tester.pumpAndSettle();
 
     expect(

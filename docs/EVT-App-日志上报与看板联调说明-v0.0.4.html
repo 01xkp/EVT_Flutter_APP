@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EVT App 日志上报与看板联调说明 v0.0.4</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17212b;
+      --muted: #5d6975;
+      --line: #d4dce3;
+      --canvas: #f4f7f8;
+      --surface: #ffffff;
+      --brand: #0e7067;
+      --brand-soft: #e1f1ee;
+      --good: #247846;
+      --good-soft: #e5f5e9;
+      --warn: #a75b00;
+      --warn-soft: #fff0db;
+      --danger: #b3261e;
+      --danger-soft: #fde8e7;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font: 16px/1.55 "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 56px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: 30px; margin-bottom: 8px; }
+    h2 { font-size: 22px; margin: 36px 0 14px; }
+    h3 { font-size: 17px; margin-bottom: 8px; }
+    .lead { color: var(--muted); max-width: 800px; }
+    .notice {
+      border-left: 4px solid var(--brand);
+      background: var(--brand-soft);
+      padding: 12px 16px;
+      margin: 22px 0;
+    }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    .phone, .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .phone { max-width: 440px; margin: 0 auto; box-shadow: 0 8px 24px rgba(26, 45, 56, .10); }
+    .appbar { background: #f8fbfb; border-bottom: 1px solid var(--line); font-size: 18px; font-weight: 700; padding: 15px 18px; }
+    .screen { padding: 16px; min-height: 370px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .button {
+      display: inline-block;
+      border: 1px solid var(--brand);
+      background: var(--surface);
+      color: var(--brand);
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .button.primary { background: var(--brand); color: #fff; }
+    .button.disabled { color: #93a0a7; border-color: #c9d0d5; background: #f1f3f4; }
+    .subtle { color: var(--muted); font-size: 14px; }
+    .path { font: 12px/1.45 Consolas, "Courier New", monospace; color: #44525c; word-break: break-all; }
+    .logline { border-top: 1px solid #edf0f2; font: 12px/1.55 Consolas, "Courier New", monospace; padding: 8px 0; }
+    .dialog {
+      margin: 28px 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 12px 32px rgba(26, 45, 56, .16);
+    }
+    .dialog h3 { font-size: 19px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+    .toast { margin-top: 18px; border-radius: 6px; padding: 11px 12px; font-size: 14px; }
+    .toast.good { background: var(--good-soft); color: var(--good); }
+    .toast.warn { background: var(--warn-soft); color: var(--warn); }
+    .toast.danger { background: var(--danger-soft); color: var(--danger); }
+    .flow { display: flex; align-items: stretch; gap: 8px; }
+    .step { flex: 1 1 0; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 12px; font-size: 14px; }
+    .step strong { display: block; color: var(--brand); margin-bottom: 4px; }
+    .arrow { color: var(--muted); display: grid; place-items: center; }
+    .panel { padding: 18px; }
+    table { width: 100%; border-collapse: collapse; background: var(--surface); }
+    th, td { border: 1px solid var(--line); padding: 10px; text-align: left; vertical-align: top; }
+    th { background: #edf4f4; }
+    .status { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 13px; font-weight: 700; }
+    .status.good { background: var(--good-soft); color: var(--good); }
+    .status.warn { background: var(--warn-soft); color: var(--warn); }
+    .status.danger { background: var(--danger-soft); color: var(--danger); }
+    code { font-family: Consolas, "Courier New", monospace; font-size: .9em; }
+    a { color: #075d84; }
+    ul { padding-left: 22px; }
+    @media (max-width: 760px) {
+      main { padding: 24px 14px 40px; }
+      h1 { font-size: 25px; }
+      .grid { grid-template-columns: 1fr; }
+      .flow { flex-direction: column; }
+      .arrow { transform: rotate(90deg); min-height: 20px; }
+      table { font-size: 14px; }
+      th, td { padding: 8px; }
+    }
+    @media print { body { background: #fff; } main { max-width: none; padding: 0; } .phone { box-shadow: none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>EVT App 日志上报与看板联调说明</h1>
+    <p class="lead">版本 0.0.4+5。此页说明当前 Debug App 中“上传日志”的实际入口、点击后的预期效果、脱敏边界和日志看板对接方式。页面中的手机界面为预期状态示意，不代表已完成真机服务器上传。</p>
+
+    <div class="notice">日志上报只由用户手动触发，只上传当前 App 私有日志生成的脱敏快照。不会自动后台上传，不读取公共下载目录，不上传 <code>raw_packet_hex</code> 中的原始蓝牙字节。</div>
+
+    <h2>App 操作与预期界面</h2>
+    <div class="grid">
+      <section class="phone" aria-label="实时日志页预期界面">
+        <div class="appbar">实时日志</div>
+        <div class="screen">
+          <div class="actions">
+            <span class="button">暂停跟随</span>
+            <span class="button">清空视图</span>
+            <span class="button">导出日志</span>
+            <span class="button primary">上传日志</span>
+          </div>
+          <p class="subtle">实时显示连接、认证、录音、传输和播放事件。</p>
+          <p class="path">应用内部日志：.../logs/aipin-2026-09-17.log</p>
+          <div class="logline">2026-09-17T03:21:26.781Z | INFO | CMD | - | device_authenticate | response | evt_command_response_received | accepted | -</div>
+          <div class="logline">2026-09-17T03:24:09.517Z | INFO | APP | - | - | upload | app_log_upload_requested | pending | -</div>
+          <div class="logline">2026-09-17T03:24:10.282Z | INFO | APP | - | - | upload | app_log_upload_succeeded | success | - | bytes=2048</div>
+        </div>
+      </section>
+
+      <section class="phone" aria-label="上传确认和结果预期界面">
+        <div class="appbar">实时日志</div>
+        <div class="screen">
+          <div class="dialog">
+            <h3>上传运行日志</h3>
+            <p>将上传当前脱敏日志快照，用于联调问题定位。</p>
+            <div class="dialog-actions">
+              <span class="button">取消</span>
+              <span class="button primary">确认上传</span>
+            </div>
+          </div>
+          <div class="toast good">日志已上报（2.0 KB）</div>
+          <div class="toast warn">日志上报超时，请稍后重试。</div>
+          <div class="toast danger">日志服务器身份校验失败，请联系联调人员。</div>
+        </div>
+      </section>
+    </div>
+
+    <table>
+      <thead><tr><th>点击或状态</th><th>App 的实际行为</th><th>预期结果</th></tr></thead>
+      <tbody>
+        <tr><td>实时日志页 → 上传日志</td><td>打开确认框，不立即传输。</td><td>用户可取消；取消后不会创建快照或发送网络请求。</td></tr>
+        <tr><td>确认上传</td><td>生成应用私有目录中的不可变脱敏快照，再开始传输。</td><td>按钮显示“正在上传”，导出和再次上传暂时不可点击。</td></tr>
+        <tr><td>上传成功</td><td>服务端以 App 生成的时间文件名接收快照，并用不透明存储键安全保存后返回成功。</td><td>显示“日志已上报（大小）”，可继续导出或再次上传。</td></tr>
+        <tr><td>网络、超时或认证失败</td><td>App 只记录稳定错误码，不显示服务器路径、账号、token 或底层异常。</td><td>显示可执行的中文提示，用户可以重新点击上传。</td></tr>
+        <tr><td>Release/Profile 包</td><td>不持久化 Debug 运行日志，也不会启用日志上报配置。</td><td>显示“日志上报尚未配置，请联系联调人员。”</td></tr>
+      </tbody>
+    </table>
+
+    <h2>数据链路</h2>
+    <div class="flow">
+      <div class="step"><strong>1. 实时日志</strong>用户进入设备详情的“实时日志”。</div><div class="arrow">→</div>
+      <div class="step"><strong>2. 脱敏快照</strong>移除原始协议字节和敏感字段。</div><div class="arrow">→</div>
+      <div class="step"><strong>3. HTTPS 上传</strong>使用 Bearer token 发送时间命名的脱敏快照。</div><div class="arrow">→</div>
+      <div class="step"><strong>4. 服务端保存</strong>服务端以唯一 <code>storage_key</code> 原子保存，来源文件名保持可读。</div><div class="arrow">→</div>
+      <div class="step"><strong>5. 看板读取</strong>服务端解析并经 HTTPS 提供给 Vue 看板。</div>
+    </div>
+
+    <h2>看板预期展示</h2>
+    <section class="panel">
+      <p class="subtle">一个上传文件是父节点；父节点按操作链路展开子节点。状态由日志中的 <code>result</code> 和稳定事件判断，不能把没有日志证据的操作标记为成功。</p>
+      <table>
+        <thead><tr><th>日志文件 / 功能节点</th><th>结果</th><th>关键数据</th><th>看板动作</th></tr></thead>
+        <tbody>
+          <tr><td><strong>aipin-2026-09-17-11-24-09.log</strong><br><span class="subtle">App 0.0.4+5 · Android · 2.0 KB</span></td><td><span class="status good">已解析</span></td><td>3 个成功节点，0 个失败节点</td><td>展开、查看详情、导出脱敏日志</td></tr>
+          <tr><td>&nbsp;&nbsp;└ 认证与订阅</td><td><span class="status good">联调成功</span></td><td>FA19 · 0x09 / 0x89 · 12 ms</td><td>查看 App 下发摘要与设备回包摘要</td></tr>
+          <tr><td>&nbsp;&nbsp;└ 设备文件下载</td><td><span class="status warn">需要复核</span></td><td>收到分片，未见完成事件</td><td>查看缺失事件与同时间段固件日志</td></tr>
+          <tr><td>&nbsp;&nbsp;└ 运行日志上报</td><td><span class="status good">联调成功</span></td><td>2048 B · 时间文件名已保存</td><td>查看上传耗时与服务端接收时间</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <h2>联调配置和权限</h2>
+    <ul>
+      <li>当前 App 通过 HTTPS API 上传，仅限受控 Debug 包。上传 token 不能提交到仓库或发送到聊天记录。</li>
+      <li>服务端上传接口只接受合法的时间文件名，并使用唯一 <code>storage_key</code> 避免同名覆盖；App 不需要访问服务器目录。</li>
+      <li>日志接入服务或看板后端使用独立的读取账号，并通过 HTTPS 给浏览器提供列表、详情和下载接口。</li>
+      <li>真实端到端联调前，服务器需要提供 HTTPS 入口、上传 token、看板读取认证、网络可达性和 20 MiB 文件限制确认。</li>
+    </ul>
+
+    <p><a href="qa/evt-log-upload-configuration.md">查看 App 受控构建配置</a> · <a href="qa/evt-log-service-dashboard-requirements.md">查看服务端与接口契约</a> · <a href="prototypes/evt-log-dashboard-prototype.html">打开可交互日志看板原型</a> · <a href="EVT-App-功能使用说明-v0.0.4.html">返回设备 BLE 功能图解</a></p>
+  </main>
+</body>
+</html>

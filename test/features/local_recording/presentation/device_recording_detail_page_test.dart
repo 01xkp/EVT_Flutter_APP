@@ -23,6 +23,7 @@ void main() {
       const ValueKey('device-recording-playback-progress'),
     );
     expect(waveform, findsOneWidget);
+    expect(progress, findsOneWidget);
     expect(find.descendant(of: waveform, matching: progress), findsNothing);
 
     await tester.pump();

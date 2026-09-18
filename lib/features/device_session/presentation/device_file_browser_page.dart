@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/core/design_system/widgets/app_surface_card.dart';
+import 'package:aipin/core/design_system/widgets/app_text_action.dart';
+import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/features/device_session/domain/device_file.dart';
 import 'package:aipin/features/device_session/domain/device_file_import_progress.dart';
 import 'package:aipin/features/local_recording/domain/local_recording.dart';
@@ -72,6 +74,21 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('设备文件'),
+        actions: [
+          if (widget.onOpenSavedRecordings case final openSaved?)
+            AppTextAction(
+              label: '已保存录音',
+              tooltip: '查看已保存录音',
+              onPressed: _busy
+                  ? null
+                  : () => unawaited(_openSavedRecordings(openSaved)),
+            ),
+          AppTextAction(
+            label: '刷新',
+            tooltip: '刷新文件列表',
+            onPressed: _busy ? null : () => unawaited(_load()),
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(52),
           child: Column(
@@ -88,25 +105,6 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
             ],
           ),
         ),
-        actions: [
-          if (widget.onOpenSavedRecordings case final openSaved?)
-            Tooltip(
-              message: '查看已保存录音',
-              child: TextButton(
-                onPressed: _busy
-                    ? null
-                    : () => unawaited(_openSavedRecordings(openSaved)),
-                child: const Text('已保存录音'),
-              ),
-            ),
-          Tooltip(
-            message: '刷新文件列表',
-            child: TextButton(
-              onPressed: _busy ? null : () => unawaited(_load()),
-              child: const Text('刷新'),
-            ),
-          ),
-        ],
       ),
       body: SafeArea(
         top: false,
@@ -215,9 +213,7 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
       return true;
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('手机录音暂时不可读取，请重试')));
+        AppToast.show(context, message: '手机录音暂时不可读取，请重试');
       }
       return false;
     }
@@ -296,15 +292,11 @@ class _DeviceFileBrowserPageState extends State<DeviceFileBrowserPage> {
       );
       if (mounted) {
         setState(() => _saved[key] = saved);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('设备录音已保存到 App')));
+        AppToast.show(context, message: '设备录音已保存到 App');
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('设备文件导入失败：$error')));
+        AppToast.show(context, message: '设备文件导入失败，请重试');
       }
     } finally {
       if (mounted) {

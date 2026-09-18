@@ -224,6 +224,8 @@ class EvtLegacyAuthController extends ChangeNotifier
     if (recovery && !_unbindRecoveryPending) {
       throw const EvtLegacyAuthenticationException('当前没有待恢复的解绑操作。');
     }
+    // Validate before revoking permissions or retaining recovery intent: a
+    // malformed local value has never reached firmware and cannot be pending.
     final request = EvtLegacySecurityRequest(
       action: action,
       securityCode: securityCode,

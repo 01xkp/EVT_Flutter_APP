@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:aipin/core/design_system/widgets/app_toast.dart';
 import 'package:aipin/features/local_recording/domain/audio_player_port.dart';
 import 'package:aipin/features/local_recording/presentation/playback_waveform.dart';
 import 'package:flutter/material.dart';
@@ -152,7 +153,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
             const SizedBox(height: 2),
             Row(
               children: [
-                SizedBox(width: 42, child: Text(_format(position))),
+                Text(_format(position)),
                 const Spacer(),
                 SizedBox(
                   width: 42,
@@ -161,7 +162,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
                         ? _format(_duration)
                         : _loading
                         ? '读取中'
-                        : '未知',
+                        : '时长未知',
                     textAlign: TextAlign.end,
                   ),
                 ),
@@ -243,9 +244,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     } catch (_) {
       _setPlaybackState(AudioPlaybackState.idle);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(widget.playbackErrorMessage)));
+        AppToast.show(context, message: widget.playbackErrorMessage);
       }
     }
   }
@@ -263,9 +262,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
       await _audioPlayer.seek(target);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('无法调整录音播放进度。')));
+        AppToast.show(context, message: '无法调整录音播放进度。');
       }
     }
   }
@@ -276,7 +273,7 @@ class _AudioPlaybackPanelState extends State<AudioPlaybackPanel> {
     }
     setState(() {
       _playbackState = state;
-      if (state == AudioPlaybackState.completed) {
+      if (state == AudioPlaybackState.completed && _duration > Duration.zero) {
         _position = _duration;
       }
     });
@@ -405,7 +402,9 @@ class _ProgressSlider extends StatelessWidget {
       ),
       child: Slider(
         key: progressKey,
-        value: math.min(max, position.inMilliseconds.toDouble()),
+        value: maximum <= 0
+            ? 0
+            : math.min(max, position.inMilliseconds.toDouble()),
         max: max,
         onChanged: onChanged,
         onChangeEnd: onChangeEnd,

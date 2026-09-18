@@ -36,6 +36,7 @@ class DiagnosticSanitizer {
   static const _safeOperations = <String>{
     'ai_summary',
     'ai_transcription',
+    'audio_playback',
     'device_authenticate',
     'device_bind',
     'device_unbind',
@@ -59,7 +60,9 @@ class DiagnosticSanitizer {
     'cloud_upload',
     'device_confirmation',
     'cleanup',
+    'pre_authentication',
     'preflight',
+    'playback',
     'challenge',
     'connect',
     'download',
@@ -119,6 +122,71 @@ class DiagnosticSanitizer {
 
   static final _rawPacketHexValue = RegExp(
     r'^(?:empty|[0-9A-F]{2}(?: [0-9A-F]{2})*)$',
+  );
+
+  // `reason` is the only human-readable diagnostic field. Keep the existing
+  // fixed explanations, but reject any free-text value that could carry a
+  // credential, identifier, path, URI, or raw protocol bytes.
+  static const _knownSafeReasons = <String>{
+    'security_code_sheet_cancelled',
+    '【解绑预检】设备尚未完成认证并进入可用状态，未打开安全码输入，也未发送 Action=2',
+    '【解绑预检】设备空闲、同步状态为空闲且文件列表为空，允许打开安全码输入',
+    '【解绑预检】设备处于空闲、未同步文件为空，可以打开安全码输入',
+    '【预认证】已收到脱敏设备信息，可据 DeviceCode 取得安全码',
+  };
+
+  static const _knownSafeUnbindPreflightMessages = <String>{
+    '设备正在录音或已暂停录音，请先结束录音后再解绑。',
+    '设备录音状态异常，无法确认可以安全解绑。',
+    '设备正在同步或同步状态异常，请完成文件同步后再解绑。',
+    '设备仍有未同步录音文件，请先完成文件同步后再解绑。',
+    '无法确认设备录音、同步和文件状态，请重新连接后完成文件同步再解绑。',
+  };
+
+  static final _unsafeReasonControl = RegExp(r'[\r\n|]');
+
+  static final _unsafeReasonSensitiveName = RegExp(
+    r'(?:安全(?:码|代码|密码|口令|密钥)|(?:动态|验证|授权|访问)(?:码|密码|口令|令牌)|'
+    r'密码|口令|私钥|密钥|令牌|凭证|'
+    r'\b(?:security[\s_-]*code|verification[\s_-]*code|'
+    r'pass(?:word|code)?|pwd|pin(?:[\s_-]*(?:code|码))?|'
+    r'(?:access[\s_-]*)?token|api[\s_-]*key|private[\s_-]*key|'
+    r'(?:client[\s_-]*)?secret(?:[\s_-]*key)?|credential(?:s)?|bearer)(?![a-z]))',
+    caseSensitive: false,
+  );
+
+  static final _unsafeReasonUri = RegExp(
+    r'\b[a-z][a-z0-9+.-]*:(?://|/)',
+    caseSensitive: false,
+  );
+
+  static final _unsafeReasonUnixPath = RegExp(
+    r'(?:^|[\s=:(])(?:/|~/)[^\s/]+(?:/[^\s/]+)*',
+  );
+
+  static final _unsafeReasonWindowsPath = RegExp(
+    r'(?:^|[^a-z0-9])[a-z]:[\\/]',
+    caseSensitive: false,
+  );
+
+  static final _unsafeReasonMac = RegExp(
+    r'(?:^|[^a-f0-9])(?:[a-f0-9]{2}[:-]){5}[a-f0-9]{2}(?:$|[^a-f0-9])',
+    caseSensitive: false,
+  );
+
+  static final _unsafeReasonUuid = RegExp(
+    r'\{?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\}?',
+    caseSensitive: false,
+  );
+
+  static final _unsafeReasonContinuousHex = RegExp(
+    r'(?:^|[^a-f0-9])[a-f0-9]{12,}(?:$|[^a-f0-9])',
+    caseSensitive: false,
+  );
+
+  static final _unsafeReasonSpacedHex = RegExp(
+    r'(?:^|[^a-f0-9])(?:[a-f0-9]{2}[ \t]+){5,}[a-f0-9]{2}(?:$|[^a-f0-9])',
+    caseSensitive: false,
   );
 
   static const _blockedFragments = <String>{
@@ -296,7 +364,9 @@ class DiagnosticSanitizer {
       'request_bytes',
       'response_bytes',
     },
-    'DEVICE_API': {'host'},
+    // Host names are transport/configuration data and must never enter the
+    // persisted or uploaded diagnostic contract.
+    'DEVICE_API': <String>{},
     'FILE': {'chunk_length', 'total_bytes'},
     'RECONNECT': {'phase', 'failure_category', 'cycle'},
     'SESSION': {'mode', 'utc_seconds'},
@@ -368,6 +438,9 @@ class DiagnosticSanitizer {
           !EvtPacketLogSummary.isPersistableSummary(key: key, value: value)) {
         return _dropped;
       }
+      if (key == 'reason' && _isUnsafeReason(value)) {
+        return _dropped;
+      }
       if (key == 'device_suffix' && !_isSafeDeviceSuffix(value)) {
         return _dropped;
       }
@@ -422,6 +495,37 @@ class DiagnosticSanitizer {
               _evtLogicalEndpoints.contains(parts.first) &&
               _evtEndpointOperations.contains(parts.last);
         });
+  }
+
+  bool _isUnsafeReason(String value) {
+    if (_isKnownSafeReason(value)) {
+      return false;
+    }
+    return _unsafeReasonControl.hasMatch(value) ||
+        _unsafeReasonSensitiveName.hasMatch(value) ||
+        _unsafeReasonUri.hasMatch(value) ||
+        _unsafeReasonUnixPath.hasMatch(value) ||
+        _unsafeReasonWindowsPath.hasMatch(value) ||
+        _unsafeReasonMac.hasMatch(value) ||
+        _unsafeReasonUuid.hasMatch(value) ||
+        _unsafeReasonContinuousHex.hasMatch(value) ||
+        _unsafeReasonSpacedHex.hasMatch(value);
+  }
+
+  bool _isKnownSafeReason(String value) {
+    if (_knownSafeReasons.contains(value)) {
+      return true;
+    }
+    const prefix = '【解绑预检】';
+    const suffix = ' 未打开安全码输入，也未发送 Action=2';
+    if (!value.startsWith(prefix) || !value.endsWith(suffix)) {
+      return false;
+    }
+    final message = value.substring(
+      prefix.length,
+      value.length - suffix.length,
+    );
+    return _knownSafeUnbindPreflightMessages.contains(message);
   }
 
   String normalizeScope(String value) {

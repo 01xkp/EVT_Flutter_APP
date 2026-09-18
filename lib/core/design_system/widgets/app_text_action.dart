@@ -8,7 +8,6 @@ class AppTextAction extends StatelessWidget {
     required this.onPressed,
     this.tooltip,
   });
-
   final String label;
   final String? tooltip;
   final VoidCallback? onPressed;

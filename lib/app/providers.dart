@@ -14,8 +14,12 @@ import 'package:aipin/core/permissions/app_permission_gateway.dart';
 import 'package:aipin/core/permissions/permission_handler_gateway.dart';
 import 'package:aipin/core/diagnostics/safe_app_logger.dart';
 import 'package:aipin/features/device_logs/application/app_log_logger.dart';
+import 'package:aipin/features/device_logs/application/app_log_upload_controller.dart';
 import 'package:aipin/features/device_logs/data/file_app_log_store.dart';
 import 'package:aipin/features/device_logs/data/platform_public_diagnostic_log_sink.dart';
+import 'package:aipin/features/device_logs/data/https_app_log_upload_port.dart';
+import 'package:aipin/features/device_logs/data/unconfigured_app_log_upload_port.dart';
+import 'package:aipin/features/device_logs/domain/app_log_upload_port.dart';
 import 'package:aipin/features/device_session/data/drift_device_file_download_checkpoint_repository.dart';
 import 'package:aipin/features/device_session/domain/device_file_download_checkpoint_repository.dart';
 import 'package:aipin/features/device_session/data/shared_preferences_device_connection_history_repository.dart';
@@ -52,6 +56,25 @@ final scopedAppLoggerProvider = Provider.family<SafeAppLogger, String>((
   scope,
 ) {
   return PersistentAppLogger(ref.watch(appLogStoreProvider), scope: scope);
+});
+
+final appLogUploadPortProvider = Provider<AppLogUploadPort>((ref) {
+  final configuration = EvtLogUploadServiceConfiguration.uploadConfiguration();
+  if (configuration == null) {
+    return const UnconfiguredAppLogUploadPort();
+  }
+  return HttpsAppLogUploadPort(
+    configuration: configuration,
+    snapshotValidator: ref.watch(appLogStoreProvider),
+  );
+});
+
+final appLogUploadControllerProvider = Provider<AppLogUploadController>((ref) {
+  return AppLogUploadController(
+    store: ref.watch(appLogStoreProvider),
+    uploader: ref.watch(appLogUploadPortProvider),
+    logger: ref.watch(scopedAppLoggerProvider('STORAGE')),
+  );
 });
 
 final bleTransportProvider = Provider<BleTransport>((ref) {

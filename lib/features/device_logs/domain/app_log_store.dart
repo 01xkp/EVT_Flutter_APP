@@ -19,6 +19,13 @@ abstract interface class AppLogStore implements Listenable {
   });
   Future<void> initialize();
   Future<void> flush();
+
+  /// Creates a private, immutable and transport-safe diagnostic snapshot.
+  ///
+  /// Unlike [exportPath], this does not mirror anything to public storage or
+  /// request legacy storage permission. The caller must delete the returned
+  /// path after the upload attempt completes, whether it succeeds or fails.
+  Future<String?> createUploadSnapshot();
   Future<String?> exportPath();
   void clearView();
   Future<void> close();
