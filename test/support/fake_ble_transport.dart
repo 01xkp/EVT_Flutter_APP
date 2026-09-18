@@ -43,6 +43,7 @@ class FakeBleTransport implements BleTransport {
 
   factory FakeBleTransport.withGattReadyProfile({
     bool deferDisconnect = false,
+    bool deferServiceDiscovery = false,
   }) {
     const profile = DeviceProfile(
       namePrefix: 'AIPIN',
@@ -118,6 +119,7 @@ class FakeBleTransport implements BleTransport {
       profile: profile,
       deferRead: true,
       deferDisconnect: deferDisconnect,
+      deferServiceDiscovery: deferServiceDiscovery,
       services: const [
         BleService(
           uuid: '0000FA10-1212-EFDE-1523-785FEABCD123',

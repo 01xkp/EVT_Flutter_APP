@@ -17,10 +17,12 @@ is kept unfiltered as described below.
 When upgrading the plugin, reapply this behavioral patch and verify device
 discovery on Android 7.x and Android 8+ before replacing this vendor copy.
 
-The app manifest intentionally leaves `BLUETOOTH_SCAN` without
-`neverForLocation`. That flag can make Android apply system-level beacon
-filtering before results reach the app; EVT discovery is already unfiltered at
-the app layer and must observe the platform's complete GATT-device result set.
+The app manifest intentionally sets `BLUETOOTH_SCAN` with
+`neverForLocation`. The App requests Android 12+ nearby-device access without
+location, and the pinned RxAndroidBle permission gate requires this flag to
+avoid incorrectly reporting an unauthorized scan because fine location was not
+granted. EVT discovery remains unfiltered at the app layer; this permission
+declaration does not add an App-side advertisement filter.
 
 ## iOS unfiltered foreground scan
 

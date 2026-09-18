@@ -20,12 +20,14 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
     companion object {
         private val evtFileTransferCharacteristicUuid =
             UUID.fromString("0000ff13-1212-efde-1523-785feabcd123")
-        private const val fileTransferLogSampleInterval = 100
-        private const val fileTransferInitialPacketLogCount = 3
+        private val dvtRealtimeAudioCharacteristicUuid =
+            UUID.fromString("0000fa18-1212-efde-1523-785feabcd123")
+        private const val streamLogSampleInterval = 100
+        private const val streamInitialPacketLogCount = 3
         // A GATT read response can arrive before Flutter finishes attaching
         // the characteristic-value EventChannel listener. Keep only a small
         // bounded queue for control/read frames; never buffer the unbounded
-        // FF13 audio/file stream while no consumer is attached.
+        // FF13 file and FA18 live-audio streams while no consumer is attached.
         private const val pendingMessageLimit = 64
         private const val hexByteFormat = "%02X"
 
@@ -37,7 +39,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         private val subscriptionMap = mutableMapOf<pb.CharacteristicAddress, CompositeDisposable>()
         private val notificationSetupResults =
             mutableMapOf<NotificationSetupKey, CompletableSubject>()
-        private val fileTransferPacketCounts = mutableMapOf<pb.CharacteristicAddress, Int>()
+        private val streamPacketCounts = mutableMapOf<pb.CharacteristicAddress, Int>()
     }
 
     override fun onListen(
@@ -59,8 +61,8 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
             fields = mapOf("queued_message_count" to queuedMessages.size),
         )
         // Flush read/control responses that arrived during the short
-        // platform-channel handoff. FF13 is deliberately excluded from this
-        // queue, so this cannot replay a large audio/file payload.
+        // platform-channel handoff. FF13 and FA18 are deliberately excluded
+        // from this queue, so this cannot replay a large file/audio payload.
         queuedMessages.forEach { eventSink.success(it) }
     }
 
@@ -83,7 +85,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
                 .uuidFromByteArray(request.characteristic.characteristicUuid.data.toByteArray())
         val previous = subscriptionMap.remove(request.characteristic)
         previous?.dispose()
-        fileTransferPacketCounts.remove(request.characteristic)
+        streamPacketCounts.remove(request.characteristic)
         val setupKey = NotificationSetupKey(
             deviceId = request.characteristic.deviceId,
             characteristicUuid = charUuid,
@@ -229,7 +231,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
             fields = mapOf("device_id" to request.characteristic.deviceId),
         )
         subscriptionMap.remove(request.characteristic)?.dispose()
-        fileTransferPacketCounts.remove(request.characteristic)
+        streamPacketCounts.remove(request.characteristic)
         cancelPendingNotificationSetup(
             NotificationSetupKey(
                 deviceId = request.characteristic.deviceId,
@@ -279,7 +281,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         emitOrQueue(
             subscriptionRequest = subscriptionRequest,
             value = convertedMsg.toByteArray(),
-            isFileTransfer = false,
+            isStreaming = false,
         )
     }
 
@@ -298,7 +300,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         }
         subscriptionMap.forEach { it.value.dispose() }
         subscriptionMap.clear()
-        fileTransferPacketCounts.clear()
+        streamPacketCounts.clear()
         notificationSetupResults.values.forEach { setupResult ->
             if (!setupResult.hasComplete() && !setupResult.hasThrowable()) {
                 setupResult.onError(
@@ -347,7 +349,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
     ) {
         if (subscriptionMap[characteristic] === subscriptions) {
             subscriptionMap.remove(characteristic)?.dispose()
-            fileTransferPacketCounts.remove(characteristic)
+            streamPacketCounts.remove(characteristic)
         }
     }
 
@@ -381,7 +383,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
             subscriptionRequest = subscriptionRequest,
             value = convertedMsg.toByteArray(),
             sourceValue = value,
-            isFileTransfer = isFileTransferCharacteristic(subscriptionRequest),
+            isStreaming = isStreamingCharacteristic(subscriptionRequest),
         )
     }
 
@@ -389,7 +391,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         subscriptionRequest: pb.CharacteristicAddress,
         value: ByteArray,
         sourceValue: ByteArray? = null,
-        isFileTransfer: Boolean,
+        isStreaming: Boolean,
     ) {
         // Read the sink and append to the pending queue under one lock.  A
         // callback can otherwise observe a null sink just before onListen()
@@ -400,7 +402,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         var queueSize = 0
         synchronized(pendingMessageLock) {
             sink = charNotificationSink
-            if (sink == null && !isFileTransfer) {
+            if (sink == null && !isStreaming) {
                 if (pendingMessages.size >= pendingMessageLimit) {
                     pendingMessages.removeFirst()
                 }
@@ -425,7 +427,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         // Do not retain a potentially unbounded file/audio stream when the
         // Flutter listener is absent. Control/read frames are bounded and are
         // flushed as soon as the listener is attached.
-        if (isFileTransfer) {
+        if (isStreaming) {
             sourceValue?.let {
                 logReceivedPacket(
                     subscriptionRequest = subscriptionRequest,
@@ -495,7 +497,7 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         emitOrQueue(
             subscriptionRequest = subscriptionRequest,
             value = convertedMsg.toByteArray(),
-            isFileTransfer = false,
+            isStreaming = false,
         )
     }
 
@@ -505,8 +507,9 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
         droppedByFlutter: Boolean,
     ) {
         val isFileTransfer = isFileTransferCharacteristic(subscriptionRequest)
-        val fileTransferPacketCount =
-            if (isFileTransfer) nextFileTransferPacketCount(subscriptionRequest) else null
+        val isStreaming = isStreamingCharacteristic(subscriptionRequest)
+        val streamPacketCount =
+            if (isStreaming) nextStreamPacketCount(subscriptionRequest) else null
         val event =
             if (droppedByFlutter) "characteristic_packet_dropped" else "characteristic_packet_received"
         val message =
@@ -525,16 +528,21 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
             "bytes" to value.size,
             "file_transfer" to isFileTransfer,
         )
-        if (isFileTransfer) {
-            fields["packet_count"] = fileTransferPacketCount
+        if (isStreaming) {
+            fields["packet_count"] = streamPacketCount
+            fields["streaming_payload"] = true
             fields["raw_packet_hex_omitted"] = true
-            if (!shouldLogFileTransferPacket(fileTransferPacketCount ?: 0)) {
+            if (!shouldLogStreamPacket(streamPacketCount ?: 0)) {
                 return
             }
             log(
                 level = level,
-                event = "ff13_packet_sampled",
-                message = "【AIPIN原生BLE】【FF13文件流】收到文件分包，原始音频字节已省略",
+                event = if (isFileTransfer) "ff13_packet_sampled" else "fa18_packet_sampled",
+                message = if (isFileTransfer) {
+                    "【AIPIN原生BLE】【FF13文件流】收到文件分包，原始音频字节已省略"
+                } else {
+                    "【AIPIN原生BLE】【FA18实时音频流】收到音频分包，原始字节已省略"
+                },
                 fields = fields,
             )
             return
@@ -568,17 +576,27 @@ class CharNotificationHandler(private val bleClient: com.signify.hue.flutterreac
             subscriptionRequest.characteristicUuid.data.toByteArray(),
         ) == evtFileTransferCharacteristicUuid
 
-    private fun nextFileTransferPacketCount(
+    private fun isStreamingCharacteristic(
+        subscriptionRequest: pb.CharacteristicAddress,
+    ): Boolean {
+        val characteristicUuid = uuidConverter.uuidFromByteArray(
+            subscriptionRequest.characteristicUuid.data.toByteArray(),
+        )
+        return characteristicUuid == evtFileTransferCharacteristicUuid ||
+            characteristicUuid == dvtRealtimeAudioCharacteristicUuid
+    }
+
+    private fun nextStreamPacketCount(
         subscriptionRequest: pb.CharacteristicAddress,
     ): Int {
-        val next = (fileTransferPacketCounts[subscriptionRequest] ?: 0) + 1
-        fileTransferPacketCounts[subscriptionRequest] = next
+        val next = (streamPacketCounts[subscriptionRequest] ?: 0) + 1
+        streamPacketCounts[subscriptionRequest] = next
         return next
     }
 
-    private fun shouldLogFileTransferPacket(packetCount: Int): Boolean =
-        packetCount <= fileTransferInitialPacketLogCount ||
-            packetCount % fileTransferLogSampleInterval == 0
+    private fun shouldLogStreamPacket(packetCount: Int): Boolean =
+        packetCount <= streamInitialPacketLogCount ||
+            packetCount % streamLogSampleInterval == 0
 
     private fun ByteArray.toHexString(): String =
         joinToString(separator = " ") { byte ->

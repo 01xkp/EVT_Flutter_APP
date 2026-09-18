@@ -95,6 +95,23 @@ void main() {
     expect(line, isNot(contains('must-not-leak')));
   });
 
+  test('background BLE keep-alive logs retain a clear lifecycle marker', () {
+    final diagnostic = DiagnosticEvent(
+      timestamp: DateTime.utc(2026, 9, 18),
+      level: DiagnosticLevel.info,
+      scope: 'APP_LIFECYCLE',
+      operation: 'background_ble_monitoring',
+      stage: 'background_monitoring',
+      event: 'background_ble_monitoring_started',
+      result: 'success',
+    );
+
+    expect(diagnostic.scope, 'APP_LIFECYCLE');
+    expect(diagnostic.operation, 'background_ble_monitoring');
+    expect(diagnostic.stage, 'background_monitoring');
+    expect(diagnostic.chineseLogPrefix, contains('【阶段：后台蓝牙保活】'));
+  });
+
   test('persistent Debug BLE logs retain complete packet hex', () {
     final store = _FakeAppLogStore();
 

@@ -181,6 +181,7 @@ class DiagnosticEvent {
   String _chineseStageLabel(String value) {
     return switch (value) {
       'archive' => '归档处理',
+      'background_monitoring' => '后台蓝牙保活',
       'checkpoint' => '本地断点',
       'metadata' => '读取元数据',
       'transfer' => '文件传输',

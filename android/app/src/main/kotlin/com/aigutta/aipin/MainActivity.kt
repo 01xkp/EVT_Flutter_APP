@@ -23,6 +23,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     companion object {
         private const val bluetoothChannel = "com.aigutta.aipin/bluetooth"
+        private const val backgroundBleMonitoringChannel = "com.aigutta.aipin/ble_background_monitoring"
         private const val publicDiagnosticLogsChannel = "aipin/public_diagnostic_logs"
         private const val enableBluetoothRequestCode = 7101
         private const val legacyLogStoragePermissionRequestCode = 7102
@@ -40,6 +41,33 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "requestEnable" -> requestBluetoothEnable(result)
                     "androidSdkInt" -> result.success(Build.VERSION.SDK_INT)
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, backgroundBleMonitoringChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "startMonitoring" -> {
+                        val deviceId = call.argument<String>("deviceId")
+                        val deviceName = call.argument<String>("deviceName")
+                        if (deviceId.isNullOrBlank() || deviceName.isNullOrBlank()) {
+                            result.error("invalid_arguments", "deviceId and deviceName are required", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            AipinBleBackgroundMonitoringService.start(this, deviceId, deviceName)
+                            result.success(null)
+                        } catch (error: Exception) {
+                            result.error("background_monitoring_start_failed", error.message, null)
+                        }
+                    }
+                    "stopMonitoring" -> {
+                        AipinBleBackgroundMonitoringService.stop(this)
+                        result.success(null)
+                    }
+                    "monitoringStatus" -> {
+                        result.success(AipinBleBackgroundMonitoringService.status())
+                    }
                     else -> result.notImplemented()
                 }
             }

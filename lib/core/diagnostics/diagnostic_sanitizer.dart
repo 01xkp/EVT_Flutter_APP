@@ -46,11 +46,13 @@ class DiagnosticSanitizer {
     'device_archive',
     'device_reconnect',
     'device_scan',
+    'background_ble_monitoring',
     'local_recording',
   };
 
   static const _safeStages = <String>{
     'archive',
+    'background_monitoring',
     'cloud_archive',
     'checkpoint',
     'metadata',

@@ -143,6 +143,26 @@ class CharNotificationHandlerTest {
     }
 
     @Test
+    fun `FA18 live audio is not replayed after a late Flutter listener`() {
+        val audioCharacteristicUuid =
+            UUID.fromString("0000fa18-1212-efde-1523-785feabcd123")
+        val values = PublishSubject.create<ByteArray>()
+        every {
+            bleClient.setupNotification(deviceId, audioCharacteristicUuid, 0)
+        }.returns(setupResponses)
+        handler.subscribeToNotifications(
+            request(audioCharacteristicUuid),
+            onSetupCompleted = {},
+            onSetupFailed = { throw AssertionError(it) },
+        )
+        setupResponses.onNext(values)
+
+        values.onNext(byteArrayOf(0x01, 0x02, 0x03))
+
+        assertThat(capturePackets()).isEmpty()
+    }
+
+    @Test
     fun `outer failure after CCC readiness reaches Flutter and stops the value stream`() {
         val packets = capturePackets()
         val values = PublishSubject.create<ByteArray>()
@@ -303,7 +323,9 @@ class CharNotificationHandlerTest {
         return packets
     }
 
-    private fun request(): pb.NotifyCharacteristicRequest =
+    private fun request(
+        targetCharacteristicUuid: UUID = characteristicUuid,
+    ): pb.NotifyCharacteristicRequest =
         pb.NotifyCharacteristicRequest
             .newBuilder()
             .setCharacteristic(
@@ -325,7 +347,9 @@ class CharNotificationHandlerTest {
                             .newBuilder()
                             .setData(
                                 ByteString.copyFrom(
-                                    UuidConverter().byteArrayFromUuid(characteristicUuid),
+                                    UuidConverter().byteArrayFromUuid(
+                                        targetCharacteristicUuid,
+                                    ),
                                 ),
                             )
                             .build(),

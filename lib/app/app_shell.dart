@@ -4,6 +4,7 @@ import 'package:aipin/features/device_session/domain/device_file.dart';
 import 'package:aipin/app/app_destination.dart';
 import 'package:aipin/app/branding/aipin_brand_splash.dart';
 import 'package:aipin/app/providers.dart';
+import 'package:aipin/core/ble/ble_background_monitoring_gateway.dart';
 import 'package:aipin/core/ble/ble_models.dart';
 import 'package:aipin/core/ble/device_profile.dart';
 import 'package:aipin/core/design_system/evt_theme.dart';
@@ -75,6 +76,8 @@ class _AppShellState extends ConsumerState<AppShell>
 
   late final DiscoveryController _discoveryController;
   late final DeviceReconnectController _reconnectController;
+  late final BleBackgroundMonitoringController
+  _backgroundBleMonitoringController;
   late final OnboardingController _onboardingController;
   SessionController? _sessionController;
   EvtLegacyAuthController? _deviceAuthController;
@@ -118,6 +121,10 @@ class _AppShellState extends ConsumerState<AppShell>
       advertisementFilter: _evtAdvertisementFilter,
       filterByV16Advertisement: _useStrictEvtAdvertisementFilter,
     );
+    _backgroundBleMonitoringController = BleBackgroundMonitoringController(
+      ref.read(bleBackgroundMonitoringGatewayProvider),
+      logger: ref.read(scopedAppLoggerProvider('APP_LIFECYCLE')),
+    );
     _onboardingController = OnboardingController(
       ref.read(onboardingStoreProvider),
     );
@@ -127,6 +134,7 @@ class _AppShellState extends ConsumerState<AppShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    unawaited(_backgroundBleMonitoringController.deactivate());
     _discoveryController.removeListener(_onDiscoveryChanged);
     _reconnectController.dispose();
     _discoveryController.dispose();
@@ -171,6 +179,7 @@ class _AppShellState extends ConsumerState<AppShell>
     }
     if (state == AppLifecycleState.resumed) {
       _isAppForeground = true;
+      unawaited(_syncBackgroundBleMonitoring(_sessionController?.state));
       if (_reconnectPausedForBackground) {
         _reconnectPausedForBackground = false;
         ref
@@ -720,6 +729,19 @@ class _AppShellState extends ConsumerState<AppShell>
       'session_open_requested',
       fields: {'operation': operation, 'automatic': automaticallyReconnect},
     );
+    // Start Android's connected-device foreground service while this user
+    // initiated flow is still foreground. Waiting for GATT discovery or the
+    // FA11/FA19 CCC setup leaves Android 12+ free to reject the start after a
+    // quick Home gesture. The service never owns GATT; it only keeps this
+    // existing Flutter/RxAndroidBle process eligible to receive the link.
+    await _activateBackgroundBleMonitoringForConnection(
+      candidate,
+      operation: operation,
+      logger: logger,
+    );
+    if (!_isCurrentSessionConnectionOperation(operation)) {
+      return false;
+    }
     if (!automaticallyReconnect) {
       // takeOverManualConnection invalidates its automatic cycle before its
       // first await. Its scan cleanup can then finish in parallel with the
@@ -784,7 +806,12 @@ class _AppShellState extends ConsumerState<AppShell>
       // Capture a pending UNBIND before the old connection-scoped controller
       // is disposed.  Automatic reconnect creates a fresh controller below.
       _capturePendingUnbindRecovery();
-      await _disposeCurrentSessionControllers();
+      // The incoming foreground monitor has already been activated above.
+      // Retain it while replacing the old controller so Android does not
+      // briefly lose its foreground-service eligibility between connections.
+      await _disposeCurrentSessionControllers(
+        preserveBackgroundBleMonitoring: true,
+      );
       if (!_isCurrentSessionConnectionOperation(operation)) {
         logger.warning(
           'session_open_superseded_after_previous_session_closed',
@@ -896,7 +923,9 @@ class _AppShellState extends ConsumerState<AppShell>
     return mounted && operation == _sessionConnectionOperation;
   }
 
-  Future<void> _disposeCurrentSessionControllers() {
+  Future<void> _disposeCurrentSessionControllers({
+    bool preserveBackgroundBleMonitoring = false,
+  }) {
     final activeTeardown = _sessionTeardown;
     if (activeTeardown != null) {
       return activeTeardown;
@@ -911,19 +940,76 @@ class _AppShellState extends ConsumerState<AppShell>
     auth?.removeListener(_onDeviceAuthChanged);
     _resetSessionReconnectTracking();
     late final Future<void> teardown;
-    teardown = _disposeSessionControllers(session, auth).whenComplete(() {
-      if (identical(_sessionController, session)) {
-        _sessionController = null;
-      }
-      if (identical(_deviceAuthController, auth)) {
-        _deviceAuthController = null;
-      }
-      if (identical(_sessionTeardown, teardown)) {
-        _sessionTeardown = null;
-      }
-    });
+    teardown =
+        () async {
+          if (!preserveBackgroundBleMonitoring) {
+            await _backgroundBleMonitoringController.deactivate();
+          }
+          await _disposeSessionControllers(session, auth);
+        }().whenComplete(() {
+          if (identical(_sessionController, session)) {
+            _sessionController = null;
+          }
+          if (identical(_deviceAuthController, auth)) {
+            _deviceAuthController = null;
+          }
+          if (identical(_sessionTeardown, teardown)) {
+            _sessionTeardown = null;
+          }
+        });
     _sessionTeardown = teardown;
     return teardown;
+  }
+
+  Future<void> _activateBackgroundBleMonitoringForConnection(
+    DeviceCandidate candidate, {
+    required int operation,
+    required SafeAppLogger logger,
+  }) async {
+    if (!_isAppForeground) {
+      logger.warning(
+        'session_open_background_monitoring_not_foreground',
+        fields: {
+          'operation': operation,
+          'reason': '【后台BLE】连接请求到达时应用已在后台，不再从后台新建 GATT 连接。',
+        },
+      );
+      return;
+    }
+    if (candidate.connectionId.trim().isEmpty ||
+        candidate.name.trim().isEmpty) {
+      logger.warning(
+        'session_open_background_monitoring_skipped',
+        fields: {
+          'operation': operation,
+          'reason': '【后台BLE】候选设备缺少稳定标识或名称，跳过平台保活服务。',
+        },
+      );
+      return;
+    }
+    logger.info(
+      'session_open_background_monitoring_requested',
+      fields: {
+        'operation': operation,
+        'reason': '【后台BLE】在 GATT 连接前申请平台保活，防止用户切后台后丢失监听。',
+      },
+    );
+    await _backgroundBleMonitoringController.updateForSession(
+      shouldMonitor: true,
+      deviceId: candidate.connectionId,
+      deviceName: candidate.name,
+      canStart: true,
+    );
+    logger.info(
+      'session_open_background_monitoring_finished',
+      fields: {
+        'operation': operation,
+        'active': _backgroundBleMonitoringController.isActive,
+        'reason': _backgroundBleMonitoringController.isActive
+            ? '【后台BLE】平台保活已确认，继续建立 Flutter GATT 连接。'
+            : '【后台BLE】平台保活未确认，继续前台连接并保留失败日志。',
+      },
+    );
   }
 
   Future<void> _disposeSessionControllers(
@@ -959,6 +1045,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (state == null) {
       return;
     }
+    unawaited(_syncBackgroundBleMonitoring(state));
 
     // SessionController emits this transition at the beginning of every
     // connection attempt, including a manual retry on the same controller.
@@ -1002,9 +1089,32 @@ class _AppShellState extends ConsumerState<AppShell>
 
   void _onDeviceAuthChanged() {
     _capturePendingUnbindRecovery();
+    unawaited(_syncBackgroundBleMonitoring(_sessionController?.state));
     if (mounted) {
       setState(() {});
     }
+  }
+
+  Future<void> _syncBackgroundBleMonitoring(SessionState? state) {
+    final candidate = state?.session?.candidate;
+    // Android 12+ may reject startForegroundService once the activity is
+    // already backgrounded. Enable the same service when a foreground flow
+    // starts GATT, rather than waiting for FA11/FA19 setup. It never creates
+    // another GATT client: Flutter/RxAndroidBle remains the only connection
+    // and CCC owner.
+    final hasForegroundInitiatedGattFlow =
+        state?.phase == SessionPhase.connecting ||
+        state?.hasActiveBleConnection == true;
+    return _backgroundBleMonitoringController.updateForSession(
+      shouldMonitor:
+          hasForegroundInitiatedGattFlow &&
+          candidate != null &&
+          candidate.connectionId.trim().isNotEmpty &&
+          candidate.name.trim().isNotEmpty,
+      deviceId: candidate?.connectionId,
+      deviceName: candidate?.name,
+      canStart: _isAppForeground,
+    );
   }
 
   /// Mirrors the controller's recovery marker into an AppShell-level map.

@@ -7,6 +7,7 @@ import 'package:aipin/features/device_session/domain/dvt_archive_gateway.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:aipin/core/ble/bluetooth_enable_gateway.dart';
+import 'package:aipin/core/ble/ble_background_monitoring_gateway.dart';
 import 'package:aipin/core/ble/ble_transport.dart';
 import 'package:aipin/core/ble/reactive_ble_transport.dart';
 import 'package:aipin/core/persistence/app_database.dart';
@@ -88,6 +89,11 @@ final bleTransportProvider = Provider<BleTransport>((ref) {
 final bluetoothEnableGatewayProvider = Provider<BluetoothEnableGateway>((ref) {
   return const PlatformBluetoothEnableGateway();
 });
+
+final bleBackgroundMonitoringGatewayProvider =
+    Provider<BleBackgroundMonitoringGateway>((ref) {
+      return const PlatformBleBackgroundMonitoringGateway();
+    });
 
 final onboardingStoreProvider = Provider<OnboardingStore>((ref) {
   return SharedPreferencesOnboardingStore();

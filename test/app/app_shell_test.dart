@@ -1,5 +1,6 @@
 import 'package:aipin/app/evt_app.dart';
 import 'package:aipin/app/providers.dart';
+import 'package:aipin/core/ble/ble_background_monitoring_gateway.dart';
 import 'package:aipin/core/design_system/widgets/app_button.dart';
 import 'package:aipin/core/protocol/evt_protocol_codec.dart';
 import 'package:aipin/features/device_discovery/presentation/discovery_page.dart';
@@ -348,6 +349,112 @@ void main() {
 
       expect(transport.scanCallCount, 1);
       expect(find.text(FakeBleTransport.matchingCandidate.name), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'starts background BLE monitoring before authentication and retains it while paused',
+    (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final transport = FakeBleTransport.withGattReadyProfile(
+        deferServiceDiscovery: true,
+      );
+      final appLogStore = FileAppLogStore(enabled: false);
+      final backgroundGateway = _FakeBleBackgroundMonitoringGateway();
+      final candidate = FakeBleTransport.matchingCandidate;
+      addTearDown(transport.dispose);
+      addTearDown(appLogStore.dispose);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            onboardingStoreProvider.overrideWithValue(
+              FakeOnboardingStore(completed: true),
+            ),
+            bleTransportProvider.overrideWithValue(transport),
+            appLogStoreProvider.overrideWithValue(appLogStore),
+            bleBackgroundMonitoringGatewayProvider.overrideWithValue(
+              backgroundGateway,
+            ),
+          ],
+          child: const EvtApp(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.text('连接设备').first);
+      await tester.pump();
+      await tester.pump();
+      transport.emitCandidate(candidate);
+      await tester.pump();
+      await tester.tap(find.text(candidate.name));
+      await tester.pump();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(DiscoveryPage),
+          matching: find.widgetWithText(AppButton, '连接设备'),
+        ),
+      );
+      await tester.pump();
+      await tester.runAsync(() async {
+        final deadline = DateTime.now().add(const Duration(seconds: 3));
+        while ((transport.discoveryRequests.isEmpty ||
+                backgroundGateway.started.isEmpty) &&
+            DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump();
+
+      // Service discovery is deliberately still blocked, so this assertion
+      // proves the monitor starts before the FA11/FA19 authentication-ready
+      // state. Android can therefore start its foreground service while the
+      // user is still in the foreground.
+      expect(transport.discoveryRequests, <String>[candidate.connectionId]);
+      expect(backgroundGateway.started, hasLength(1));
+      expect(backgroundGateway.stopCount, 0);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+      expect(backgroundGateway.stopCount, 0);
+      expect(transport.disconnectedDeviceIds, isEmpty);
+
+      transport.completeServiceDiscovery();
+      await _pumpUntil(
+        tester,
+        () => transport.subscribedCharacteristics.length >= 2,
+        maximumPumps: 30,
+      );
+
+      expect(
+        transport.subscribedCharacteristics.map(
+          (characteristic) => characteristic.characteristicUuid,
+        ),
+        contains('0000FA11-1212-EFDE-1523-785FEABCD123'),
+      );
+      expect(
+        transport.subscribedCharacteristics.map(
+          (characteristic) => characteristic.characteristicUuid,
+        ),
+        contains('0000FA19-1212-EFDE-1523-785FEABCD123'),
+      );
+      // The pre-authentication 0x81 frame is emitted by the fake after the
+      // App has been paused. Reaching the auth actions proves the existing
+      // FA11/FA19 subscriptions keep delivering device data in background.
+      await _pumpUntil(
+        tester,
+        () => find.widgetWithText(AppButton, '认证设备').evaluate().isNotEmpty,
+        maximumPumps: 30,
+      );
+      expect(find.widgetWithText(AppButton, '认证设备'), findsOneWidget);
+      expect(backgroundGateway.stopCount, 0);
+      expect(transport.disconnectedDeviceIds, isEmpty);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
     },
   );
 
@@ -701,5 +808,22 @@ class _FlushTrackingAppLogStore extends FileAppLogStore {
   Future<void> syncPublicMirror() async {
     publicMirrorSyncCount += 1;
     await super.syncPublicMirror();
+  }
+}
+
+class _FakeBleBackgroundMonitoringGateway
+    implements BleBackgroundMonitoringGateway {
+  final List<BleBackgroundMonitoringRequest> started =
+      <BleBackgroundMonitoringRequest>[];
+  var stopCount = 0;
+
+  @override
+  Future<void> start(BleBackgroundMonitoringRequest request) async {
+    started.add(request);
+  }
+
+  @override
+  Future<void> stop() async {
+    stopCount += 1;
   }
 }
